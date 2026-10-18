@@ -1,0 +1,61 @@
+{
+  "_comment": "BIG NetWatch configuration. The app copies this file to its user-data folder on first run (Help > Open config file) and reads that copy from then on; keys you leave out fall back to the bundled defaults.",
+  "gateway": {
+    "name": "BIG WAN (UDM Pro Max)",
+    "url": "https://192.168.20.1",
+    "api_key": "kwBY6PD9mnEmYR6Djj8nHW-fKU0d0wTd",
+    "site": "default",
+    "ui_url": "https://192.168.20.1/network/default/dashboard"
+  },
+  "site_manager_api_key": "GR9fx-mXGEkfQd_Q8ljueSuwa7JhsMy0",
+  "server": { "host": "127.0.0.1", "port": 8766 },
+  "poll": { "devices_s": 5, "clients_s": 10, "flows_s": 10, "log_s": 30, "probe_s": 15, "history_points": 120 },
+  "thresholds": {
+    "wan_latency_ms": 80,
+    "cpu_pct": 85,
+    "mem_pct": 90,
+    "temp_c": 70,
+    "stream_min_kbps": 500,
+    "port_error_rate": 1
+  },
+  "atem": {
+    "name": "ATEM Television Studio HD8 ISO",
+    "ip": "192.168.20.79",
+    "control_port": 9910, "probe": "atem",
+    "_comment": "Incoming remote streams are every flow whose destination is this IP; UniFi reports source IP/port, destination (listening) port, protocol and bytes."
+  },
+  "networks": ["Default", "BIG_NDI", "BIG_DANTE", "BIG_MOBILE_DANTE"],
+  "equipment": [
+    { "name": "ATEM Television Studio HD8 ISO", "ip": "192.168.20.79", "group": "Studio A", "role": "switcher", "probe": "atem", "hero": true },
+    { "name": "Smart Videohub 40x40", "ip": "192.168.20.117", "group": "Studio A", "role": "router", "probe": "tcp:9990" },
+    { "name": "HyperDeck Studio HD", "ip": "192.168.20.159", "group": "Studio A", "role": "recorder", "probe": "tcp:9993" },
+    { "name": "Web Presenter (Control Room)", "ip": "192.168.20.71", "group": "Studio A", "role": "encoder", "probe": "tcp:9977" },
+    { "name": "Zoom Mac", "ip": "192.168.20.235", "group": "Studio A", "role": "computer", "probe": "tcp:8765" },
+    { "name": "Studio A BPix", "ip": "192.168.20.75", "group": "Studio A", "role": "computer" },
+    { "name": "Studio A BPix (NDI)", "ip": "10.56.20.33", "group": "Studio A", "role": "computer" },
+    { "name": "HyperDeck Mini", "ip": "192.168.20.129", "group": "Studio A", "role": "recorder", "probe": "tcp:9993" },
+    { "name": "Blackmagic device (Fiber Agg port 20)", "ip": "192.168.20.176", "group": "Studio A", "role": "unknown", "min_speed": 100 },
+    { "name": "BIGs-Air-2 (Blackmagic)", "ip": "192.168.20.237", "group": "Studio A", "role": "unknown", "min_speed": 100 },
+    { "name": "Tightrope Livestream 1", "ip": "192.168.20.69", "group": "Video rack", "role": "encoder" },
+    { "name": "Tightrope Livestream 2", "ip": "192.168.20.65", "group": "Video rack", "role": "encoder" },
+    { "name": "HyperDeck Pro", "ip": "192.168.20.92", "group": "Town Hall", "role": "recorder", "probe": "tcp:9993" },
+    { "name": "MC Smart Videohub", "ip": "192.168.20.233", "group": "Town Hall", "role": "router", "probe": "tcp:9990", "min_speed": 100 },
+    { "name": "LiveStreamingStation", "ip": "192.168.20.166", "group": "Town Hall", "role": "encoder" },
+    { "name": "SB-SC BPix", "ip": "192.168.20.93", "group": "Town Hall", "role": "computer" },
+    { "name": "SB-SC BPix (Dante)", "ip": "10.56.19.144", "group": "Town Hall", "role": "computer" },
+    { "name": "SB-SC BPix (NDI)", "ip": "10.56.21.8", "group": "Town Hall", "role": "computer" },
+    { "name": "PRISM 12x12 Dante", "ip": "10.56.19.213", "group": "Town Hall", "role": "audio" },
+    { "name": "SB Zoom Desk", "ip": "10.56.19.130", "group": "Town Hall", "role": "computer" },
+    { "name": "SC Zoom Desk", "ip": "10.56.19.29", "group": "Town Hall", "role": "computer" },
+    { "name": "ATEM Mini Pro G2", "ip": "192.168.20.189", "group": "Field", "role": "switcher", "probe": "atem" },
+    { "name": "Web Presenter 4K", "ip": "192.168.20.76", "group": "Field", "role": "encoder", "probe": "tcp:9977" },
+    { "name": "X32 Dante card", "ip": "192.168.5.122", "group": "Field", "role": "audio" },
+    { "name": "X32 (Studio)", "ip": "192.168.5.154", "group": "Audio rack", "role": "audio", "probe": "x32" },
+    { "name": "X32 Rack", "ip": "192.168.5.143", "group": "Audio rack", "role": "audio", "probe": "x32" },
+    { "name": "EW-DX receiver 1", "ip": "192.168.5.11", "group": "Audio rack", "role": "audio" },
+    { "name": "EW-DX receiver 2", "ip": "192.168.5.12", "group": "Audio rack", "role": "audio" },
+    { "name": "EW-DX receiver 3", "ip": "192.168.5.13", "group": "Audio rack", "role": "audio" },
+    { "name": "Blackmagic device (audio rack)", "ip": "192.168.5.78", "group": "Audio rack", "role": "unknown", "min_speed": 100 }
+  ],
+  "auto_discover_ouis": ["Blackmagic", "Audinate", "Sennheiser", "BEHRINGER", "NewTek", "Vizrt", "AJA", "Ross", "Haivision", "Teradek"]
+}

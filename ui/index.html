@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>BIG NetWatch</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="top">
+	<div class="brand">
+		<img src="icon.svg" alt="" width="34" height="34">
+		<div><b>BIG NetWatch</b><small id="gwName">connecting to the gateway…</small></div>
+	</div>
+	<nav class="tabs" id="tabs">
+		<a href="#overview" class="on">Overview</a>
+		<a href="#equipment">Equipment</a>
+		<a href="#switches">Switches</a>
+		<a href="#console">Console</a>
+		<a href="#flows">Flows</a>
+		<a href="#log">Events</a>
+	</nav>
+	<div class="status">
+		<div class="pill" id="healthPill"><span class="dot"></span><span>starting</span></div>
+		<div class="stat"><span>WAN ↓</span><b id="wanDown">–</b></div>
+		<div class="stat"><span>WAN ↑</span><b id="wanUp">–</b></div>
+		<div class="stat"><span>latency</span><b id="wanLat">–</b></div>
+		<div class="stat"><span>clients</span><b id="clientCount">–</b></div>
+		<div class="stat"><span>updated</span><b id="updated">–</b></div>
+		<div class="clock" id="clock"></div>
+	</div>
+</header>
+
+<main>
+	<section id="alerts" class="alerts hidden"></section>
+
+	<section id="overview" class="overview">
+		<div class="card atem" id="atemCard"></div>
+		<div class="card streams" id="streamsCard"></div>
+		<div class="card quick" id="quickCard"></div>
+	</section>
+
+	<section id="equipment">
+		<h2>Broadcast equipment <small id="eqSummary"></small></h2>
+		<div id="eqGroups"></div>
+	</section>
+
+	<section id="switches">
+		<h2>Switches <small id="swSummary"></small></h2>
+		<div class="legend">
+			<span><i class="sw sp10000"></i>10G</span><span><i class="sw sp2500"></i>2.5G</span><span><i class="sw sp1000"></i>1G</span><span><i class="sw sp100"></i>10/100</span><span><i class="sw down"></i>no link</span><span><i class="sw up uplink"></i>uplink / switch</span><span><i class="sw up poe"></i>PoE</span><span><i class="sw up err"></i>errors</span><span>bar = utilisation</span>
+		</div>
+		<div id="swList"></div>
+	</section>
+
+	<section id="console">
+		<h2>Console &amp; networks</h2>
+		<div class="two">
+			<div class="card" id="gwCard"></div>
+			<div class="card" id="vlanCard"></div>
+		</div>
+		<div id="apList" class="aps"></div>
+	</section>
+
+	<section id="flows">
+		<h2>Traffic flows <small id="flowSummary"></small></h2>
+		<div class="two">
+			<div class="card" id="topTalkers"></div>
+			<div class="card" id="recentFlows"></div>
+		</div>
+	</section>
+
+	<section id="log">
+		<h2>UniFi events</h2>
+		<div class="card" id="logList"></div>
+	</section>
+	<footer>BIG NetWatch · Brookline Interactive Group · data from the UniFi Network API on the UDM Pro Max and direct probes of the equipment</footer>
+</main>
+
+<div id="tip" class="tip hidden"></div>
+<script src="app.js"></script>
+</body>
+</html>
