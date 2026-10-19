@@ -52,6 +52,17 @@ touching anything. The roadmap for the next phase is in `docs/ROADMAP.md`.
   08:30 the controller returned HTTP 500 while switches flapped and MACs moved between ports (a loop or
   re-patching, not the polling), so the collector now backs off after 5xx.
 - `scripts/atem-capture.mjs` one-shot remote-source capture to JSON (quiet hours only).
+- `server/health.js` (0.7.0): `computeHealth(state, profile, thresholds)` = weighted factors (0-1 each, with
+  reason, level, critical flag, inspector target) → score 0-100 and verdict; `tiles(state, health)` = the
+  eight home tiles; `PROFILE_DEFAULTS`. The collector keeps `profiles` / `activeProfile` (config
+  `profiles[]`, `active_profile`; `setProfiles`, `activateProfile(id, {applyRoster})`, `testProbes`), puts
+  `state.health`, `state.tiles`, `state.profiles` in every state, and logs verdict changes to the tape. The AI
+  gets the score in its digest and its verdict is overridden by the score (`aiVerdict` kept).
+- Phone page: `ui/m.html` + `m.js` + `m.css` + `manifest.webmanifest` + `icon-512.png`, served at `/m`;
+  non-loopback requests need `server.token` (`?key=` once, then the `bw_key` cookie; manifest and icons are
+  public); `/api/phone` lists the LAN links; Electron menu "Open on a phone…" (switches `server.host` to
+  0.0.0.0 and restarts on request). `ui/prepare.js` = the Prepare a broadcast dialog (`/api/profiles`,
+  `/api/profiles/activate`, `/api/probe/test`).
 - `ui/index.html`, `ui/styles.css` (light "paper" theme default, `data-theme="dark"`), `ui/app.js`, `ui/map.js` (SVG signal map),
   `ui/settings.js` (Settings screen: AI local/Claude toggle + keys, gateway, SNMP, Companion, server, thresholds;
   `/api/settings`, `/api/settings/test`; an empty secret field keeps the stored secret, null clears it).

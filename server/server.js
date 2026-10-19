@@ -15,7 +15,9 @@
 //   POST /api/atem/session          {ip, action: connect|release} or {action: 'mode', mode: companion|auto|own|none}
 import http from 'node:http'
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
+import crypto from 'node:crypto'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { Collector } from './collector.js'
 import { AI, ANTHROPIC_MODELS } from './ai.js'
@@ -136,8 +138,28 @@ function mergeSection(config, section, patch) {
 	return cur
 }
 
+// LAN access (phones, other computers) needs a key: generated once per install and kept in the user config
+function ensureToken(config, configPath) {
+	if (config.server?.token) return config.server.token
+	const token = crypto.randomBytes(12).toString('base64url')
+	config.server = { ...(config.server || {}), token }
+	try {
+		saveUserConfig(configPath, { server: config.server, config_version: config.config_version || 0 })
+	} catch {}
+	return token
+}
+const lanAddresses = () =>
+	Object.values(os.networkInterfaces())
+		.flat()
+		.filter((a) => a && a.family === 'IPv4' && !a.internal)
+		.map((a) => a.address)
+const isLoopback = (req) => /^(127\.0\.0\.1|::1|::ffff:127\.0\.0\.1)$/.test(req.socket.remoteAddress || '')
+const PUBLIC_FILES = /^\/(manifest\.webmanifest|icon\.svg|icon-512\.png)$/
+const cookies = (req) => Object.fromEntries(String(req.headers.cookie || '').split(';').map((c) => c.trim().split('=')).filter((kv) => kv[0]).map(([k, ...v]) => [k, decodeURIComponent(v.join('='))]))
+
 export function startServer({ config, configPath = null, host = '127.0.0.1', port = 8766, log = console.log }) {
 	let collector = null
+	const token = ensureToken(config, configPath)
 	const ai = new AI(config.ai || {}, log, config.thresholds || {})
 	const sseClients = new Set()
 	const broadcast = (event, data) => {
@@ -258,7 +280,60 @@ export function startServer({ config, configPath = null, host = '127.0.0.1', por
 		const p = url.pathname
 		const q = url.searchParams
 		try {
+			// anyone on the LAN needs the key (in the link once, then a cookie); the manifest and icons are public
+			if (!isLoopback(req) && !PUBLIC_FILES.test(p)) {
+				const key = q.get('key') || cookies(req).bw_key || req.headers['x-key']
+				if (key !== token) {
+					if (p === '/m' || p === '/') {
+						res.writeHead(401, { 'Content-Type': 'text/html; charset=utf-8' })
+						return res.end('<!doctype html><meta name="viewport" content="width=device-width"><body style="font:16px system-ui;padding:24px;background:#f3f0e9;color:#1f1d1a"><h2 style="font-family:Georgia,serif;font-weight:400">Broadwatcher</h2><p>This link needs the access key. Open it from the app: <b>Broadwatcher &gt; Open on a phone…</b></p>')
+					}
+					return sendJson(res, { error: 'access key required' }, 401)
+				}
+				if (q.get('key')) res.setHeader('Set-Cookie', `bw_key=${encodeURIComponent(token)}; Path=/; Max-Age=31536000; SameSite=Lax`)
+			}
 			if (p === '/api/state') return sendJson(res, collector.state)
+			if (p === '/api/phone') {
+				const lan = host === '0.0.0.0'
+				const addrs = lanAddresses()
+				return sendJson(res, { lan, host, port: server.address()?.port || port, addresses: addrs, urls: lan ? addrs.map((a) => `http://${a}:${server.address()?.port || port}/m?key=${token}`) : [], key: token })
+			}
+			if (p === '/api/profiles' && req.method === 'GET') return sendJson(res, { profiles: collector.profiles, active: collector.activeProfile, equipment: config.equipment })
+			if (p === '/api/profiles' && req.method === 'POST') {
+				const body = await readBody(req)
+				const r = collector.setProfiles(body.profiles, body.active)
+				const patch = { profiles: r.profiles, active_profile: r.active, config_version: config.config_version || 0 }
+				if (body.applyRoster && body.active) {
+					const a = collector.activateProfile(body.active, { applyRoster: true })
+					if (a.roster) patch.equipment = a.roster
+					if (a.roster) patch.equipment_edited = true
+				}
+				let saved = false
+				try {
+					saved = saveUserConfig(configPath, patch)
+				} catch (e) {
+					log('[config] could not save: ' + e.message)
+				}
+				return sendJson(res, { ...r, saved })
+			}
+			if (p === '/api/profiles/activate' && req.method === 'POST') {
+				const body = await readBody(req)
+				const a = collector.activateProfile(String(body.id || ''), { applyRoster: !!body.applyRoster })
+				if (a.error) return sendJson(res, a, 400)
+				const patch = { active_profile: a.active, config_version: config.config_version || 0 }
+				if (a.roster) {
+					patch.equipment = a.roster
+					patch.equipment_edited = true
+				}
+				let saved = false
+				try {
+					saved = saveUserConfig(configPath, patch)
+				} catch (e) {
+					log('[config] could not save: ' + e.message)
+				}
+				return sendJson(res, { ...a, saved })
+			}
+			if (p === '/api/probe/test' && req.method === 'POST') return sendJson(res, { results: await collector.testProbes(), t: Date.now() })
 			if (p === '/api/health') return sendJson(res, { ok: collector.state.ok, ts: collector.state.ts, errors: collector.state.errors })
 			if (p === '/api/config') return sendJson(res, redacted())
 			if (p === '/api/details') return sendJson(res, collector.details(q.get('type'), q.get('id')))
@@ -359,8 +434,8 @@ export function startServer({ config, configPath = null, host = '127.0.0.1', por
 				})
 				return
 			}
-			// static UI
-			let rel = p === '/' ? '/index.html' : p
+			// static UI ("/m" is the phone page)
+			let rel = p === '/' ? '/index.html' : p === '/m' ? '/m.html' : p
 			rel = path.posix.normalize(rel)
 			if (rel.includes('..')) return sendJson(res, { error: 'bad path' }, 400)
 			const file = path.join(UI_DIR, rel)

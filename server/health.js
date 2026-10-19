@@ -1,0 +1,191 @@
+// Broadcast health: one score (0-100) and a verdict computed from everything that affects a healthy stream,
+// weighed against what the active show profile expects (streaming out, remote sources in, recorders rolling,
+// mics on, Dante and NDI in use). Every factor carries its weight, its value (0-1), a one-line reason and a
+// level, so the home view and the AI can show *why*. The AI narrates on top of the number; it never overrules it.
+//
+// Verdict: >= 90 Ready, >= 72 Degraded, >= 50 At risk, below Down. A critical factor at zero (WAN down, the
+// switcher off the network, an interrupted outgoing stream) makes it at least "At risk"; two of them, "Down".
+const num = (x) => (Number.isFinite(Number(x)) ? Number(x) : 0)
+const pct = (x) => Math.round(x * 100)
+
+export const PROFILE_DEFAULTS = [
+	{ id: 'studio', name: 'Studio Town Meeting', expect: { stream_out: true, stream_in: true, recording: true, mics: true, dante: true, ndi: true } },
+	{ id: 'field', name: 'Field production', expect: { stream_out: true, stream_in: false, recording: true, mics: false, dante: false, ndi: false } },
+	{ id: 'rehearsal', name: 'Rehearsal', expect: { stream_out: false, stream_in: false, recording: false, mics: true, dante: true, ndi: true } },
+	{ id: 'idle', name: 'Off air', expect: { stream_out: false, stream_in: false, recording: false, mics: false, dante: false, ndi: false } },
+]
+
+export function computeHealth(state, profile, th = {}) {
+	const expect = { stream_out: false, stream_in: false, recording: false, mics: false, dante: false, ndi: false, ...(profile?.expect || {}) }
+	const F = []
+	const factor = (id, label, weight, value, reason, { critical = false, na = false, target = null } = {}) => {
+		const v = na ? null : Math.max(0, Math.min(1, num(value)))
+		const level = na ? 'na' : v >= 0.85 ? 'ok' : v >= 0.5 ? 'warn' : 'bad'
+		F.push({ id, label, weight, value: v, reason, level, critical, target })
+	}
+	const gw = state.gateway
+	const eq = (state.equipment || []).filter((e) => e.active && !e.discovered)
+	const hero = state.atem?.equipment || eq.find((e) => e.hero) || null
+	const online = (list) => list.filter((e) => e.online && e.reachable !== false)
+	const sw = (state.switches || []).filter((s) => s.online || (s.lastSeen && Date.now() - s.lastSeen < 86400000))
+	const swWithGear = new Set(eq.filter((e) => e.switch).map((e) => e.switch.mac))
+
+	// ---- network
+	if (!gw) factor('wan', 'Internet', 14, 0, 'the gateway is not in the UniFi device list', { critical: true, target: { type: 'wan' } })
+	else if (gw.wan.status !== 'ok') factor('wan', 'Internet', 14, 0, `WAN ${gw.wan.status}`, { critical: true, target: { type: 'wan' } })
+	else if (gw.wan.latency !== null && gw.wan.latency > num(th.wan_latency_ms || 80)) factor('wan', 'Internet', 14, 0.6, `WAN up but ${gw.wan.latency} ms latency`, { target: { type: 'wan' } })
+	else factor('wan', 'Internet', 14, 1, `WAN ok · ${gw.wan.latency ?? '–'} ms · ${gw.wan.isp || ''}`.trim(), { target: { type: 'wan' } })
+	if (gw) factor('gateway', 'Gateway', 4, gw.cpu !== null && gw.cpu > num(th.cpu_pct || 85) ? 0.4 : 1, gw.cpu !== null && gw.cpu > num(th.cpu_pct || 85) ? `gateway CPU ${gw.cpu}%` : `gateway CPU ${gw.cpu ?? '–'}%`, { target: { type: 'gateway', id: gw.mac } })
+	const offGear = sw.filter((s) => !s.online && swWithGear.has(s.mac))
+	const offOther = sw.filter((s) => !s.online && !swWithGear.has(s.mac))
+	if (offGear.length) factor('switches', 'Switches', 14, 0, `${offGear.map((s) => s.name).join(', ')} offline with broadcast gear on it`, { critical: true, target: { type: 'switch', id: offGear[0].mac } })
+	else if (offOther.length) factor('switches', 'Switches', 14, 0.7, `${offOther.length} switch${offOther.length === 1 ? '' : 'es'} seen today now offline (no broadcast gear on them)`, { target: { type: 'switch', id: offOther[0].mac } })
+	else factor('switches', 'Switches', 14, 1, `${sw.filter((s) => s.online).length} switches online`)
+	const errPorts = (state.switches || []).filter((s) => s.online).flatMap((s) => s.ports.filter((p) => p.errorsRecent && (p.uplink || p.clients.some((c) => eq.some((e) => e.ip === c.ip)))).map((p) => `${s.name} p${p.idx}`))
+	factor('errors', 'Port errors', 5, errPorts.length ? 0.4 : 1, errPorts.length ? `new errors on ${errPorts.slice(0, 3).join(', ')}${errPorts.length > 3 ? '…' : ''}` : 'no new errors on broadcast or uplink ports')
+	const slow = eq.filter((e) => e.switch?.speed && (e.min_speed ?? (['switcher', 'encoder', 'recorder', 'computer'].includes(e.role) ? 1000 : 0)) > e.switch.speed)
+	const slowUp = (state.switches || []).filter((s) => s.online && s.uplink.speed && s.uplink.speed < 1000 && s.uplink.media !== 'wireless')
+	factor('links', 'Link speeds', 5, slow.length ? 0.4 : slowUp.length ? 0.6 : 1, slow.length ? `${slow.map((e) => e.name).join(', ')} below the needed link speed` : slowUp.length ? `${slowUp.map((s) => s.name).join(', ')} uplink below 1G` : 'every broadcast link at full speed')
+	const hot = (state.switches || []).filter((s) => s.online).flatMap((s) => s.ports.filter((p) => p.up && p.util > 0.7).map((p) => ({ n: `${s.name} p${p.idx}`, u: p.util })))
+	factor('util', 'Port load', 4, hot.some((p) => p.u > 0.9) ? 0.2 : hot.length ? 0.5 : 1, hot.length ? `${hot.map((p) => `${p.n} ${pct(p.u)}%`).slice(0, 3).join(', ')}` : 'no port above 70 % of its link')
+
+	// ---- the switcher and the roster
+	if (!hero) factor('switcher', 'Switcher', 12, 0.5, 'no main switcher in the roster', { na: true })
+	else if (!hero.online) factor('switcher', 'Switcher', 12, 0, `${hero.name} is not on the network`, { critical: true, target: { type: 'equipment', id: hero.ip } })
+	else if (hero.reachable === false) factor('switcher', 'Switcher', 12, 0.5, `${hero.name} on the network but not answering (${hero.probe?.error || 'no reply'})`, { target: { type: 'equipment', id: hero.ip } })
+	else factor('switcher', 'Switcher', 12, 1, `${hero.name} up${hero.telemetry?.programName ? ' · program ' + hero.telemetry.programName : ''}`, { target: { type: 'equipment', id: hero.ip } })
+	const rest = eq.filter((e) => e !== hero)
+	const restOk = online(rest)
+	const restBad = rest.filter((e) => !restOk.includes(e))
+	factor('roster', 'Equipment', 10, rest.length ? restOk.length / rest.length : 1, rest.length ? (restBad.length ? `${restBad.map((e) => e.name).slice(0, 3).join(', ')}${restBad.length > 3 ? ` +${restBad.length - 3}` : ''} not answering` : `all ${rest.length} devices in this broadcast answer`) : 'no other devices in the roster', { target: restBad[0] ? { type: 'equipment', id: restBad[0].ip } : null })
+
+	// ---- streams out
+	const encoders = eq.filter((e) => e.telemetry?.kind === 'webpresenter' || (e.telemetry?.kind === 'atem' && e.telemetry.streaming))
+	const live = encoders.filter((e) => (e.telemetry.kind === 'webpresenter' && e.telemetry.streaming) || (e.telemetry.kind === 'atem' && e.telemetry.streaming?.state === 'streaming'))
+	const broken = encoders.filter((e) => e.telemetry.kind === 'webpresenter' && /interrupt|error|fail/i.test(e.telemetry.status || ''))
+	const connecting = encoders.filter((e) => (e.telemetry.kind === 'webpresenter' && /connect/i.test(e.telemetry.status || '')) || (e.telemetry.kind === 'atem' && /connect|stopping/.test(e.telemetry.streaming?.state || '')))
+	const outRate = live.reduce((n, e) => n + num(e.telemetry.kind === 'webpresenter' ? e.telemetry.bitrate : e.telemetry.streaming?.bitrate) / 1e6, 0)
+	if (!encoders.length) factor('stream_out', 'Stream out', 10, 0, 'no encoder with telemetry in the roster', { na: true })
+	else if (broken.length) factor('stream_out', 'Stream out', 10, 0, `${broken.map((e) => e.name).join(', ')}: stream ${broken[0].telemetry.status}`, { critical: expect.stream_out, target: { type: 'equipment', id: broken[0].ip } })
+	else if (live.length) factor('stream_out', 'Stream out', 10, 1, `${live.map((e) => e.name).join(', ')} streaming${outRate ? ' at ' + outRate.toFixed(1) + ' Mb/s' : ''}`, { target: { type: 'equipment', id: live[0].ip } })
+	else if (connecting.length) factor('stream_out', 'Stream out', 10, 0.5, `${connecting.map((e) => e.name).join(', ')} connecting`, { target: { type: 'equipment', id: connecting[0].ip } })
+	else if (expect.stream_out) factor('stream_out', 'Stream out', 10, 0.2, `the profile expects a stream out but ${encoders.map((e) => e.name).join(', ')} ${encoders.length === 1 ? 'is' : 'are'} idle`, { target: { type: 'equipment', id: encoders[0].ip } })
+	else factor('stream_out', 'Stream out', 10, 1, `idle (not expected in "${profile?.name || 'this profile'}")`, { target: { type: 'equipment', id: encoders[0].ip } })
+
+	// ---- streams in
+	const st = state.atem?.stream
+	const paths = state.streamPaths || []
+	const heroPath = paths.find((p) => p.target.isAtem) || null
+	if (!hero) factor('stream_in', 'Stream in', 8, 0, 'no main switcher', { na: true })
+	else if (st?.state === 'arriving') factor('stream_in', 'Stream in', 8, 1, `arriving at ${st.rate} Mb/s${st.sources?.[0] ? ' from ' + st.sources[0].name : ''}`, { target: { type: 'atem' } })
+	else if (paths.some((p) => p.status === 'red')) factor('stream_in', 'Stream in', 8, 0.2, paths.find((p) => p.status === 'red').verdict, { target: { type: 'path', id: paths.find((p) => p.status === 'red').id } })
+	else if (heroPath?.status === 'amber') factor('stream_in', 'Stream in', 8, 0.5, heroPath.verdict, { target: { type: 'path', id: heroPath.id } })
+	else if (expect.stream_in) factor('stream_in', 'Stream in', 8, 0.3, 'no remote stream arriving yet (the profile expects one)', { target: { type: 'atem' } })
+	else factor('stream_in', 'Stream in', 8, 1, 'quiet (none expected)', { target: { type: 'atem' } })
+
+	// ---- recorders
+	const decks = eq.filter((e) => e.telemetry?.kind === 'hyperdeck')
+	const rolling = decks.filter((e) => e.telemetry.recording)
+	const heroRec = hero?.telemetry?.recording?.active ? 1 : 0
+	if (!decks.length && !hero?.telemetry?.recording) factor('recorders', 'Recorders', 8, 0, 'no recorder with telemetry', { na: true })
+	else {
+		const total = decks.length + (hero?.telemetry?.recording ? 1 : 0)
+		const on = rolling.length + heroRec
+		const txt = `${on}/${total} recording${rolling.length ? ' · ' + rolling.map((e) => e.name).join(', ') : ''}${heroRec ? ' · switcher ISO' : ''}`
+		if (expect.recording) factor('recorders', 'Recorders', 8, total ? (on === total ? 1 : on ? 0.5 : 0.1) : 1, on === total ? txt : `only ${txt} (the profile expects all)`, { target: decks[0] ? { type: 'equipment', id: decks[0].ip } : { type: 'atem' } })
+		else factor('recorders', 'Recorders', 8, 1, on ? txt : `idle (not expected in "${profile?.name || 'this profile'}")`, { target: decks[0] ? { type: 'equipment', id: decks[0].ip } : { type: 'atem' } })
+	}
+
+	// ---- audio: X32 consoles answer OSC; Dante VLAN; mics
+	const consoles = eq.filter((e) => /^x32/.test(String(e.probeSpec || '')))
+	const consolesOk = consoles.filter((e) => e.probe?.ok)
+	if (!consoles.length) factor('audio', 'Audio', 6, 0, 'no X32 in the roster', { na: true })
+	else factor('audio', 'Audio', 6, consolesOk.length / consoles.length, consolesOk.length === consoles.length ? `${consoles.map((e) => e.probe?.info?.name || e.name).join(', ')} answering` : `${consoles.filter((e) => !e.probe?.ok).map((e) => e.name).join(', ')} not answering`, { target: { type: 'equipment', id: consoles[0].ip } })
+	const mics = eq.filter(isMic)
+	if (!mics.length) factor('mics', 'Mics', 4, 0, 'no wireless receivers in the roster', { na: true })
+	else {
+		const up = mics.filter((e) => e.online)
+		factor('mics', 'Mics', 4, expect.mics ? up.length / mics.length : 1, `${up.length}/${mics.length} receivers on the network${expect.mics && up.length < mics.length ? ' (the profile expects all)' : ''} · RF and battery need SSC (roadmap)`, { target: { type: 'equipment', id: mics[0].ip } })
+	}
+	const vlan = (re) => (state.networks || []).filter((n) => re.test(n.name))
+	const dante = vlan(/dante/i)
+	const danteGear = eq.filter((e) => dante.some((n) => n.subnet && sameSubnet(e.ip, n.subnet)))
+	if (!dante.length) factor('dante', 'Dante', 5, 0, 'no Dante VLAN', { na: true })
+	else {
+		const clients = dante.reduce((n, v) => n + num(v.clients), 0)
+		const gearUp = danteGear.filter((e) => e.online).length
+		const v = !expect.dante ? 1 : danteGear.length ? gearUp / danteGear.length : clients ? 1 : 0.3
+		factor('dante', 'Dante', 5, v, `${dante.map((n) => `${n.name.replace(/^BIG_/, '')} ${n.clients} devices`).join(' · ')}${danteGear.length ? ` · ${gearUp}/${danteGear.length} roster devices up` : ''} · clock status needs a VLAN foot (roadmap)`, { target: { type: 'vlan', id: dante[0].name } })
+	}
+	const ndi = vlan(/ndi/i)
+	const ndiGear = eq.filter((e) => ndi.some((n) => n.subnet && sameSubnet(e.ip, n.subnet)))
+	if (!ndi.length) factor('ndi', 'NDI', 5, 0, 'no NDI VLAN', { na: true })
+	else {
+		const traffic = ndi.reduce((n, v) => n + num(v.down) + num(v.up), 0)
+		const gearUp = ndiGear.filter((e) => e.online).length
+		const v = !expect.ndi ? 1 : ndiGear.length ? gearUp / ndiGear.length : traffic > 0.5 ? 1 : 0.4
+		factor('ndi', 'NDI', 5, v, `${ndi.map((n) => `${n.name.replace(/^BIG_/, '')} ${n.clients} devices · ${traffic.toFixed(1)} Mb/s`).join(' · ')}${ndiGear.length ? ` · ${gearUp}/${ndiGear.length} roster devices up` : ''}`, { target: { type: 'vlan', id: ndi[0].name } })
+	}
+	const errs = (state.alerts || []).filter((a) => a.level === 'error')
+	factor('alerts', 'Alerts', 8, errs.length ? 0.2 : 1, errs.length ? `${errs.length} error-level alert${errs.length === 1 ? '' : 's'}: ${errs[0].text}` : 'no error-level alerts', { target: errs[0] ? { type: 'alert', id: errs[0].id } : null })
+
+	// ---- the score
+	const scored = F.filter((f) => f.value !== null)
+	const wsum = scored.reduce((n, f) => n + f.weight, 0)
+	const score = wsum ? Math.round((scored.reduce((n, f) => n + f.weight * f.value, 0) / wsum) * 100) : 0
+	const crit = scored.filter((f) => f.critical && f.value === 0)
+	let verdict = score >= 90 ? 'READY' : score >= 72 ? 'DEGRADED' : score >= 50 ? 'AT RISK' : 'DOWN'
+	const rank = { READY: 0, DEGRADED: 1, 'AT RISK': 2, DOWN: 3 }
+	if (crit.length >= 2 && rank[verdict] < 3) verdict = 'DOWN'
+	else if (crit.length && rank[verdict] < 2) verdict = 'AT RISK'
+	const detractors = scored.filter((f) => f.value < 1).sort((a, b) => b.weight * (1 - b.value) - a.weight * (1 - a.value))
+	const headline = verdict === 'READY' ? `Everything "${profile?.name || 'this profile'}" needs is up.` : detractors.length ? detractors.slice(0, 2).map((f) => f.reason).join('; ') : 'nothing to report'
+	return { score, verdict, headline, factors: F, detractors: detractors.slice(0, 5).map((f) => f.id), profile: profile ? { id: profile.id, name: profile.name, expect } : null, t: Date.now() }
+}
+
+// wireless receivers: by name (EW-DX, "receiver", "wireless mic") or by vendor (Sennheiser, Shure)
+const isMic = (e) => /ew-?dx|\breceiver\b|wireless\s*mic|\bmics?\b/i.test(e.name || '') || /sennheiser|shure/i.test(e.oui || '')
+
+function sameSubnet(ip, cidr) {
+	const [net, bitsStr] = String(cidr).split('/')
+	const bits = Number(bitsStr || 24)
+	const toN = (s) => s.split('.').reduce((n, o) => ((n << 8) | (Number(o) & 255)) >>> 0, 0)
+	if (!/^\d+\.\d+\.\d+\.\d+$/.test(ip || '') || !/^\d+\.\d+\.\d+\.\d+$/.test(net || '')) return false
+	const mask = bits === 0 ? 0 : (0xffffffff << (32 - bits)) >>> 0
+	return (toN(ip) & mask) === (toN(net) & mask)
+}
+
+// the eight tiles of the home view (and the phone page): lamp, one number, one line, a 10-minute series
+export function tiles(state, health) {
+	const f = Object.fromEntries((health?.factors || []).map((x) => [x.id, x]))
+	const eq = (state.equipment || []).filter((e) => e.active)
+	const hero = state.atem?.equipment || null
+	const gw = state.gateway
+	const live = eq.filter((e) => (e.telemetry?.kind === 'webpresenter' && e.telemetry.streaming) || (e.telemetry?.kind === 'atem' && e.telemetry.streaming?.state === 'streaming'))
+	const outRate = live.reduce((n, e) => n + num(e.telemetry.kind === 'webpresenter' ? e.telemetry.bitrate : e.telemetry.streaming?.bitrate) / 1e6, 0)
+	const enc = eq.find((e) => e.telemetry?.kind === 'webpresenter')
+	const decks = eq.filter((e) => e.telemetry?.kind === 'hyperdeck')
+	const rolling = decks.filter((e) => e.telemetry.recording)
+	const consoles = eq.filter((e) => /^x32/.test(String(e.probeSpec || '')))
+	const mics = eq.filter(isMic)
+	const nets = state.networks || []
+	const dante = nets.filter((n) => /dante/i.test(n.name))
+	const ndi = nets.filter((n) => /ndi/i.test(n.name))
+	const sw = state.switches || []
+	const rate = (v) => (v >= 1000 ? (v / 1000).toFixed(2) + ' Gb/s' : v >= 100 ? v.toFixed(0) + ' Mb/s' : v >= 1 ? v.toFixed(1) + ' Mb/s' : v > 0 ? Math.round(v * 1000) + ' kb/s' : '0')
+	const lvl = (id) => f[id]?.level || 'na'
+	const sum = (arrs) => {
+		const n = Math.max(0, ...arrs.map((a) => a.length))
+		return Array.from({ length: n }, (_, i) => arrs.reduce((s, a) => s + num(a[a.length - n + i]), 0))
+	}
+	return [
+		{ id: 'stream_out', label: 'Stream out', level: lvl('stream_out'), value: live.length ? rate(outRate) : enc ? enc.telemetry.status || 'idle' : '–', line: f.stream_out?.reason || '', series: enc ? enc.history?.up || [] : [], target: f.stream_out?.target || (enc ? { type: 'equipment', id: enc.ip } : null) },
+		{ id: 'stream_in', label: 'Stream in', level: lvl('stream_in'), value: hero ? rate(hero.down) : '–', line: f.stream_in?.reason || '', series: hero ? hero.history?.down || [] : [], target: f.stream_in?.target || { type: 'atem' } },
+		{ id: 'audio', label: 'Audio', level: lvl('audio'), value: consoles.length ? `${consoles.filter((e) => e.probe?.ok).length}/${consoles.length}` : '–', line: f.audio?.reason || '', series: [], target: f.audio?.target || null, note: 'meters: roadmap' },
+		{ id: 'dante', label: 'Dante', level: lvl('dante'), value: dante.length ? `${dante.reduce((n, v) => n + num(v.clients), 0)}` : '–', line: f.dante?.reason || '', series: sum(dante.map((n) => n.history?.down || [])), target: f.dante?.target || null, unit: 'devices' },
+		{ id: 'ndi', label: 'NDI', level: lvl('ndi'), value: ndi.length ? rate(ndi.reduce((n, v) => n + num(v.down) + num(v.up), 0)) : '–', line: f.ndi?.reason || '', series: sum(ndi.map((n) => n.history?.down || [])), target: f.ndi?.target || null },
+		{ id: 'mics', label: 'Mics', level: lvl('mics'), value: mics.length ? `${mics.filter((e) => e.online).length}/${mics.length}` : '–', line: f.mics?.reason || '', series: [], target: f.mics?.target || null },
+		{ id: 'network', label: 'Network', level: ['wan', 'switches', 'errors', 'links', 'util', 'gateway'].map(lvl).includes('bad') ? 'bad' : ['wan', 'switches', 'errors', 'links', 'util', 'gateway'].map(lvl).includes('warn') ? 'warn' : 'ok', value: gw ? `${sw.filter((s) => s.online).length}/${sw.length}` : '–', line: [f.wan, f.switches, f.errors, f.links, f.util].filter((x) => x && x.value !== null && x.value < 1).map((x) => x.reason)[0] || `${f.wan?.reason || ''}`, series: gw ? gw.wan.history?.down || [] : [], target: { type: 'section', id: 'rackBlock' }, unit: 'switches' },
+		{ id: 'recorders', label: 'Recorders', level: lvl('recorders'), value: decks.length || hero?.telemetry?.recording ? `${rolling.length + (hero?.telemetry?.recording?.active ? 1 : 0)}/${decks.length + (hero?.telemetry?.recording ? 1 : 0)}` : '–', line: f.recorders?.reason || '', series: [], target: f.recorders?.target || null, unit: 'rolling' },
+	]
+}

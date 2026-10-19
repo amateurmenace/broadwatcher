@@ -50,9 +50,15 @@
 <div class="shell" id="shell">
 	<main class="main" id="main">
 		<nav class="secnav" id="secnav">
-			<a href="#gwBlock">Gateway</a><a href="#mapBlock">Signal map</a><a href="#atemBlock">Streams</a><a href="#pathBlock">Stream paths</a><a href="#rackBlock">Switches</a><a href="#patchBlock">Equipment</a><a href="#tapeBlock">Events</a>
+			<a href="#homeBlock">Health</a><a href="#gwBlock">Gateway</a><a href="#mapBlock">Signal map</a><a href="#atemBlock">Streams</a><a href="#pathBlock">Stream paths</a><a href="#rackBlock">Switches</a><a href="#patchBlock">Equipment</a><a href="#tapeBlock">Events</a>
 			<span class="spacer"></span><small id="freshness"></small>
 		</nav>
+
+		<section class="block" id="homeBlock">
+			<header class="bh"><h2>Broadcast health</h2><div class="bh-tools"><label class="profile-pick">show profile <select id="profileSelect"></select></label><button class="btn" id="prepareBtn">Prepare a broadcast…</button><span class="bh-note" id="homeNote"></span></div><button class="fold" data-fold="homeBlock" title="collapse / expand"></button></header>
+			<div class="bb"><div class="home" id="home"></div></div>
+		</section>
+
 		<section class="issues" id="issues"></section>
 
 		<section class="block" id="gwBlock">
@@ -110,10 +116,14 @@
 <div class="overlay" id="settingsOverlay" hidden>
 	<div class="editor" id="settingsEditor"></div>
 </div>
+<div class="overlay" id="prepareOverlay" hidden>
+	<div class="editor" id="prepareEditor"></div>
+</div>
 
 <div id="tip" class="tip" hidden></div>
 <script src="map.js"></script>
 <script src="settings.js"></script>
+<script src="prepare.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

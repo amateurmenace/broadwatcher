@@ -168,6 +168,59 @@ input:focus, select:focus { outline: none; border-color: var(--out); box-shadow:
 .issue .k { font-size: 10.5px; color: var(--ink3); }
 .issue .since { font-size: 10.5px; color: var(--ink3); }
 
+/* ---------------------------------------------------------------- broadcast health (the glance board) */
+.profile-pick { font-size: 12px; color: var(--ink2); display: inline-flex; gap: 6px; align-items: center; white-space: nowrap; }
+.profile-pick select { padding: 3px 6px; font-size: 12px; }
+.home { display: grid; grid-template-columns: minmax(300px, 380px) 1fr; gap: 20px; align-items: start; }
+.verdict-big { display: flex; gap: 16px; align-items: flex-start; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px 18px; }
+.verdict-big .lamp { width: 42px; height: 42px; flex: none; margin-top: 4px; }
+.verdict-big b { display: block; font-family: var(--serif); font-weight: 400; font-size: 26px; line-height: 1.1; }
+.verdict-big .score { font-family: var(--serif); font-size: 15px; color: var(--ink2); margin-top: 2px; }
+.verdict-big .score small { color: var(--ink3); }
+.verdict-big p { margin: 8px 0 4px; color: var(--ink); line-height: 1.45; font-size: 13px; }
+.verdict-big ul.why { margin: 6px 0 0; padding: 0; list-style: none; font-size: 12px; color: var(--ink2); }
+.verdict-big ul.why li { padding: 3px 0 3px 10px; border-left: 2px solid var(--line2); margin: 3px 0; }
+.verdict-big ul.why li.bad { border-left-color: var(--error); }
+.verdict-big ul.why li.warn { border-left-color: var(--warn); }
+.verdict-big ul.why li b { display: inline; font-family: var(--sans); font-size: 12px; font-weight: 600; color: var(--ink); }
+.verdict-big .ai-meta { margin-top: 8px; }
+.tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.tile { background: var(--panel); border: 1px solid var(--line); border-top: 3px solid var(--line2); border-radius: var(--radius); padding: 10px 12px 8px; cursor: pointer; min-width: 0; transition: border-color .2s, background .15s; }
+.tile:hover { background: var(--panel2); }
+.tile.ok { border-top-color: var(--ok); }
+.tile.warn { border-top-color: var(--warn); }
+.tile.bad { border-top-color: var(--error); }
+.tile.na { opacity: .6; }
+.tile .th { display: flex; align-items: center; gap: 7px; font-family: var(--serif); font-size: 14px; color: var(--ink2); }
+.lamp.sm { width: 9px; height: 9px; border-width: 1px; box-shadow: none; animation: none; }
+.lamp.sm.ok { background: var(--ok); border-color: var(--ok); }
+.lamp.sm.warn { background: var(--warn); border-color: var(--warn); }
+.lamp.sm.bad { background: var(--error); border-color: var(--error); }
+.lamp.sm.na { background: transparent; border-color: var(--line2); }
+.tile .tv { font-size: 24px; font-weight: 300; letter-spacing: -.01em; margin: 6px 0 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tile .tv small { font-size: 11px; color: var(--ink3); margin-left: 5px; font-weight: 400; letter-spacing: 0; }
+.tile .tl { font-size: 11.5px; color: var(--ink2); line-height: 1.35; min-height: 32px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.tile .tspark { width: 100%; height: 24px; display: block; margin-top: 6px; }
+.tile .nosp { height: 24px; margin-top: 6px; border-top: 1px dashed var(--line); }
+.factors { margin: 6px 0; padding: 0; list-style: none; font-size: 12px; }
+.factors li { display: grid; grid-template-columns: 90px 44px 1fr; gap: 8px; padding: 4px 0; border-bottom: 1px solid var(--line); color: var(--ink2); }
+.factors li b { font-weight: 500; color: var(--ink); }
+.factors li em { text-align: right; }
+.factors li.bad em { color: var(--error); } .factors li.warn em { color: var(--warn); } .factors li.ok em { color: var(--ok); } .factors li.na em { color: var(--ink3); }
+@media (max-width: 1500px) { .home { grid-template-columns: 1fr; } }
+@media (max-width: 1100px) { .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+/* prepare a broadcast */
+.prep .exp { display: flex; flex-wrap: wrap; gap: 10px 22px; margin: 8px 0 14px; }
+.prep .roster { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 2px 20px; font-size: 12.5px; }
+.prep .roster h4 { grid-column: 1 / -1; margin: 10px 0 2px; font-family: var(--serif); font-weight: 400; font-size: 13.5px; color: var(--ink2); }
+.prep .roster label { display: grid; grid-template-columns: auto 1fr auto; gap: 8px; align-items: center; padding: 3px 0; cursor: pointer; min-width: 0; }
+.prep .roster label span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.prep .roster label small { color: var(--ink3); font-family: var(--mono); font-size: 11px; }
+.prep .testout { margin-top: 10px; font-size: 12px; max-height: 240px; overflow: auto; border: 1px solid var(--line); border-radius: var(--radius); }
+.prep .testout div { display: grid; grid-template-columns: 1fr 1.2fr 1.2fr; gap: 10px; padding: 4px 10px; border-bottom: 1px solid var(--line); }
+.prep .head { display: grid; grid-template-columns: 220px 1fr; gap: 12px; align-items: center; margin-bottom: 8px; font-size: 12.5px; }
+
 /* ---------------------------------------------------------------- gateway at a glance */
 .gw { display: grid; grid-template-columns: 1.05fr 1.25fr .85fr 1.3fr; gap: 16px; }
 .gwp { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px 12px; min-width: 0; }

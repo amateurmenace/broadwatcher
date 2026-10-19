@@ -13,6 +13,7 @@ import { telemetry as restTelemetry } from './rest.js'
 import { AtemClient } from './atem.js'
 import { SnmpSwitch } from './snmp.js'
 import { Companion } from './companion.js'
+import { computeHealth, tiles, PROFILE_DEFAULTS } from './health.js'
 import { execFile } from 'node:child_process'
 
 const num = (x) => {
@@ -95,6 +96,11 @@ export class Collector extends EventEmitter {
 			companion: null,
 		}
 		this.portLabels = config.port_labels || {} // "switchmac:port" -> {name, ip, note}: what is really on a port when UniFi cannot tell
+		this.profiles = Array.isArray(config.profiles) && config.profiles.length ? config.profiles : PROFILE_DEFAULTS.map((p) => ({ ...p, expect: { ...p.expect } }))
+		this.activeProfile = config.active_profile || this.profiles[this.profiles.length - 1].id
+		this.state.health = null
+		this.state.tiles = []
+		this.state.profiles = { list: this.profiles.map((p) => ({ id: p.id, name: p.name, expect: p.expect, roster: p.roster || null })), active: this.activeProfile }
 		this.companion = new Companion(config.companion || {}, log)
 		this.companionState = new Map() // atem ip -> {lastOk, okSince} for the companion/auto hysteresis
 		this.forwardHits = new Map() // port-forward name -> [{t, src, srcName, region, bytes, action, wanPort}] last hour
@@ -926,8 +932,68 @@ export class Collector extends EventEmitter {
 
 		this.state.topology = this.buildTopology(gateway, switches, aps, others, equipment)
 		this.state.alerts = this.computeAlerts(now)
+		const profile = this.profiles.find((p) => p.id === this.activeProfile) || this.profiles[0]
+		const prevVerdict = this.state.health?.verdict
+		this.state.health = computeHealth(this.state, profile, this.th)
+		this.state.tiles = tiles(this.state, this.state.health)
+		this.state.profiles = { list: this.profiles.map((p) => ({ id: p.id, name: p.name, expect: p.expect, roster: p.roster || null })), active: this.activeProfile }
+		if (prevVerdict && prevVerdict !== this.state.health.verdict) this.event('health', `Broadcast health ${this.state.health.verdict} (${this.state.health.score}): ${this.state.health.headline}`, { level: this.state.health.verdict === 'READY' ? 'info' : this.state.health.verdict === 'DEGRADED' ? 'warn' : 'error' })
 		this.state.ts = now
 		this.state.ok = Object.keys(this.state.errors).length === 0
+	}
+
+	// show profiles: what a broadcast is expected to have running; the active one drives the health score
+	setProfiles(list, activeId) {
+		const clean = []
+		const seen = new Set()
+		for (const raw of Array.isArray(list) ? list : []) {
+			const id = String(raw.id || '').trim().toLowerCase().replace(/[^a-z0-9_-]/g, '').slice(0, 30) || `p${clean.length + 1}`
+			if (seen.has(id)) continue
+			seen.add(id)
+			const name = String(raw.name || id).trim().slice(0, 50) || id
+			const e = raw.expect || {}
+			const p = { id, name, expect: { stream_out: !!e.stream_out, stream_in: !!e.stream_in, recording: !!e.recording, mics: !!e.mics, dante: !!e.dante, ndi: !!e.ndi } }
+			if (Array.isArray(raw.roster)) p.roster = raw.roster.filter((ip) => /^\d{1,3}(\.\d{1,3}){3}$/.test(String(ip))).slice(0, 200)
+			clean.push(p)
+		}
+		if (!clean.length) clean.push(...PROFILE_DEFAULTS.map((p) => ({ ...p, expect: { ...p.expect } })))
+		this.profiles = clean
+		this.cfg.profiles = clean
+		if (activeId && clean.some((p) => p.id === activeId)) this.activeProfile = activeId
+		else if (!clean.some((p) => p.id === this.activeProfile)) this.activeProfile = clean[0].id
+		this.cfg.active_profile = this.activeProfile
+		if (this.rawDevices.length) {
+			this.rebuild()
+			this.emit('state', this.state)
+		}
+		return { profiles: this.profiles, active: this.activeProfile }
+	}
+
+	activateProfile(id, { applyRoster = false } = {}) {
+		const p = this.profiles.find((x) => x.id === id)
+		if (!p) return { error: 'unknown profile' }
+		this.activeProfile = p.id
+		this.cfg.active_profile = p.id
+		this.event('health', `Show profile "${p.name}" is active`, { level: 'info' })
+		let roster = null
+		if (applyRoster && Array.isArray(p.roster)) {
+			const set = new Set(p.roster)
+			roster = this.setEquipment(this.cfg.equipment.map((e) => ({ ...e, active: set.has(e.ip) })))
+		} else if (this.rawDevices.length) {
+			this.rebuild()
+			this.emit('state', this.state)
+		}
+		return { ok: true, active: p.id, roster }
+	}
+
+	// "test every probe" from the Prepare dialog: one round of TCP/OSC probes and REST reads for the active
+	// roster, never a switcher hello (the switcher state comes from Companion or the held session)
+	async testProbes() {
+		await Promise.all([this.pollProbes().catch(() => {}), this.pollTelemetry().catch(() => {})])
+		if (this.rawDevices.length) this.rebuild()
+		return this.state.equipment
+			.filter((e) => e.active && !e.discovered)
+			.map((e) => ({ ip: e.ip, name: e.name, group: e.group, online: e.online, probe: e.probe ? { ok: e.probe.ok, ms: e.probe.ms, error: e.probe.error || null, state: e.probe.info?.state || null } : null, telemetry: e.telemetry ? { kind: e.telemetry.kind, error: e.telemetry.error || null, summary: e.telemetry.summary || e.telemetry.streaming?.state || null } : null, link: e.switch ? `${e.switch.name} p${e.switch.port} ${e.switch.speed}M` : e.online ? 'wifi' : null }))
 	}
 
 	// Stream intake detector: the ATEM's switch port counters say how much is flowing INTO the switcher.
@@ -1261,6 +1327,13 @@ export class Collector extends EventEmitter {
 		} else if (type === 'path') {
 			entity = (st.streamPaths || []).find((p) => p.id === id) || null
 			if (entity) names = [entity.target.name, entity.target.ip, ...entity.hits.sources.map((s) => s.ip)].filter(Boolean)
+		} else if (type === 'vlan') {
+			const n = (st.networks || []).find((x) => x.name === id) || null
+			entity = n ? { ...n, equipment: st.equipment.filter((e) => n.subnet && e.ip && sameNet(e.ip, n.subnet)).map((e) => ({ name: e.name, ip: e.ip, online: e.online, status: e.status, active: e.active })) } : null
+			names = [id]
+		} else if (type === 'health') {
+			entity = st.health
+			names = []
 		} else if (type === 'api') {
 			entity = { errors: st.errors, updated: st.updated }
 		}
@@ -1283,6 +1356,15 @@ function safeHost(url) {
 	} catch {
 		return null
 	}
+}
+
+function sameNet(ip, cidr) {
+	const [net, bitsStr] = String(cidr).split('/')
+	const bits = Number(bitsStr || 24)
+	const toN = (s) => s.split('.').reduce((n, o) => ((n << 8) | (Number(o) & 255)) >>> 0, 0)
+	if (!/^\d+\.\d+\.\d+\.\d+$/.test(ip || '') || !/^\d+\.\d+\.\d+\.\d+$/.test(net || '')) return false
+	const mask = bits === 0 ? 0 : (0xffffffff << (32 - bits)) >>> 0
+	return (toN(ip) & mask) === (toN(net) & mask)
 }
 
 // system-log records carry title_raw / message_raw with {PLACEHOLDERS} resolved from `parameters`

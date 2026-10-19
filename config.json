@@ -50,6 +50,13 @@
     "BIG_DANTE",
     "BIG_MOBILE_DANTE"
   ],
+  "active_profile": "idle",
+  "profiles": [
+    { "id": "studio", "name": "Studio Town Meeting", "expect": { "stream_out": true, "stream_in": true, "recording": true, "mics": true, "dante": true, "ndi": true } },
+    { "id": "field", "name": "Field production", "expect": { "stream_out": true, "stream_in": false, "recording": true, "mics": false, "dante": false, "ndi": false } },
+    { "id": "rehearsal", "name": "Rehearsal", "expect": { "stream_out": false, "stream_in": false, "recording": false, "mics": true, "dante": true, "ndi": true } },
+    { "id": "idle", "name": "Off air", "expect": { "stream_out": false, "stream_in": false, "recording": false, "mics": false, "dante": false, "ndi": false } }
+  ],
   "equipment": [
     {
       "active": true,

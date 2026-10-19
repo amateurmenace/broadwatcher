@@ -204,6 +204,13 @@ when the profile says it should run). Size: 3 days (score + tiles + profile edit
 
 ---
 
+**Done in 0.7.0 (2026-10-19):** `server/health.js` (weighted factors, critical overrides, profile
+expectations), the home view (lamp, score, why, eight tiles with sparklines and targets), show profiles in
+the config with the *Prepare a broadcast* dialog (expectations, roster ticks, test every probe, save and
+activate) and the profile menu; the AI narrates on top of the score and cannot change the verdict. Still
+open from this section: live meter strip on the Audio tile (needs section 5), Dante clock and mic RF/battery
+(sections 2 and 5).
+
 ## 7. Mobile version
 
 Same server, a second page: `/m` renders the glance board, alerts, the stream-in panel and the Ask box in a
@@ -212,6 +219,9 @@ server must then listen on the LAN (`server.host: 0.0.0.0`) behind a shared toke
 phone) so it is not open to every guest on Wi-Fi; Electron shows a QR code to open it. Size: 1.5 days.
 
 ---
+
+**Done in 0.7.0:** `/m` with the manifest and icon, the generated `server.token` with the cookie, `/api/phone`
+and the *Open on a phone…* menu (no QR code yet: the menu copies the link instead).
 
 ## 8. Foundations: stability, strength, power
 

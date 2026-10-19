@@ -151,6 +151,11 @@ export class AI {
 		const rate = (v) => (v >= 1000 ? (v / 1000).toFixed(2) + ' Gb/s' : v >= 1 ? v.toFixed(1) + ' Mb/s' : v > 0 ? Math.round(v * 1000) + ' kb/s' : '0')
 		const gw = state.gateway
 		L.push(`TIME ${new Date(state.ts).toLocaleString()}`)
+		const h = state.health
+		if (h) {
+			const ex = h.profile?.expect || {}
+			L.push(`HEALTH SCORE ${h.score}/100 = ${h.verdict} (show profile "${h.profile?.name || '?'}" expects: ${Object.entries(ex).filter(([, v]) => v).map(([k]) => k.replace('_', ' ')).join(', ') || 'nothing in particular'}). This verdict is authoritative. Factors: ${h.factors.map((f) => `${f.label} ${f.value === null ? 'n/a' : Math.round(f.value * 100) + '%'}${f.critical && f.value === 0 ? ' CRITICAL' : ''}: ${f.reason}`).join(' | ')}`)
+		}
 		L.push(`THRESHOLDS: cpu > ${this.thresholds?.cpu_pct ?? 85}%, memory > ${this.thresholds?.mem_pct ?? 90}%, temperature > ${this.thresholds?.temp_c ?? 70} C, WAN latency > ${this.thresholds?.wan_latency_ms ?? 80} ms, broadcast links must be 1000M`)
 		if (gw) L.push(`GATEWAY ${gw.name} (${gw.modelName}) ${gw.online ? 'online' : 'OFFLINE'} cpu ${gw.cpu}% mem ${gw.mem}% temp ${gw.temp}C uptime ${Math.round(gw.uptime / 3600)}h | WAN ${gw.wan.status} ${gw.wan.ip || ''} ${gw.wan.isp || ''} link ${gw.wan.speed}M latency ${gw.wan.latency}ms down ${rate(gw.wan.down)} up ${rate(gw.wan.up)}`)
 		else L.push('GATEWAY: not found in UniFi device list')
@@ -206,12 +211,15 @@ export class AI {
 		const fresh = this.assessment && Date.now() - this.assessment.t < this.cfg.assess_every_s * 1000
 		if (fresh && !force) return this.assessment
 		if (this.busy) return this.assessment
-		const prompt = `Here is the live state of the network:\n\n${this.digest(state)}\n\nAssess broadcast readiness right now. Reply with ONE JSON object and nothing else, in this shape:
+		const h = state.health
+		const prompt = `Here is the live state of the network:\n\n${this.digest(state)}\n\n${h ? `Broadwatcher's health score has already set the verdict: ${h.verdict} (${h.score}/100). Keep that verdict and explain it: ` : 'Assess broadcast readiness right now. '}Reply with ONE JSON object and nothing else, in this shape:
 {"verdict":"READY"|"DEGRADED"|"AT RISK"|"DOWN","headline":"one sentence, max 18 words","reasons":["3 to 6 short bullets: what matters most, each naming the device/port/number"],"actions":["0 to 4 concrete things to check or do now, most urgent first"],"confidence":"high"|"medium"|"low"}
 Rules: READY = every broadcast path is healthy; DEGRADED = something is wrong but a show can run; AT RISK = a failure is likely to hit a show; DOWN = a broadcast path is broken now. Offline portable kit and spares are normal, not a problem. Unnamed or unidentified devices are low priority.`
 		const { text, ms } = await this.chat([{ role: 'system', content: SYSTEM }, { role: 'user', content: prompt }], { maxTokens: 700, temperature: 0.1 })
 		const j = extractJson(text) || { verdict: 'UNKNOWN', headline: text.slice(0, 160), reasons: [], actions: [] }
-		this.assessment = { ...j, verdict: String(j.verdict || 'UNKNOWN').toUpperCase(), reasons: arr(j.reasons), actions: arr(j.actions), model: this.modelName, t: Date.now(), ms, alertKey: state.alerts.map((a) => a.id).join('|') }
+		const aiVerdict = String(j.verdict || 'UNKNOWN').toUpperCase()
+		// the score is the verdict; the model narrates (its own call is kept for the record)
+		this.assessment = { ...j, verdict: h ? h.verdict : aiVerdict, aiVerdict, score: h ? h.score : null, reasons: arr(j.reasons), actions: arr(j.actions), model: this.modelName, t: Date.now(), ms, alertKey: state.alerts.map((a) => a.id).join('|') }
 		return this.assessment
 	}
 

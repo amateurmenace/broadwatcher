@@ -154,6 +154,8 @@ function buildMenu() {
 				},
 				{ label: 'Reset config to defaults', click: resetConfig },
 				{ type: 'separator' },
+				{ label: 'Open on a phone…', click: phoneDialog },
+				{ type: 'separator' },
 				{
 					label: 'Start Companion now',
 					click: async () => {
@@ -186,6 +188,34 @@ function buildMenu() {
 		{ role: 'windowMenu' },
 	]
 	Menu.setApplicationMenu(Menu.buildFromTemplate(template))
+}
+
+// the phone page (/m) needs the server on the LAN and the access key; the link carries the key once
+async function phoneDialog() {
+	if (!running) return
+	let info = null
+	try {
+		info = await (await fetch(running.url + 'api/phone', { signal: AbortSignal.timeout(3000) })).json()
+	} catch (e) {
+		return dialog.showMessageBox(win, { type: 'error', message: 'Could not ask the server: ' + e.message })
+	}
+	if (!info.lan) {
+		const r = await dialog.showMessageBox(win, { type: 'question', buttons: ['Turn on LAN access and restart', 'Cancel'], defaultId: 0, cancelId: 1, message: 'Broadwatcher only listens on this computer', detail: 'To open it on a phone it must listen on the whole LAN (Settings > Server). Windows will ask once to allow Broadwatcher through the firewall on private networks. The link carries an access key, so guests on the Wi-Fi cannot open it without it.' })
+		if (r.response !== 0) return
+		try {
+			await fetch(running.url + 'api/settings', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ server: { host: '0.0.0.0' } }) })
+		} catch {}
+		running.close()
+		running = await boot()
+		win?.loadURL(running.url)
+		return phoneDialog()
+	}
+	const urls = info.urls || []
+	const r = await dialog.showMessageBox(win, { type: 'info', buttons: ['Copy link', 'Close'], defaultId: 0, cancelId: 1, message: 'Open this on the phone (same Wi-Fi)', detail: `${urls.join('\n')}\n\nThen "Add to Home Screen". The link carries the access key; the phone remembers it. Anyone with the link can see the dashboard, so share it with the crew only.` })
+	if (r.response === 0 && urls[0]) {
+		const { clipboard } = await import('electron')
+		clipboard.writeText(urls[0])
+	}
 }
 
 async function resetConfig() {

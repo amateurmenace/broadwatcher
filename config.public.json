@@ -43,6 +43,12 @@
   },
   "networks": [],
   "equipment": [],
+  "active_profile": "idle",
+  "profiles": [
+    { "id": "show", "name": "Live show", "expect": { "stream_out": true, "stream_in": false, "recording": true, "mics": false, "dante": false, "ndi": false } },
+    { "id": "rehearsal", "name": "Rehearsal", "expect": { "stream_out": false, "stream_in": false, "recording": false, "mics": false, "dante": false, "ndi": false } },
+    { "id": "idle", "name": "Off air", "expect": { "stream_out": false, "stream_in": false, "recording": false, "mics": false, "dante": false, "ndi": false } }
+  ],
   "auto_discover_ouis": [
     "Blackmagic",
     "Audinate",

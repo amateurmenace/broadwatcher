@@ -1,0 +1,12 @@
+{
+  "name": "Broadwatcher",
+  "short_name": "Broadwatcher",
+  "start_url": "/m",
+  "display": "standalone",
+  "background_color": "#f3f0e9",
+  "theme_color": "#f3f0e9",
+  "icons": [
+    { "src": "icon-512.png", "sizes": "1024x1024", "type": "image/png" },
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml" }
+  ]
+}

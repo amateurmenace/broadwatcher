@@ -12,8 +12,20 @@ broadcast readiness and explain problems.
   broadcast VLAN (name, VLAN number, in/out and a 10-minute sparkline, client count), the open-issue count,
   the clock, Settings, the light/dark switch and the readiness-rail toggle (or the `R` key). Cells drop off
   one by one on narrow windows instead of being cut.
-- **Section bar**: Gateway · Signal map · Streams · Stream paths · Switches · Equipment · Events, each a
-  jump link; every section has a ▾ to collapse it (remembered), so the map can take the room.
+- **Section bar**: Health · Gateway · Signal map · Streams · Stream paths · Switches · Equipment · Events,
+  each a jump link; every section has a ▾ to collapse it (remembered), so the map can take the room.
+- **Broadcast health** (the glance board): one lamp and a score out of 100 computed from everything that
+  affects a healthy stream (internet, switches, port errors, link speeds, port load, the switcher, the
+  roster, stream out, stream in, recorders, audio, mics, Dante, NDI, error alerts), each factor weighed and
+  judged against the active **show profile** (what the show expects: streaming out, remote sources in,
+  recorders rolling, mics, Dante, NDI). Ready ≥ 90, Degraded ≥ 72, At risk ≥ 50, else Down; a critical factor
+  at zero (WAN down, a switch with broadcast gear offline, the switcher off the network, an interrupted
+  stream) pulls the verdict to at least At risk. Then eight tiles: Stream out · Stream in · Audio · Dante ·
+  NDI · Mics · Network · Recorders, each with a lamp, one number, one line and a 10-minute sparkline;
+  clicking one opens the thing behind it. The AI narrates on top of the score (its headline, reasons and
+  actions) but never changes the verdict; the HUD lamp is the score. **Prepare a broadcast…** picks or
+  creates a profile, sets its expectations, ticks the roster (unticked devices go on standby), runs *Test
+  every probe* and saves; the profile menu in the header switches profiles without touching the roster.
 - **Issues strip**: every open alert as a chip. Click one and the inspector explains what it means, shows
   the device/port it is about, the related UniFi events, flows and Broadwatcher events, and offers
   **Diagnose with AI**.
@@ -106,6 +118,16 @@ The gear button in the top bar (or **Broadwatcher > Settings…**, Ctrl/Cmd+,) o
   LAN, port; applies after a restart) and the alert **thresholds**. Gateway, SNMP and poll changes restart the
   polling in place; AI, thresholds, Companion and the switcher mode apply immediately.
 
+## On a phone
+
+**Broadwatcher > Open on a phone…** shows the link to the phone page (`/m`): the health verdict and score,
+the eight tiles, open items, streams into the switcher, the stream paths, the Ask box and the event tape, in
+one column, live over the same server-sent events as the desk. The server must listen on the LAN (the menu
+offers to switch *Settings > Server* to the whole LAN and restart; Windows asks once to allow Broadwatcher
+through the firewall). The link carries an access key generated once per install (`server.token` in the
+config file); the phone keeps it in a cookie, and anything on the LAN without the key gets a 401. Open the
+link in Safari or Chrome and *Add to Home Screen*: the page has a manifest and an icon.
+
 ## Two builds: Broadwatcher and Broadwatcher Community
 
 Every release carries two flavours built from the same code:
@@ -138,6 +160,10 @@ roster edited in the app always wins over the bundled list (new bundled devices 
   `controllers[]` = the programs listed in the slot census (`detect`: `companion`, `process:<exe>` or empty).
 - `companion`: `url` of Companion's HTTP API (`http://127.0.0.1:8000`), `atem_label` (the bmd-atem connection
   label, `atem`), `autostart` (the Electron app starts Companion when it is not running).
+- `profiles[]` (`id`, `name`, `expect` {stream_out, stream_in, recording, mics, dante, ndi}, optional
+  `roster` = the IPs that are active in that show) and `active_profile`; edited with *Prepare a broadcast*.
+- `server`: `host` (`127.0.0.1`, or `0.0.0.0` for phones), `port`, `token` (the phone access key, generated).
+- `port_labels`: hand-written labels per switch port (`"<switch mac>:<port>": {name, ip, note}`).
 - `equipment[]`: `active`, `name`, `ip`, `group`, `role`, optional `probe` (`tcp:<port>`, `atem`, `x32`),
   `telemetry` (`webpresenter`, `hyperdeck`, `atem`), `companion` (Companion connection label for a switcher),
   `min_speed`, `hero: true` for the main switcher.

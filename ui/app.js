@@ -197,10 +197,18 @@ function renderHud(s) {
 	const lamp = $('readyLamp')
 	const errors = s.alerts.filter((a) => a.level === 'error').length
 	const warns = s.alerts.filter((a) => a.level === 'warn').length
-	if (aiStatus?.busy && !aiInfo) lamp.className = 'lamp thinking'
-	else lamp.className = 'lamp ' + (aiInfo ? verdictClass(aiInfo.verdict) : errors ? 'down' : warns ? 'degraded' : 'ready')
-	$('readyVerdict').textContent = aiInfo ? nice(aiInfo.verdict) : aiStatus && !aiStatus.enabled ? 'No AI' : errors ? 'Problems' : warns ? 'Warnings' : 'Nominal'
-	$('readyHeadline').textContent = aiInfo ? aiInfo.headline : aiStatus && !aiStatus.enabled ? 'configure ai in config.json' : aiStatus?.busy ? 'assessing…' : `${s.alerts.length} open item${s.alerts.length === 1 ? '' : 's'} · AI assessment pending`
+	const h = s.health
+	const aiFresh = aiInfo && Date.now() - aiInfo.t < 900000
+	if (h) {
+		lamp.className = 'lamp ' + verdictClass(h.verdict)
+		$('readyVerdict').textContent = nice(h.verdict)
+		$('readyHeadline').textContent = `${h.score}/100 · ${aiFresh ? aiInfo.headline : h.headline}`
+	} else {
+		if (aiStatus?.busy && !aiInfo) lamp.className = 'lamp thinking'
+		else lamp.className = 'lamp ' + (aiInfo ? verdictClass(aiInfo.verdict) : errors ? 'down' : warns ? 'degraded' : 'ready')
+		$('readyVerdict').textContent = aiInfo ? nice(aiInfo.verdict) : errors ? 'Problems' : warns ? 'Warnings' : 'Nominal'
+		$('readyHeadline').textContent = aiInfo ? aiInfo.headline : `${s.alerts.length} open item${s.alerts.length === 1 ? '' : 's'}`
+	}
 	const intake = eq ? eq.down : 0
 	const full = Math.max(20, (st?.peak || 0) * 1.2, intake * 1.2)
 	const bar = $('intakeBar')
@@ -228,6 +236,33 @@ function renderHud(s) {
 function vlanLabel(name) {
 	const n = String(name || '').replace(/^BIG_/, '').replace(/_/g, ' ').toLowerCase()
 	return n.replace(/\b\w/g, (c) => c.toUpperCase()).replace(/\bNdi\b/, 'NDI')
+}
+
+// ------------------------------------------------------------------ broadcast health: the glance board
+function renderHome(s) {
+	const h = s.health
+	const sel = $('profileSelect')
+	if (sel && document.activeElement !== sel && s.profiles) sel.innerHTML = s.profiles.list.map((p) => `<option value="${esc(p.id)}" ${p.id === s.profiles.active ? 'selected' : ''}>${esc(p.name)}</option>`).join('')
+	if (!h) return ($('home').innerHTML = '<div class="empty">waiting for the first poll</div>')
+	$('homeNote').textContent = `score ${h.score}/100 · ${h.factors.filter((f) => f.value !== null).length} factors weighed`
+	const aiFresh = aiInfo && Date.now() - aiInfo.t < 900000
+	const why = h.factors
+		.filter((f) => f.value !== null && f.value < 1)
+		.sort((a, b) => b.weight * (1 - b.value) - a.weight * (1 - a.value))
+		.slice(0, 4)
+	const tileHtml = (s.tiles || [])
+		.map((t) => `<div class="tile ${esc(t.level)}" data-tile="${esc(t.id)}" title="${esc(t.line)}"><div class="th"><span class="lamp sm ${esc(t.level)}"></span>${esc(t.label)}</div><div class="tv">${esc(t.value)}${t.unit ? `<small>${esc(t.unit)}</small>` : ''}</div><div class="tl">${esc(t.line)}</div>${t.series && t.series.length > 1 ? scope('tile:' + t.id, [{ data: t.series, color: t.id === 'stream_out' ? 'out' : 'in' }], 'tspark', { bare: true }) : `<div class="nosp" title="${esc(t.note || 'no series yet')}"></div>`}</div>`)
+		.join('')
+	$('home').innerHTML = `<div class="verdict-big" data-sel="health:now"><span class="lamp ${verdictClass(h.verdict)}"></span><div><b>${esc(nice(h.verdict))}</b><div class="score">${h.score}<small> / 100 · ${esc(h.profile?.name || '')}</small></div><p>${esc(aiFresh ? aiInfo.headline : h.headline)}</p><ul class="why">${why.map((f) => `<li class="${esc(f.level)}"><b>${esc(f.label)}</b> · ${esc(f.reason)}</li>`).join('') || '<li class="ok"><b>All factors</b> at full marks</li>'}</ul><div class="ai-meta">${aiFresh ? `AI: ${esc(aiInfo.model)} · ${fmtAgo(aiInfo.t)} ago${aiInfo.aiVerdict && aiInfo.aiVerdict !== h.verdict ? ` · the model would have said ${esc(nice(aiInfo.aiVerdict))}` : ''}` : aiStatus?.enabled ? 'AI narrative pending' : 'AI off · score only'} · click for every factor</div></div></div><div class="tiles">${tileHtml}</div>`
+}
+function tileClick(id) {
+	const t = (state?.tiles || []).find((x) => x.id === id)
+	const tg = t?.target
+	if (!tg) return
+	if (tg.type === 'section') return $(tg.id)?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+	if (tg.type === 'atem') return select('atem', 'atem')
+	if (tg.type === 'wan') return select('wan', 'wan')
+	select(tg.type, tg.id)
 }
 
 // ------------------------------------------------------------------ gateway at a glance
@@ -716,6 +751,18 @@ function entitySection(type, e) {
 	}
 	if (type === 'wan') return `<h3>WAN · ${esc(e.gateway || '')}</h3>${kv([['Status', esc(e.status), e.status === 'ok' ? 'ok' : 'bad'], ['Address', `${esc(e.ip || '')}${e.isp ? ' · ' + esc(e.isp) : ''}`], ['Link', speedTxt(e.speed)], ['Latency', `${e.latency ?? '–'} ms`], ['Traffic', `↓ ${fmtRate(e.down)} ↑ ${fmtRate(e.up)}`], ['Internet uptime', fmtUptime(e.uptime)]])}`
 	if (type === 'api') return `<h3>UniFi API</h3><pre class="ai-text">${esc(JSON.stringify(e, null, 1))}</pre>`
+	if (type === 'health') {
+		return `<h3><span class="lamp sm ${esc(verdictClass(e.verdict) === 'ready' ? 'ok' : verdictClass(e.verdict) === 'degraded' ? 'warn' : 'bad')}"></span> ${esc(nice(e.verdict))} · ${e.score}/100</h3><p class="explain">${esc(e.headline)}</p><p>Profile "${esc(e.profile?.name || '')}" expects: ${esc(Object.entries(e.profile?.expect || {}).filter(([, v]) => v).map(([k]) => k.replace('_', ' ')).join(', ') || 'nothing in particular')}. Each factor is weighed; critical ones (internet, switches, the switcher, an interrupted stream) pull the verdict to at least "At risk" when they fail.</p><ul class="factors">${e.factors.map((f) => `<li class="${esc(f.level)}"><b>${esc(f.label)}</b><em>${f.value === null ? 'n/a' : Math.round(f.value * 100) + '%'}</em><span>${esc(f.reason)}${f.critical ? ' <small>(critical)</small>' : ''} <small>· weight ${f.weight}</small></span></li>`).join('')}</ul>`
+	}
+	if (type === 'vlan') {
+		return `<h3>${esc(vlanLabel(e.name))}${e.vlan ? ` · VLAN ${e.vlan}` : ''}</h3>${kv([
+			['Subnet', esc(e.subnet || '')],
+			['Purpose', esc(e.purpose || '')],
+			['Clients', String(e.clients)],
+			['Traffic', `↓ ${fmtRate(e.down)} ↑ ${fmtRate(e.up)} through the gateway`],
+			['Roster devices', (e.equipment || []).map((d) => `<span class="tally ${d.active ? d.status : 'standby'}"></span> ${esc(d.name)} · ${esc(d.ip)}${d.active ? '' : ' (standby)'}`).join('<br>') || 'none'],
+		])}<h3>Traffic · last ${Math.round(((e.history?.down || []).length * 5) / 60)} min</h3>${scope('insp', [{ data: e.history?.down || [], color: 'in' }, { data: e.history?.up || [], color: 'out' }], 'spark')}<p>Only traffic that crosses the gateway is counted here; same-VLAN traffic (Dante audio, NDI between two sources on the NDI VLAN) stays on the switches and shows in their port counters.</p>`
+	}
 	if (type === 'path') {
 		return `<h3><span class="pl ${esc(e.status)}"></span> ${esc(e.name)}</h3><p class="explain">${esc(e.verdict)}</p>${kv([
 			['Path', `${esc(e.proto.replace('_', '+'))} WAN ${esc(e.wanPorts)} → ${esc(e.target.name)} ${esc(e.target.ip)}:${esc(e.target.port || e.wanPorts)}`],
@@ -801,11 +848,13 @@ function renderAiView() {
 	const ai = aiInfo
 	const parts = []
 	if (aiStatus && !aiStatus.enabled) parts.push(`<p>AI is not configured. Add an OpenAI-compatible server (LM Studio) or an Anthropic key under <b>ai</b> in config.json, then Broadwatcher &gt; Restart server.</p>`)
-	parts.push(`<div class="verdict"><span class="lamp ${ai ? verdictClass(ai.verdict) : aiStatus?.busy ? 'thinking' : ''}"></span><div><b>${esc(ai ? nice(ai.verdict) : aiStatus?.busy ? 'Assessing' : 'Standby')}</b><small>${esc(ai ? ai.headline : aiStatus?.busy ? 'the model is reading the live state…' : 'the first assessment runs shortly after start')}</small></div></div>`)
+	const h = state?.health
+	parts.push(`<div class="verdict" data-sel="health:now" style="cursor:pointer"><span class="lamp ${h ? verdictClass(h.verdict) : ai ? verdictClass(ai.verdict) : aiStatus?.busy ? 'thinking' : ''}"></span><div><b>${esc(h ? nice(h.verdict) : ai ? nice(ai.verdict) : aiStatus?.busy ? 'Assessing' : 'Standby')}${h ? ` <small>${h.score}/100</small>` : ''}</b><small>${esc(h ? h.headline : ai ? ai.headline : aiStatus?.busy ? 'the model is reading the live state…' : 'the first assessment runs shortly after start')}</small></div></div>`)
+	if (h) parts.push(`<ul class="factors">${h.factors.filter((f) => f.value !== null && f.value < 1).sort((a, b) => b.weight * (1 - b.value) - a.weight * (1 - a.value)).slice(0, 6).map((f) => `<li class="${esc(f.level)}"><b>${esc(f.label)}</b><em>${Math.round(f.value * 100)}%</em><span>${esc(f.reason)}</span></li>`).join('') || '<li class="ok"><b>All factors</b><em>100%</em><span>everything the profile expects is up</span></li>'}</ul>`)
 	if (ai) {
-		parts.push(`<h3>Why</h3><ul>${ai.reasons.map((r) => `<li>${esc(r)}</li>`).join('') || '<li>no reasons given</li>'}</ul>`)
+		parts.push(`<h3>What the AI says</h3><p>${esc(ai.headline)}</p><ul>${ai.reasons.map((r) => `<li>${esc(r)}</li>`).join('') || '<li>no reasons given</li>'}</ul>`)
 		if (ai.actions?.length) parts.push(`<h3>Do now</h3><ol>${ai.actions.map((r) => `<li>${esc(r)}</li>`).join('')}</ol>`)
-		parts.push(`<div class="ai-meta">${esc(ai.model)} · ${Math.round(ai.ms / 1000)} s · ${fmtAgo(ai.t)} ago · confidence ${esc(ai.confidence || '?')}</div>`)
+		parts.push(`<div class="ai-meta">${esc(ai.model)} · ${Math.round(ai.ms / 1000)} s · ${fmtAgo(ai.t)} ago · confidence ${esc(ai.confidence || '?')}${ai.aiVerdict && h && ai.aiVerdict !== h.verdict ? ` · the model alone would say ${esc(nice(ai.aiVerdict))}` : ''}</div>`)
 	}
 	if (aiStatus?.lastError) parts.push(`<p class="error">AI error: ${esc(aiStatus.lastError)}</p>`)
 	const pv = aiStatus?.providers
@@ -843,6 +892,7 @@ function render(s) {
 	renderHud(s)
 	renderIssues(s)
 	const folded = (id) => $(id).classList.contains('folded')
+	if (!folded('homeBlock')) renderHome(s)
 	if (!folded('gwBlock')) renderGateway(s)
 	renderMap(s)
 	if (!folded('atemBlock')) renderAtem(s)
@@ -940,6 +990,9 @@ document.addEventListener('click', (e) => {
 	if (t.closest?.('#railToggle')) return setRail(!$('railToggle').classList.contains('on'))
 	const fold = t.closest?.('[data-fold]')
 	if (fold) return toggleFold(fold.getAttribute('data-fold'))
+	if (t.id === 'prepareBtn') return Prepare.open()
+	const tile = t.closest?.('[data-tile]')
+	if (tile) return tileClick(tile.getAttribute('data-tile'))
 	if (t.id === 'mapIn') return NetMap.zoom(1.25)
 	if (t.id === 'mapOut') return NetMap.zoom(1 / 1.25)
 	if (t.id === 'mapFit') return NetMap.fit()
@@ -998,6 +1051,7 @@ function refreshAiStatus() {
 }
 document.addEventListener('change', (e) => {
 	if (e.target.id === 'atemMode') atemSession(e.target.getAttribute('data-ip'), 'mode', e.target.value)
+	if (e.target.id === 'profileSelect') fetch('/api/profiles/activate', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: e.target.value, applyRoster: false }) }).catch((err) => alert('could not switch the profile: ' + err.message))
 })
 document.addEventListener('keydown', (e) => {
 	if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') {
