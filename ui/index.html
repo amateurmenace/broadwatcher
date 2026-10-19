@@ -2,24 +2,25 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>BIG NetWatch</title>
+<title>Broadwatcher</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="styles.css">
+<script>try { const t = localStorage.getItem('bw-theme'); if (t) document.documentElement.setAttribute('data-theme', t) } catch (e) {}</script>
 </head>
 <body>
 <!-- HUD: the strip that is always on screen -->
 <header class="hud" id="hud">
-	<div class="hud-brand" id="brand" title="BIG NetWatch">
+	<div class="hud-brand" id="brand" title="Broadwatcher">
 		<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M2 15h4l3-9 4 14 3-8 2 3h4" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/></svg>
-		<span>NET<b>WATCH</b></span>
+		<span>Broad<b>watcher</b></span>
 	</div>
 	<button class="hud-ready" id="hudReady" title="Broadcast readiness (AI) — click for the reasoning">
 		<span class="lamp" id="readyLamp"></span>
-		<span class="ready-text"><b id="readyVerdict">STANDBY</b><small id="readyHeadline">waiting for the first assessment</small></span>
+		<span class="ready-text"><b id="readyVerdict">Standby</b><small id="readyHeadline">waiting for the first assessment</small></span>
 	</button>
 	<div class="hud-cell intake" id="hudIntake" title="Traffic arriving at the ATEM (switch port counters)">
-		<label>ATEM INTAKE</label>
+		<label>ATEM intake</label>
 		<div class="meter"><i id="intakeBar"></i><em id="intakeBase"></em></div>
 		<b id="intakeVal">–</b>
 		<small id="intakeSrc">no stream</small>
@@ -30,19 +31,20 @@
 		<small id="wanSub">–</small>
 	</div>
 	<div class="hud-cell" id="hudConsole" title="UDM Pro Max">
-		<label>CONSOLE</label>
+		<label>Console</label>
 		<b id="consoleVal">–</b>
 		<small id="consoleSub">–</small>
 	</div>
 	<div class="hud-cell vlans" id="hudVlans" title="VLAN traffic through the gateway"></div>
 	<div class="hud-cell flows" id="hudFlows" title="Biggest flow in the last poll">
-		<label>TOP FLOW</label>
+		<label>Top flow</label>
 		<div class="ticker" id="flowTicker">–</div>
 	</div>
 	<div class="hud-right">
 		<div class="hud-issues" id="hudIssues"></div>
 		<div class="clock" id="clock">00:00:00</div>
-		<button class="hud-toggle" id="hudToggle" title="Expand the HUD (H)">DETAILS <i>▾</i></button>
+		<button class="theme-toggle" id="themeToggle" title="Light / dark">◐</button>
+		<button class="hud-toggle" id="hudToggle" title="Expand the HUD (H)">Details <i>▾</i></button>
 	</div>
 </header>
 <section class="hud-panel" id="hudPanel" hidden>
@@ -64,23 +66,23 @@
 		</section>
 
 		<section class="block" id="atemBlock">
-			<header class="bh"><h2>Streams into the ATEM</h2><span class="bh-note" id="atemNote"></span></header>
+			<header class="bh"><h2>Streams into the switcher</h2><span class="bh-note" id="atemNote"></span></header>
 			<div id="atemPanel"></div>
 		</section>
 
 		<section class="block" id="rackBlock">
-			<header class="bh"><h2>Switch rack</h2><span class="bh-note" id="rackNote"></span></header>
+			<header class="bh"><h2>Switches</h2><span class="bh-note" id="rackNote"></span></header>
 			<div class="rack" id="rack"></div>
 		</section>
 
 		<section class="block" id="patchBlock">
-			<header class="bh"><h2>Broadcast equipment</h2><span class="bh-note" id="patchNote"></span></header>
+			<header class="bh"><h2>Broadcast equipment</h2><div class="bh-tools"><button class="btn" id="editRoster">Edit roster</button><span class="bh-note" id="patchNote"></span></div></header>
 			<div id="patch"></div>
 		</section>
 
 		<section class="block two" id="tapeBlock">
 			<div>
-				<header class="bh"><h2>What changed</h2><span class="bh-note">NetWatch event tape</span></header>
+				<header class="bh"><h2>What changed</h2><span class="bh-note">Broadwatcher event tape</span></header>
 				<div class="tape" id="tape"></div>
 			</div>
 			<div>
@@ -88,7 +90,7 @@
 				<div class="tape" id="unifiLog"></div>
 			</div>
 		</section>
-		<footer class="foot">BIG NetWatch · Brookline Interactive Group · UniFi Network API on the UDM Pro Max · Blackmagic REST + ATEM protocol · local AI</footer>
+		<footer class="foot">Broadwatcher · Brookline Interactive Group · UniFi Network API and SNMP · Blackmagic REST and ATEM protocol · local AI</footer>
 	</main>
 
 	<aside class="inspector" id="inspector">
@@ -98,6 +100,10 @@
 		</div>
 		<div class="insp-body" id="inspBody"></div>
 	</aside>
+</div>
+
+<div class="overlay" id="rosterOverlay" hidden>
+	<div class="editor" id="rosterEditor"></div>
 </div>
 
 <div id="tip" class="tip" hidden></div>

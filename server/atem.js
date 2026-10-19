@@ -1,8 +1,12 @@
-// Minimal read-only client for the Blackmagic ATEM protocol (UDP 9910): says hello, acknowledges the
-// switcher's initial state dump, pulls out the product name, firmware, program/preview, input names and
-// the switcher's *streaming* state (StRS/SRSS/SRSU: state, encoder bitrate, service and destination URL),
-// then lets the session time out. Used to tell when an ATEM Mini is streaming INTO the studio switcher.
+// Read-only clients for the Blackmagic ATEM protocol (UDP 9910).
+//  - readAtem(): one-shot: says hello, acknowledges the initial state dump, returns product, firmware,
+//    program/preview, input names and the streaming state (StRS/SRSS/SRSU), then lets the session time out.
+//  - AtemClient: a persistent session that keeps acknowledging the switcher's packets, so it uses exactly
+//    ONE of the switcher's control-connection slots for as long as Broadwatcher runs (a new hello every few
+//    seconds would leave abandoned sessions behind until the switcher expires them, and the HD8 / Minis
+//    only have a handful of slots that Companion and ATEM Software Control need).
 import dgram from 'node:dgram'
+import { EventEmitter } from 'node:events'
 
 const FLAG_ACKREQ = 0x08
 const FLAG_HELLO = 0x10
@@ -115,4 +119,182 @@ export function readAtem(ip, { port = 9910, timeoutMs = 6000, capture = [] } = {
 		}
 		send(HELLO)
 	})
+}
+
+export class AtemClient extends EventEmitter {
+	constructor(ip, { port = 9910, log = () => {} } = {}) {
+		super()
+		this.ip = ip
+		this.port = port
+		this.log = log
+		this.sock = null
+		this.state = 'idle' // idle | connecting | syncing | connected | refused | disconnected
+		this.error = null
+		this.data = { product: null, version: null, streaming: null, inputs: {}, program: null, preview: null }
+		this.lastPacket = 0
+		this.connectedAt = 0
+		this.commands = 0
+		this.timer = null
+		this.retryAt = 0
+		this.closed = false
+	}
+
+	// (re)connect when idle/disconnected and the backoff has passed; cheap to call every poll
+	ensure() {
+		if (this.closed) return
+		if (this.state === 'connected' || this.state === 'syncing' || this.state === 'connecting') return
+		if (Date.now() < this.retryAt) return
+		this.connect()
+	}
+
+	connect() {
+		this.teardown()
+		this.state = 'connecting'
+		this.error = null
+		this.commands = 0
+		const sock = (this.sock = dgram.createSocket('udp4'))
+		sock.on('error', (e) => this.fail(e.code || e.message, 15000))
+		sock.on('message', (msg) => this.onPacket(msg))
+		sock.send(HELLO, this.port, this.ip, (e) => e && this.fail(e.code || e.message, 15000))
+		this.lastPacket = Date.now()
+		this.timer = setInterval(() => {
+			// the switcher sends a packet about every second; silence means the session is gone
+			if (Date.now() - this.lastPacket > 8000) this.fail(this.state === 'connecting' ? 'timeout' : 'lost', 30000)
+		}, 2000)
+	}
+
+	onPacket(msg) {
+		if (msg.length < 12) return
+		this.lastPacket = Date.now()
+		const flags = msg[0] & 0xf8
+		const len = msg.readUInt16BE(0) & 0x07ff
+		const sid = msg.readUInt16BE(2)
+		const pid = msg.readUInt16BE(10)
+		if (flags & FLAG_HELLO) {
+			const code = msg[12]
+			if (code === 3) return this.fail('too many clients', 60000, 'refused')
+			if (code !== 2) return this.fail(`hello reply ${code}`, 30000, 'refused')
+			this.state = 'syncing'
+			this.ack(sid, 0)
+			return
+		}
+		if (flags & FLAG_ACKREQ) this.ack(sid, pid)
+		let i = 12
+		while (i + 8 <= len && i + 8 <= msg.length) {
+			const clen = msg.readUInt16BE(i)
+			if (clen < 8) break
+			this.handle(msg.toString('latin1', i + 4, i + 8), msg.subarray(i + 8, i + clen))
+			i += clen
+		}
+	}
+
+	ack(sid, pid) {
+		if (!this.sock) return
+		const b = Buffer.alloc(12)
+		b.writeUInt16BE((FLAG_ACK << 8) | 12, 0)
+		b.writeUInt16BE(sid, 2)
+		b.writeUInt16BE(pid, 4)
+		this.sock.send(b, this.port, this.ip, () => {})
+	}
+
+	handle(name, body) {
+		this.commands++
+		const d = this.data
+		try {
+			switch (name) {
+				case '_pin':
+					d.product = cstr(body, 0, 44)
+					break
+				case '_ver':
+					d.version = `${body.readUInt16BE(0)}.${body.readUInt16BE(2)}`
+					break
+				case 'StRS':
+					d.streaming = { ...(d.streaming || {}), state: STREAM_STATE[body.readUInt16BE(0)] || `state ${body.readUInt16BE(0)}`, error: body.readUInt16BE(2) }
+					break
+				case 'SRSS':
+					d.streaming = { ...(d.streaming || {}), bitrate: body.readUInt32BE(0), cache: body.readUInt16BE(4) }
+					break
+				case 'SRSU': {
+					const url = cstr(body, 64, 512)
+					let host = null
+					let port = null
+					let protocol = null
+					try {
+						const u = new URL(url)
+						host = u.hostname
+						port = Number(u.port) || (u.protocol === 'rtmps:' ? 443 : 1935)
+						protocol = u.protocol.replace(':', '')
+					} catch {}
+					d.streaming = { ...(d.streaming || {}), service: cstr(body, 0, 64), url, host, port, protocol, keySet: !!cstr(body, 576, 512) }
+					break
+				}
+				case 'InPr': {
+					const id = body.readUInt16BE(0)
+					d.inputs[id] = { long: cstr(body, 2, 20), short: cstr(body, 22, 4) }
+					break
+				}
+				case 'PrgI':
+					if (body[0] === 0) d.program = body.readUInt16BE(2)
+					break
+				case 'PrvI':
+					if (body[0] === 0) d.preview = body.readUInt16BE(2)
+					break
+				case 'InCm':
+					if (this.state !== 'connected') {
+						this.state = 'connected'
+						this.connectedAt = Date.now()
+						this.emit('connected')
+					}
+					break
+			}
+		} catch {}
+		if (this.state === 'connected') this.emit('update', name)
+	}
+
+	fail(error, retryMs, state = 'disconnected') {
+		const was = this.state
+		this.teardown()
+		this.state = state
+		this.error = error
+		this.retryAt = Date.now() + retryMs
+		if (was === 'connected') this.emit('disconnected', error)
+	}
+
+	teardown() {
+		if (this.timer) clearInterval(this.timer)
+		this.timer = null
+		if (this.sock) {
+			try {
+				this.sock.close()
+			} catch {}
+		}
+		this.sock = null
+	}
+
+	close() {
+		this.closed = true
+		this.teardown()
+		this.state = 'idle'
+	}
+
+	snapshot() {
+		const d = this.data
+		const live = this.state === 'connected'
+		return {
+			kind: 'atem',
+			state: this.state,
+			error: live ? null : this.error || (this.state === 'connecting' || this.state === 'syncing' ? 'connecting' : 'not connected'),
+			product: d.product,
+			version: d.version,
+			streaming: d.streaming,
+			program: d.program,
+			preview: d.preview,
+			inputs: d.inputs,
+			programName: d.inputs[d.program]?.long || null,
+			previewName: d.inputs[d.preview]?.long || null,
+			connectedAt: this.connectedAt,
+			lastPacket: this.lastPacket,
+			commands: this.commands,
+		}
+	}
 }

@@ -15,12 +15,13 @@ talking to a colleague: name devices, ports and numbers, say what is fine, what 
 
 Rules of judgement:
 - Quote numbers exactly as they appear in the data. Never invent devices, ports or numbers. If data is missing, say so.
-- The ALERTS list is NetWatch's own threshold check and is authoritative for what is wrong. With no alerts, the network is
+- The ALERTS list is Broadwatcher's own threshold check and is authoritative for what is wrong. With no alerts, the network is
   normally READY; only call out something else if the data itself shows it clearly.
 - Low traffic is normal, not a problem: a 1 Gb/s link carrying 1 Mb/s is healthy. Only utilisation near the link speed matters.
 - UniFi switches idle at 40-70 % CPU; only CPU above 85 %, temperature above 70 °C, or memory above 90 % is a concern.
 - Laptops, phones and watches connecting or disconnecting from Wi-Fi are normal; wired broadcast gear dropping is not.
 - Portable kit (Flex Minis, field switches) and spares being offline is normal; unidentified devices are low priority.
+- Devices listed as STANDBY are deliberately not part of this broadcast: never mention them as a problem.
 - A stream "arriving" at the ATEM is good news during a show, not a problem; "stopped" during a show is a problem.`
 
 export class AI {
@@ -113,9 +114,11 @@ export class AI {
 			L.push(`  STREAM INTAKE: ${st.state || 'unknown'}${st.state === 'arriving' ? ` ~${rate(st.rate || 0)} above baseline ${rate(st.baseline || 0)} since ${new Date(st.since).toLocaleTimeString()}` : ` (baseline ${rate(st.baseline || 0)})`}; sources: ${(st.sources || []).map((x) => `${x.name} [${x.confidence}] ${x.detail || ''}`).join('; ') || 'none identified'}`)
 			if (at.incoming?.length) L.push('  flows into ATEM (last hour): ' + at.incoming.slice(0, 6).map((x) => `${x.srcName || x.src}${x.region ? '/' + x.region : ''} -> ${x.proto}:${x.dport} ${x.service || ''} ${(x.bytes / 1e6).toFixed(1)}MB ${x.live ? 'LIVE' : x.ageS + 's ago'}${x.action === 'blocked' ? ' BLOCKED' : ''}`).join('; '))
 		}
-		L.push('EQUIPMENT:')
+		const standby = state.equipment.filter((e) => e.active === false)
+		if (standby.length) L.push('STANDBY (not part of this broadcast; ignore them, they are expected to be off or away): ' + standby.map((e) => e.name).join(', '))
+		L.push('EQUIPMENT IN THIS BROADCAST:')
 		for (const e of state.equipment) {
-			if (e.discovered) continue
+			if (e.discovered || e.active === false) continue
 			const tl = e.telemetry
 			const tele = tl ? (tl.kind === 'webpresenter' ? `stream ${tl.status}${tl.bitrate ? ' ' + (tl.bitrate / 1e6).toFixed(1) + 'Mb/s' : ''}` : tl.kind === 'hyperdeck' ? `deck ${tl.summary}` : tl.kind === 'atem' ? `${tl.product || 'ATEM'} ${tl.streaming ? `streaming ${tl.streaming.state}${tl.streaming.url ? ' -> ' + tl.streaming.url : ''}${tl.streaming.bitrate ? ' ' + (tl.streaming.bitrate / 1e6).toFixed(1) + 'Mb/s' : ''}` : ''}${tl.error ? ' (' + tl.error + ')' : ''}` : '') : ''
 			L.push(`  [${e.group}] ${e.name} ${e.ip} ${e.status.toUpperCase()}${e.switch ? ` on ${e.switch.name} p${e.switch.port} ${e.switch.speed}M` : e.online ? ' (wifi)' : e.lastSeen ? ' last seen ' + Math.round((state.ts - e.lastSeen) / 60000) + ' min ago' : ''} in ${rate(e.down)} out ${rate(e.up)}${e.probe ? (e.probe.ok ? ` probe ok ${Math.round(e.probe.ms)}ms${e.probe.info?.state ? ' (' + e.probe.info.state + ')' : ''}` : ` probe FAILED ${e.probe.error || ''}`) : ''}${tele ? ' ' + tele : ''}`)
@@ -125,7 +128,7 @@ export class AI {
 		L.push('ALERTS:' + (state.alerts.length ? '' : ' none'))
 		for (const a of state.alerts) L.push(`  [${a.level}] (${a.id}) ${a.text}${a.since ? ` since ${new Date(a.since).toLocaleTimeString()}` : ''}`)
 		const ev = (state.events || []).slice(0, 12)
-		if (ev.length) L.push('NETWATCH EVENTS (newest first): ' + ev.map((x) => `${new Date(x.t).toLocaleTimeString()} ${x.text}`).join(' | '))
+		if (ev.length) L.push('BROADWATCHER EVENTS (newest first): ' + ev.map((x) => `${new Date(x.t).toLocaleTimeString()} ${x.text}`).join(' | '))
 		const log = (state.log || []).filter((l) => l.severity !== 'info').slice(0, 12)
 		if (log.length) L.push('UNIFI EVENTS (notable, newest first): ' + log.map((l) => `${new Date(l.t).toLocaleTimeString()} ${l.title}`).join(' | '))
 		const top = (state.flows?.top || []).slice(0, 6)
@@ -156,7 +159,7 @@ Rules: READY = every broadcast path is healthy; DEGRADED = something is wrong bu
 Entity details: ${JSON.stringify(details.entity || {}).slice(0, 3000)}
 Related UniFi events: ${(details.log || []).slice(0, 10).map((l) => `${new Date(l.t).toLocaleTimeString()} ${l.title}`).join(' | ') || 'none'}
 Related flows: ${(details.flows || []).slice(0, 8).map((f) => `${f.srcName || f.src} -> ${f.dstName || f.dst}:${f.dport} ${f.proto} ${(f.bytes / 1e6).toFixed(1)}MB`).join('; ') || 'none'}
-Related NetWatch events: ${(details.events || []).slice(0, 8).map((x) => `${new Date(x.t).toLocaleTimeString()} ${x.text}`).join(' | ') || 'none'}
+Related Broadwatcher events: ${(details.events || []).slice(0, 8).map((x) => `${new Date(x.t).toLocaleTimeString()} ${x.text}`).join(' | ') || 'none'}
 
 Explain in plain language, as 3 short sections with these exact headings: "What this means", "Likely causes" (most likely first, say how you know), "What to check now" (numbered, concrete: which device, port, cable, setting). Max 170 words. Mention how it affects a live broadcast.`
 		const { text, ms } = await this.chat([{ role: 'system', content: SYSTEM }, { role: 'user', content: prompt }], { maxTokens: 600, temperature: 0.2 })

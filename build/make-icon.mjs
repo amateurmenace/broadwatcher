@@ -1,4 +1,4 @@
-// Renders build/icon.png (1024x1024) without any image library: a dark rounded tile with the NetWatch
+// Renders build/icon.png (1024x1024) without any image library: a paper-coloured rounded tile with the Broadwatcher
 // pulse line, matching ui/icon.svg. Run: node build/make-icon.mjs
 import fs from 'node:fs'
 import path from 'node:path'
@@ -48,11 +48,11 @@ function thickLine(x0, y0, x1, y1, width, color) {
 }
 
 const S = (v) => (v / 64) * W // ui/icon.svg uses a 64 unit viewBox
-const bgTop = [27, 42, 63]
-const bgBot = [11, 15, 20]
+const bgTop = [250, 248, 243]
+const bgBot = [236, 232, 223]
 roundedRect(S(2), S(2), S(62), S(62), S(14), (t) => bgTop.map((c, i) => c + (bgBot[i] - c) * t))
 // subtle border
-const border = [43, 59, 82]
+const border = [194, 187, 171]
 for (let k = 0; k < S(1.2); k++) {
 	const inset = k
 	roundedRectOutline(S(2) + inset, S(2) + inset, S(62) - inset, S(62) - inset, S(14) - inset, border)
@@ -89,8 +89,8 @@ function roundedRectOutline(x0, y0, x1, y1, rad, color) {
 	}
 }
 
-const green = [61, 220, 132]
-const blue = [78, 161, 255]
+const green = [194, 86, 27]
+const blue = [31, 111, 139]
 const pts = [
 	[10, 40],
 	[20, 40],

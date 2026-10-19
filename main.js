@@ -1,4 +1,4 @@
-// Electron shell: starts the NetWatch server in-process and shows the dashboard in a window.
+// Electron shell: starts the Broadwatcher server in-process and shows the dashboard in a window.
 import { app, BrowserWindow, Menu, shell, dialog, nativeTheme } from 'electron'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -8,7 +8,7 @@ import { startServer, loadConfig } from './server/server.js'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const BUNDLED_CONFIG = path.join(__dirname, 'config.json')
 
-app.setName('BIG NetWatch')
+app.setName('Broadwatcher')
 nativeTheme.themeSource = 'dark'
 
 const userConfig = () => path.join(app.getPath('userData'), 'config.json')
@@ -34,10 +34,10 @@ async function boot() {
 	const config = loadConfig(BUNDLED_CONFIG, cfgPath)
 	const port = Number(process.env.NETWATCH_PORT || config.server?.port || 8766)
 	try {
-		running = await startServer({ config, host: '127.0.0.1', port })
+		running = await startServer({ config, configPath: cfgPath, host: '127.0.0.1', port })
 	} catch (e) {
-		// port taken (another NetWatch or the standalone server): fall back to a random port
-		running = await startServer({ config, host: '127.0.0.1', port: 0 })
+		// port taken (another Broadwatcher or the standalone server): fall back to a random port
+		running = await startServer({ config, configPath: cfgPath, host: '127.0.0.1', port: 0 })
 	}
 	return running
 }
@@ -48,8 +48,8 @@ function createWindow(url) {
 		height: 1050,
 		minWidth: 960,
 		minHeight: 640,
-		backgroundColor: '#0b0f14',
-		title: 'BIG NetWatch',
+		backgroundColor: '#f3f0e8',
+		title: 'Broadwatcher',
 		autoHideMenuBar: false,
 		webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false },
 	})
@@ -79,7 +79,7 @@ function buildMenu() {
 	const template = [
 		...(isMac ? [{ role: 'appMenu' }] : []),
 		{
-			label: 'NetWatch',
+			label: 'Broadwatcher',
 			submenu: [
 				{ label: 'Reload dashboard', accelerator: 'CmdOrCtrl+R', click: () => win?.reload() },
 				{ label: 'Open in browser', click: () => running && shell.openExternal(running.url) },

@@ -3,10 +3,10 @@
    the device (traffic into it), blue flowing back (traffic out of it); a stream arriving at the ATEM glows cyan. */
 window.NetMap = (function () {
 	const NS = 'http://www.w3.org/2000/svg'
-	const COL_W = 236
+	const COL_W = 252
 	const ROW_H = 27
 	const NODE_H = 22
-	const W = { internet: 110, gateway: 186, switch: 186, ap: 170, pdu: 160, equipment: 206 }
+	const W = { internet: 110, gateway: 200, switch: 200, ap: 170, pdu: 160, equipment: 224 }
 	const PAD_X = 24
 	const PAD_Y = 34
 
@@ -94,8 +94,8 @@ window.NetMap = (function () {
 	function strand(x1, y1, x2, y2, bus, cls, rate, reverse) {
 		const r = Number(rate) || 0
 		if (r < 0.05) return null
-		const w = 1 + Math.min(5, Math.log10(1 + r) * 1.9)
-		const dur = Math.max(0.45, Math.min(7, 7 / Math.log10(10 + r * 8)))
+		const w = 1.5 + Math.min(7, Math.log10(1 + r) * 2.6) // 1 Mb/s ≈ 2.3 px, 100 Mb/s ≈ 6.7 px, 1 Gb/s = 8.5 px
+		const dur = Math.max(0.4, Math.min(7, 7 / Math.log10(10 + r * 8)))
 		return el('path', { d: elbow(x1, y1, x2, y2, bus, reverse), class: 'strand ' + cls, 'stroke-width': w.toFixed(1), style: `animation-duration:${dur.toFixed(2)}s` })
 	}
 
@@ -138,6 +138,14 @@ window.NetMap = (function () {
 			if (sIn) gl.appendChild(sIn)
 			if (sOut) gl.appendChild(sOut)
 			if (l.fromPort) gl.appendChild(el('text', { x: x2 - 4, y: y2 - 4, class: 'port-label', 'text-anchor': 'end' }, `p${l.fromPort}${l.speed ? ' · ' + (l.speed >= 1000 ? l.speed / 1000 + 'G' : l.speed + 'M') : ''}`))
+			const busy = Math.max(l.rate?.in || 0, l.rate?.out || 0)
+			if (busy >= 0.5 && n.kind !== 'equipment') {
+				// uplinks: write the rate on the horizontal run into the child so trunk traffic reads at a glance
+				const t = el('text', { x: x2 - 4, y: y2 + 12, class: 'link-label', 'text-anchor': 'end' })
+				t.appendChild(el('tspan', { class: 'i' }, `↓${fmtRate(l.rate.in)}`))
+				t.appendChild(el('tspan', { class: 'o', dx: 4 }, `↑${fmtRate(l.rate.out)}`))
+				gl.appendChild(t)
+			}
 		}
 		// nodes
 		const gn = el('g')
@@ -153,32 +161,31 @@ window.NetMap = (function () {
 			} else {
 				g.appendChild(el('circle', { cx: 11, cy: h / 2, r: 3.5, class: 'tally ' + (n.status || '') }))
 				const rate = n.rate || {}
-				const bars = (x0) => {
-					// two tiny log-scale activity bars: amber = into the device, blue = out of it (numbers in the tooltip)
-					const bw = 34
-					const f = (v) => Math.min(1, Math.log10(1 + (Number(v) || 0)) / 3) // 1 Gb/s = full
-					g.appendChild(el('rect', { x: x0, y: 6, width: bw, height: 4, fill: '#1b1e24' }))
-					g.appendChild(el('rect', { x: x0, y: 6, width: (bw * f(rate.in)).toFixed(1), height: 4, fill: '#f2b134' }))
-					g.appendChild(el('rect', { x: x0, y: 12, width: bw, height: 4, fill: '#1b1e24' }))
-					g.appendChild(el('rect', { x: x0, y: 12, width: (bw * f(rate.out)).toFixed(1), height: 4, fill: '#5b8dff' }))
+				// the live numbers, right-aligned: orange = into the device, teal = out of it
+				const rates = () => {
+					const t = el('text', { x: w - 6, y: 15, 'text-anchor': 'end', class: 'rate' })
+					const a = el('tspan', { class: 'i' }, `↓${fmtRate(rate.in)}`)
+					const b = el('tspan', { class: 'o', dx: 5 }, `↑${fmtRate(rate.out)}`)
+					t.appendChild(a)
+					t.appendChild(b)
+					g.appendChild(t)
 				}
 				if (n.kind === 'equipment') {
 					const t = n.telemetry
 					const badge = t && (t.recording || t.streaming) ? (t.recording ? 'REC' : 'STREAM') : null
 					const bw = badge ? badge.length * 6 + 8 : 0
-					g.appendChild(el('text', { x: 20, y: 15 }, trunc(n.name, badge ? 16 : 21)))
-					bars(w - 40)
+					g.appendChild(el('text', { x: 20, y: 15 }, trunc(n.name, badge ? 12 : 16)))
 					if (badge) {
-						g.appendChild(el('rect', { x: w - 46 - bw, y: 5, width: bw, height: 12, class: 'badge-bg ' + (t.recording ? 'rec' : 'stream') }))
-						g.appendChild(el('text', { x: w - 46 - bw / 2, y: 14.2, 'text-anchor': 'middle', class: 'badge' }, badge))
+						g.appendChild(el('rect', { x: w - 86 - bw, y: 5, width: bw, height: 12, rx: 2, class: 'badge-bg ' + (t.recording ? 'rec' : 'stream') }))
+						g.appendChild(el('text', { x: w - 86 - bw / 2, y: 14.2, 'text-anchor': 'middle', class: 'badge' }, badge))
 					}
+					rates()
 				} else if (n.kind === 'switch') {
-					g.appendChild(el('text', { x: 20, y: 15 }, trunc(n.name, 15)))
-					bars(w - 40)
-					g.appendChild(el('text', { x: w - 44, y: 15, 'text-anchor': 'end', class: 'rate' }, `${n.portsUp}/${n.portsTotal}`))
+					g.appendChild(el('text', { x: 20, y: 15 }, trunc(n.name, 14)))
+					rates()
 				} else if (n.kind === 'gateway') {
-					g.appendChild(el('text', { x: 20, y: 15 }, trunc(n.name, 17)))
-					bars(w - 40)
+					g.appendChild(el('text', { x: 20, y: 15 }, trunc(n.name, 14)))
+					rates()
 				} else if (n.kind === 'ap') {
 					g.appendChild(el('text', { x: 20, y: 15 }, trunc(n.name, 17)))
 					g.appendChild(el('text', { x: w - 6, y: 15, 'text-anchor': 'end', class: 'rate' }, `${n.clients ?? 0} wifi`))

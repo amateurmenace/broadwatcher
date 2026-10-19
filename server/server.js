@@ -1,4 +1,4 @@
-// BIG NetWatch server: runs the collector, serves the dashboard (ui/) and a live feed.
+// Broadwatcher server: runs the collector, serves the dashboard (ui/) and a live feed.
 //   GET  /api/state                 full current state (JSON)
 //   GET  /api/events                server-sent events: "state" after every device poll, "event" for the tape
 //   GET  /api/details?type=&id=     inspector data for an alert / switch / port / equipment / atem / wan
@@ -33,6 +33,12 @@ export function loadConfig(bundledPath, userPath) {
 		const merged = outdated
 			? { ...base, gateway: deep('gateway'), poll: deep('poll'), thresholds: deep('thresholds'), ai: deep('ai'), snmp: deep('snmp'), server: deep('server') }
 			: { ...base, ...user, gateway: deep('gateway'), poll: deep('poll'), thresholds: deep('thresholds'), ai: deep('ai'), snmp: deep('snmp'), server: deep('server') }
+		// a roster edited in the app survives upgrades: the user's entries win, new bundled devices are appended
+		if (user.equipment_edited && Array.isArray(user.equipment)) {
+			const byIp = new Map(user.equipment.map((e) => [e.ip, e]))
+			merged.equipment = [...user.equipment, ...base.equipment.filter((e) => !byIp.has(e.ip)).map((e) => ({ ...e, active: false }))]
+			merged.equipment_edited = true
+		}
 		if (outdated) {
 			try {
 				fs.writeFileSync(userPath, JSON.stringify(merged, null, 2) + '\n')
@@ -70,7 +76,18 @@ function readBody(req) {
 	})
 }
 
-export function startServer({ config, host = '127.0.0.1', port = 8766, log = console.log }) {
+export function saveUserConfig(configPath, patch) {
+	if (!configPath) return false
+	let cur = {}
+	try {
+		cur = JSON.parse(fs.readFileSync(configPath, 'utf8'))
+	} catch {}
+	fs.mkdirSync(path.dirname(configPath), { recursive: true })
+	fs.writeFileSync(configPath, JSON.stringify({ ...cur, ...patch }, null, 2) + '\n')
+	return true
+}
+
+export function startServer({ config, configPath = null, host = '127.0.0.1', port = 8766, log = console.log }) {
 	const collector = new Collector(config, log)
 	const ai = new AI(config.ai || {}, log, config.thresholds || {})
 	const sseClients = new Set()
@@ -112,6 +129,18 @@ export function startServer({ config, host = '127.0.0.1', port = 8766, log = con
 			if (p === '/api/health') return sendJson(res, { ok: collector.state.ok, ts: collector.state.ts, errors: collector.state.errors })
 			if (p === '/api/config') return sendJson(res, redacted())
 			if (p === '/api/details') return sendJson(res, collector.details(q.get('type'), q.get('id')))
+			if (p === '/api/equipment' && req.method === 'GET') return sendJson(res, { equipment: config.equipment, groups: [...new Set(config.equipment.map((e) => e.group))], configPath })
+			if (p === '/api/equipment' && req.method === 'POST') {
+				const body = await readBody(req)
+				const clean = collector.setEquipment(body.equipment)
+				let saved = false
+				try {
+					saved = saveUserConfig(configPath, { equipment: clean, equipment_edited: true, config_version: config.config_version || 0 })
+				} catch (e) {
+					log('[config] could not save: ' + e.message)
+				}
+				return sendJson(res, { equipment: clean, saved, configPath })
+			}
 			if (p === '/api/ai/status') return sendJson(res, ai.status())
 			if (p === '/api/ai/digest') {
 				res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' })
@@ -168,7 +197,7 @@ export function startServer({ config, host = '127.0.0.1', port = 8766, log = con
 		server.listen(port, host, () => {
 			const addr = server.address()
 			const url = `http://${host}:${addr.port}/`
-			log(`BIG NetWatch listening on ${url}`)
+			log(`Broadwatcher listening on ${url}`)
 			resolve({
 				server,
 				collector,
@@ -190,10 +219,11 @@ export function startServer({ config, host = '127.0.0.1', port = 8766, log = con
 const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href
 if (isMain) {
 	const bundled = path.join(__dirname, '..', 'config.json')
-	const config = loadConfig(bundled, process.argv[2] || process.env.NETWATCH_CONFIG)
+	const configPath = process.argv[2] || process.env.NETWATCH_CONFIG || path.join(__dirname, '..', 'config.local.json')
+	const config = loadConfig(bundled, configPath)
 	const host = process.env.NETWATCH_HOST || config.server?.host || '127.0.0.1'
 	const port = Number(process.env.NETWATCH_PORT || config.server?.port || 8766)
-	startServer({ config, host, port }).catch((e) => {
+	startServer({ config, configPath, host, port }).catch((e) => {
 		console.error(e.message)
 		process.exit(1)
 	})
