@@ -8,54 +8,274 @@
     "ui_url": "https://192.168.20.1/network/default/dashboard"
   },
   "site_manager_api_key": "GR9fx-mXGEkfQd_Q8ljueSuwa7JhsMy0",
-  "server": { "host": "127.0.0.1", "port": 8766 },
-  "poll": { "devices_s": 5, "clients_s": 10, "flows_s": 10, "log_s": 30, "probe_s": 15, "history_points": 120 },
+  "server": {
+    "host": "127.0.0.1",
+    "port": 8766
+  },
+  "poll": {
+    "devices_s": 5,
+    "clients_s": 10,
+    "flows_s": 10,
+    "log_s": 30,
+    "probe_s": 15,
+    "history_points": 120,
+    "telemetry_s": 10
+  },
   "thresholds": {
     "wan_latency_ms": 80,
     "cpu_pct": 85,
     "mem_pct": 90,
     "temp_c": 70,
-    "stream_min_kbps": 500,
-    "port_error_rate": 1
+    "port_error_rate": 1,
+    "stream_min_mbps": 1.5,
+    "_comment": "stream_min_mbps: how much the traffic into the ATEM must rise above its quiet baseline to count as an arriving stream"
   },
   "atem": {
     "name": "ATEM Television Studio HD8 ISO",
     "ip": "192.168.20.79",
-    "control_port": 9910, "probe": "atem",
-    "_comment": "Incoming remote streams are every flow whose destination is this IP; UniFi reports source IP/port, destination (listening) port, protocol and bytes."
+    "control_port": 9910,
+    "probe": "atem",
+    "_comment": "Streams arriving at the ATEM are detected from its switch-port counters (any source, even on the same VLAN) and attributed from gateway flows, the field ATEM Mini's own stream settings and the Web Presenters' status."
   },
-  "networks": ["Default", "BIG_NDI", "BIG_DANTE", "BIG_MOBILE_DANTE"],
-  "equipment": [
-    { "name": "ATEM Television Studio HD8 ISO", "ip": "192.168.20.79", "group": "Studio A", "role": "switcher", "probe": "atem", "hero": true },
-    { "name": "Smart Videohub 40x40", "ip": "192.168.20.117", "group": "Studio A", "role": "router", "probe": "tcp:9990" },
-    { "name": "HyperDeck Studio HD", "ip": "192.168.20.159", "group": "Studio A", "role": "recorder", "probe": "tcp:9993" },
-    { "name": "Web Presenter (Control Room)", "ip": "192.168.20.71", "group": "Studio A", "role": "encoder", "probe": "tcp:9977" },
-    { "name": "Zoom Mac", "ip": "192.168.20.235", "group": "Studio A", "role": "computer", "probe": "tcp:8765" },
-    { "name": "Studio A BPix", "ip": "192.168.20.75", "group": "Studio A", "role": "computer" },
-    { "name": "Studio A BPix (NDI)", "ip": "10.56.20.33", "group": "Studio A", "role": "computer" },
-    { "name": "HyperDeck Mini", "ip": "192.168.20.129", "group": "Studio A", "role": "recorder", "probe": "tcp:9993" },
-    { "name": "Blackmagic device (Fiber Agg port 20)", "ip": "192.168.20.176", "group": "Studio A", "role": "unknown", "min_speed": 100 },
-    { "name": "BIGs-Air-2 (Blackmagic)", "ip": "192.168.20.237", "group": "Studio A", "role": "unknown", "min_speed": 100 },
-    { "name": "Tightrope Livestream 1", "ip": "192.168.20.69", "group": "Video rack", "role": "encoder" },
-    { "name": "Tightrope Livestream 2", "ip": "192.168.20.65", "group": "Video rack", "role": "encoder" },
-    { "name": "HyperDeck Pro", "ip": "192.168.20.92", "group": "Town Hall", "role": "recorder", "probe": "tcp:9993" },
-    { "name": "MC Smart Videohub", "ip": "192.168.20.233", "group": "Town Hall", "role": "router", "probe": "tcp:9990", "min_speed": 100 },
-    { "name": "LiveStreamingStation", "ip": "192.168.20.166", "group": "Town Hall", "role": "encoder" },
-    { "name": "SB-SC BPix", "ip": "192.168.20.93", "group": "Town Hall", "role": "computer" },
-    { "name": "SB-SC BPix (Dante)", "ip": "10.56.19.144", "group": "Town Hall", "role": "computer" },
-    { "name": "SB-SC BPix (NDI)", "ip": "10.56.21.8", "group": "Town Hall", "role": "computer" },
-    { "name": "PRISM 12x12 Dante", "ip": "10.56.19.213", "group": "Town Hall", "role": "audio" },
-    { "name": "SB Zoom Desk", "ip": "10.56.19.130", "group": "Town Hall", "role": "computer" },
-    { "name": "SC Zoom Desk", "ip": "10.56.19.29", "group": "Town Hall", "role": "computer" },
-    { "name": "ATEM Mini Pro G2", "ip": "192.168.20.189", "group": "Field", "role": "switcher", "probe": "atem" },
-    { "name": "Web Presenter 4K", "ip": "192.168.20.76", "group": "Field", "role": "encoder", "probe": "tcp:9977" },
-    { "name": "X32 Dante card", "ip": "192.168.5.122", "group": "Field", "role": "audio" },
-    { "name": "X32 (Studio)", "ip": "192.168.5.154", "group": "Audio rack", "role": "audio", "probe": "x32" },
-    { "name": "X32 Rack", "ip": "192.168.5.143", "group": "Audio rack", "role": "audio", "probe": "x32" },
-    { "name": "EW-DX receiver 1", "ip": "192.168.5.11", "group": "Audio rack", "role": "audio" },
-    { "name": "EW-DX receiver 2", "ip": "192.168.5.12", "group": "Audio rack", "role": "audio" },
-    { "name": "EW-DX receiver 3", "ip": "192.168.5.13", "group": "Audio rack", "role": "audio" },
-    { "name": "Blackmagic device (audio rack)", "ip": "192.168.5.78", "group": "Audio rack", "role": "unknown", "min_speed": 100 }
+  "networks": [
+    "Default",
+    "BIG_NDI",
+    "BIG_DANTE",
+    "BIG_MOBILE_DANTE"
   ],
-  "auto_discover_ouis": ["Blackmagic", "Audinate", "Sennheiser", "BEHRINGER", "NewTek", "Vizrt", "AJA", "Ross", "Haivision", "Teradek"]
+  "equipment": [
+    {
+      "name": "ATEM Television Studio HD8 ISO",
+      "ip": "192.168.20.79",
+      "group": "Studio A",
+      "role": "switcher",
+      "probe": "atem",
+      "hero": true,
+      "telemetry": "atem"
+    },
+    {
+      "name": "Smart Videohub 40x40",
+      "ip": "192.168.20.117",
+      "group": "Studio A",
+      "role": "router",
+      "probe": "tcp:9990"
+    },
+    {
+      "name": "HyperDeck Studio HD",
+      "ip": "192.168.20.159",
+      "group": "Studio A",
+      "role": "recorder",
+      "probe": "tcp:9993",
+      "telemetry": "hyperdeck"
+    },
+    {
+      "name": "Web Presenter (Control Room)",
+      "ip": "192.168.20.71",
+      "group": "Studio A",
+      "role": "encoder",
+      "probe": "tcp:9977",
+      "telemetry": "webpresenter"
+    },
+    {
+      "name": "Zoom Mac",
+      "ip": "192.168.20.235",
+      "group": "Studio A",
+      "role": "computer",
+      "probe": "tcp:8765"
+    },
+    {
+      "name": "Studio A BPix",
+      "ip": "192.168.20.75",
+      "group": "Studio A",
+      "role": "computer"
+    },
+    {
+      "name": "Studio A BPix (NDI)",
+      "ip": "10.56.20.33",
+      "group": "Studio A",
+      "role": "computer"
+    },
+    {
+      "name": "HyperDeck Mini",
+      "ip": "192.168.20.129",
+      "group": "Studio A",
+      "role": "recorder",
+      "probe": "tcp:9993",
+      "telemetry": "hyperdeck"
+    },
+    {
+      "name": "Blackmagic device (Fiber Agg port 20)",
+      "ip": "192.168.20.176",
+      "group": "Studio A",
+      "role": "unknown",
+      "min_speed": 100
+    },
+    {
+      "name": "BIGs-Air-2 (Blackmagic)",
+      "ip": "192.168.20.237",
+      "group": "Studio A",
+      "role": "unknown",
+      "min_speed": 100
+    },
+    {
+      "name": "Tightrope Livestream 1",
+      "ip": "192.168.20.69",
+      "group": "Video rack",
+      "role": "encoder"
+    },
+    {
+      "name": "Tightrope Livestream 2",
+      "ip": "192.168.20.65",
+      "group": "Video rack",
+      "role": "encoder"
+    },
+    {
+      "name": "HyperDeck Pro",
+      "ip": "192.168.20.92",
+      "group": "Town Hall",
+      "role": "recorder",
+      "probe": "tcp:9993",
+      "telemetry": "hyperdeck"
+    },
+    {
+      "name": "MC Smart Videohub",
+      "ip": "192.168.20.233",
+      "group": "Town Hall",
+      "role": "router",
+      "probe": "tcp:9990",
+      "min_speed": 100
+    },
+    {
+      "name": "LiveStreamingStation",
+      "ip": "192.168.20.166",
+      "group": "Town Hall",
+      "role": "encoder"
+    },
+    {
+      "name": "SB-SC BPix",
+      "ip": "192.168.20.93",
+      "group": "Town Hall",
+      "role": "computer"
+    },
+    {
+      "name": "SB-SC BPix (Dante)",
+      "ip": "10.56.19.144",
+      "group": "Town Hall",
+      "role": "computer"
+    },
+    {
+      "name": "SB-SC BPix (NDI)",
+      "ip": "10.56.21.8",
+      "group": "Town Hall",
+      "role": "computer"
+    },
+    {
+      "name": "PRISM 12x12 Dante",
+      "ip": "10.56.19.213",
+      "group": "Town Hall",
+      "role": "audio"
+    },
+    {
+      "name": "SB Zoom Desk",
+      "ip": "10.56.19.130",
+      "group": "Town Hall",
+      "role": "computer"
+    },
+    {
+      "name": "SC Zoom Desk",
+      "ip": "10.56.19.29",
+      "group": "Town Hall",
+      "role": "computer"
+    },
+    {
+      "name": "ATEM Mini Extreme ISO G2",
+      "ip": "192.168.20.189",
+      "group": "Field",
+      "role": "switcher",
+      "probe": "atem",
+      "telemetry": "atem"
+    },
+    {
+      "name": "Web Presenter 4K",
+      "ip": "192.168.20.76",
+      "group": "Field",
+      "role": "encoder",
+      "probe": "tcp:9977",
+      "telemetry": "webpresenter"
+    },
+    {
+      "name": "X32 Dante card",
+      "ip": "192.168.5.122",
+      "group": "Field",
+      "role": "audio"
+    },
+    {
+      "name": "X32 (Studio)",
+      "ip": "192.168.5.154",
+      "group": "Audio rack",
+      "role": "audio",
+      "probe": "x32"
+    },
+    {
+      "name": "X32 Rack",
+      "ip": "192.168.5.143",
+      "group": "Audio rack",
+      "role": "audio",
+      "probe": "x32"
+    },
+    {
+      "name": "EW-DX receiver 1",
+      "ip": "192.168.5.11",
+      "group": "Audio rack",
+      "role": "audio"
+    },
+    {
+      "name": "EW-DX receiver 2",
+      "ip": "192.168.5.12",
+      "group": "Audio rack",
+      "role": "audio"
+    },
+    {
+      "name": "EW-DX receiver 3",
+      "ip": "192.168.5.13",
+      "group": "Audio rack",
+      "role": "audio"
+    },
+    {
+      "name": "Blackmagic device (audio rack)",
+      "ip": "192.168.5.78",
+      "group": "Audio rack",
+      "role": "unknown",
+      "min_speed": 100
+    }
+  ],
+  "auto_discover_ouis": [
+    "Blackmagic",
+    "Audinate",
+    "Sennheiser",
+    "BEHRINGER",
+    "NewTek",
+    "Vizrt",
+    "AJA",
+    "Ross",
+    "Haivision",
+    "Teradek"
+  ],
+  "ai": {
+    "_comment": "Any OpenAI-compatible chat server works (LM Studio on the Broadcast Pix PC by default, reachable on the LAN). To use Anthropic instead set provider to 'anthropic' and anthropic_api_key.",
+    "enabled": true,
+    "provider": "openai",
+    "base_url": "http://192.168.20.75:1234/v1",
+    "model": "gemma-flash",
+    "api_key": "",
+    "anthropic_api_key": "",
+    "anthropic_model": "claude-sonnet-5-5",
+    "assess_every_s": 180,
+    "timeout_ms": 90000
+  },
+  "snmp": {
+    "_comment": "Real-time port counters straight from the switches. Enable SNMP v2c in UniFi Network > Settings > System > SNMP, put the community string here and restart; empty = off (counters then come from the controller, which refreshes them only when a switch informs it, every 30-90 s).",
+    "community": "",
+    "every_s": 3
+  }
 }

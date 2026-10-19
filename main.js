@@ -58,7 +58,7 @@ function createWindow(url) {
 	if (process.argv.includes('--smoke')) {
 		win.webContents.once('did-finish-load', async () => {
 			const title = await win.webContents.executeJavaScript('document.title')
-			const cards = await win.webContents.executeJavaScript('document.querySelectorAll(".card").length')
+			const cards = await win.webContents.executeJavaScript('document.querySelectorAll(".ru, .pb, [data-node]").length')
 			console.log(`SMOKE OK: loaded ${url} title="${title}" cards=${cards}`)
 			setTimeout(() => app.quit(), 1500)
 		})

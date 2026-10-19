@@ -1,5 +1,7 @@
-// Collector: polls the UniFi gateway (devices/ports, clients, traffic flows, system log), probes the
-// broadcast equipment, turns everything into one `state` object and emits it after every device poll.
+// Collector: polls the UniFi gateway (devices/ports, clients, traffic flows, system log), probes and reads the
+// broadcast equipment (TCP/UDP probes, Blackmagic REST, ATEM protocol), and turns everything into one `state`
+// object that is emitted after every device poll. It also keeps an event tape (what changed, when), detects
+// streams arriving at the ATEM from the switch-port counters, builds the live topology and explains alerts.
 //
 // Rates: UniFi's own "-r" fields are slow moving averages. Switches report their cumulative port counters
 // to the controller every 5-30 s (varies per switch), so a port's rate is computed from the counter delta
@@ -7,6 +9,9 @@
 import { EventEmitter } from 'node:events'
 import { UniFi } from './unifi.js'
 import { probeAll } from './probe.js'
+import { telemetry as restTelemetry } from './rest.js'
+import { readAtem } from './atem.js'
+import { SnmpSwitch } from './snmp.js'
 
 const num = (x) => {
 	const n = Number(x)
@@ -59,8 +64,8 @@ export class Collector extends EventEmitter {
 		this.cfg = config
 		this.log = log
 		this.api = new UniFi(config.gateway)
-		this.poll = { devices_s: 5, clients_s: 10, flows_s: 10, log_s: 30, probe_s: 15, history_points: 120, ...(config.poll || {}) }
-		this.th = { wan_latency_ms: 80, cpu_pct: 85, mem_pct: 90, temp_c: 70, stream_min_kbps: 500, ...(config.thresholds || {}) }
+		this.poll = { devices_s: 5, clients_s: 10, flows_s: 10, log_s: 30, probe_s: 15, telemetry_s: 10, history_points: 120, ...(config.poll || {}) }
+		this.th = { wan_latency_ms: 80, cpu_pct: 85, mem_pct: 90, temp_c: 70, stream_min_mbps: 1.5, ...(config.thresholds || {}) }
 		this.state = {
 			ts: 0,
 			started: Date.now(),
@@ -73,9 +78,11 @@ export class Collector extends EventEmitter {
 			networks: [],
 			equipment: [],
 			atem: null,
+			topology: { nodes: [], links: [] },
 			clients: { total: 0, wired: 0, wireless: 0, byNetwork: {} },
 			flows: { recent: [], top: [], window_s: 0, total: 0, blocked: 0 },
 			alerts: [],
+			events: [],
 			log: [],
 			updated: {},
 		}
@@ -83,14 +90,20 @@ export class Collector extends EventEmitter {
 		this.hist = new Map() // key -> {down: Ring, up: Ring}
 		this.aliases = new Map() // mac -> name from rest/user
 		this.lastSeen = new Map() // mac -> last_seen (s) from rest/user
+		this.ipToMac = new Map()
 		this.netconf = []
 		this.rawDevices = []
 		this.rawClients = []
 		this.probes = new Map() // ip -> probe result
+		this.telemetry = new Map() // ip -> {kind, ...}
 		this.flowIds = new Set()
 		this.flowCursor = Date.now() - 60000
-		this.incoming = new Map() // ATEM incoming streams: "src>dport/proto" -> record
+		this.incoming = new Map() // ATEM incoming streams from flows: "src>dport/proto" -> record
 		this.peers = new Map() // equipment ip -> Map(peerKey -> record)
+		this.alertSince = new Map() // alert id -> first seen
+		this.prev = { ports: new Map(), eq: new Map(), wan: null, switches: new Map() } // for change events
+		this.stream = { state: 'idle', baseline: 0, rate: 0, since: 0, until: 0, samples: [], peak: 0 }
+		this.snmp = { cfg: { community: '', every_s: 3, ...(config.snmp || {}) }, switches: new Map(), rates: new Map(), status: {} } // mac -> SnmpSwitch; "mac:port" -> {rx, tx, t}
 		this.timers = []
 		this.busy = new Set()
 	}
@@ -120,6 +133,41 @@ export class Collector extends EventEmitter {
 		every('flows', this.poll.flows_s, () => this.pollFlows())
 		every('log', this.poll.log_s, () => this.pollLog())
 		every('probe', this.poll.probe_s, () => this.pollProbes())
+		every('telemetry', this.poll.telemetry_s, () => this.pollTelemetry())
+		if (this.snmp.cfg.community) every('snmp', this.snmp.cfg.every_s, () => this.pollSnmp())
+	}
+
+	// real-time port counters straight from the switches (needs SNMP v2c enabled in UniFi); only the ports that
+	// are up are read, every few seconds; a switch that does not answer is retried every 5 minutes
+	async pollSnmp() {
+		const now = Date.now()
+		const jobs = []
+		for (const sw of this.state.switches) {
+			if (!sw.online || !sw.ip) continue
+			let s = this.snmp.switches.get(sw.mac)
+			if (!s) {
+				s = new SnmpSwitch(sw.ip, this.snmp.cfg.community)
+				this.snmp.switches.set(sw.mac, s)
+			}
+			if (s.failedAt && now - s.failedAt < 300000) continue
+			const ports = sw.ports.filter((p) => p.up).map((p) => p.idx)
+			jobs.push(
+				s
+					.poll(ports)
+					.then((m) => {
+						for (const [idx, r] of m) this.snmp.rates.set(`${sw.mac}:${idx}`, r)
+						s.failedAt = 0
+						this.snmp.status[sw.name] = `ok · ${m.size} ports`
+					})
+					.catch((e) => {
+						s.failedAt = now
+						s.ifIndexByPort = null
+						this.snmp.status[sw.name] = e.message
+					}),
+			)
+		}
+		await Promise.all(jobs)
+		this.state.snmp = { enabled: true, status: this.snmp.status }
 	}
 
 	stop() {
@@ -136,6 +184,14 @@ export class Collector extends EventEmitter {
 		return h
 	}
 
+	event(kind, text, extra = {}) {
+		const ev = { t: Date.now(), kind, text, ...extra }
+		this.state.events.unshift(ev)
+		if (this.state.events.length > 150) this.state.events.length = 150
+		this.emit('event', ev)
+		return ev
+	}
+
 	// delta rate on a cumulative counter pair; falls back to UniFi's averages when the counter is stale
 	rate(key, rx, tx, t, fallbackRx, fallbackTx) {
 		let c = this.counters.get(key)
@@ -148,10 +204,10 @@ export class Collector extends EventEmitter {
 				c.down = Math.max(0, (rx - c.rx) / dt)
 				c.up = Math.max(0, (tx - c.tx) / dt)
 				c.tRate = t
+				c.rx = rx
+				c.tx = tx
+				c.t = t
 			}
-			c.rx = rx
-			c.tx = tx
-			c.t = t
 		} else if (t - c.tRate > 60000) {
 			c.down = num(fallbackRx)
 			c.up = num(fallbackTx)
@@ -178,9 +234,9 @@ export class Collector extends EventEmitter {
 	}
 
 	async pollLog() {
-		const r = await this.api.systemLog({ pageSize: 80, hours: 72 })
+		const r = await this.api.systemLog({ pageSize: 100, hours: 72 })
 		const recs = Array.isArray(r) ? r : r?.data || []
-		this.state.log = recs.map(normaliseLog).filter(Boolean).slice(0, 80)
+		this.state.log = recs.map(normaliseLog).filter(Boolean).slice(0, 100)
 		this.state.updated.log = Date.now()
 	}
 
@@ -189,6 +245,26 @@ export class Collector extends EventEmitter {
 		const res = await probeAll(items)
 		for (const [ip, r] of res) this.probes.set(ip, { ...r, t: Date.now() })
 		this.state.updated.probe = Date.now()
+	}
+
+	async pollTelemetry() {
+		const items = this.cfg.equipment.filter((e) => e.telemetry && e.ip)
+		await Promise.all(
+			items.map(async (e) => {
+				try {
+					let t = null
+					if (e.telemetry === 'atem') {
+						const r = await readAtem(e.ip, { timeoutMs: 6000 })
+						t = r.ok || r.commands ? { kind: 'atem', product: r.product, version: r.version, streaming: r.streaming, program: r.program, preview: r.preview, inputs: r.inputs, programName: r.inputs[r.program]?.long || null, previewName: r.inputs[r.preview]?.long || null, error: r.error || null, otherCommands: r.unknown } : { kind: 'atem', error: r.error || 'no answer' }
+					} else t = await restTelemetry(e.telemetry, e.ip)
+					if (t) this.telemetry.set(e.ip, { ...t, t: Date.now() })
+					else this.telemetry.delete(e.ip)
+				} catch (err) {
+					this.telemetry.set(e.ip, { kind: e.telemetry, error: err.message, t: Date.now() })
+				}
+			}),
+		)
+		this.state.updated.telemetry = Date.now()
 	}
 
 	async pollFlows() {
@@ -233,7 +309,7 @@ export class Collector extends EventEmitter {
 		const atemIp = this.cfg.atem?.ip
 		const eqIps = new Set(this.cfg.equipment.map((e) => e.ip))
 		const recent = this.state.flows.recent
-		let bytesTop = []
+		const bytesTop = []
 		let blocked = 0
 		for (const f of recs) {
 			const src = f.source || {}
@@ -268,8 +344,7 @@ export class Collector extends EventEmitter {
 				risk: f.risk,
 			}
 			bytesTop.push(rec)
-			const touches = eqIps.has(rec.src) || eqIps.has(rec.dst)
-			if (touches) recent.unshift(rec)
+			if (eqIps.has(rec.src) || eqIps.has(rec.dst)) recent.unshift(rec)
 			if (atemIp && rec.dst === atemIp) this.noteIncoming(rec, now)
 			for (const ip of [rec.src, rec.dst]) {
 				if (!eqIps.has(ip)) continue
@@ -292,30 +367,17 @@ export class Collector extends EventEmitter {
 			bytesTop.sort((a, b) => b.bytes - a.bytes)
 			this.state.flows.top = bytesTop.slice(0, 15)
 		}
-		// expire old peers
 		for (const [, m] of this.peers) for (const [k, p] of m) if (now - p.last > 1800000) m.delete(k)
 	}
 
 	noteIncoming(rec, now) {
 		const key = `${rec.src}>${rec.dport}/${rec.proto}`
-		const s = this.incoming.get(key) || {
-			key,
-			src: rec.src,
-			sport: rec.sport,
-			srcName: rec.srcName,
-			region: rec.srcRegion,
-			zone: rec.srcZone,
-			dport: rec.dport,
-			proto: rec.proto,
-			service: rec.service,
-			app: rec.app,
-			network: rec.network,
-			action: rec.action,
-			first: rec.t,
-			last: 0,
-			bytes: 0,
-			packets: 0,
-			flows: 0,
+		let s = this.incoming.get(key)
+		if (!s) {
+			s = { key, src: rec.src, sport: rec.sport, srcName: rec.srcName, region: rec.srcRegion, zone: rec.srcZone, dport: rec.dport, proto: rec.proto, service: rec.service, app: rec.app, network: rec.network, action: rec.action, first: rec.t, last: 0, bytes: 0, packets: 0, flows: 0 }
+			this.incoming.set(key, s)
+			if (rec.action !== 'blocked') this.event('flow', `Flow into the ATEM from ${rec.srcName || rec.src}${rec.srcRegion ? ' (' + rec.srcRegion + ')' : ''} → ${rec.proto} port ${rec.dport}`, { entity: { type: 'atem' } })
+			else this.event('flow', `Blocked connection to the ATEM from ${rec.src}${rec.srcRegion ? ' (' + rec.srcRegion + ')' : ''} → ${rec.proto} port ${rec.dport}`, { entity: { type: 'atem' }, level: 'warn' })
 		}
 		s.last = Math.max(s.last, rec.t)
 		s.bytes += rec.bytes
@@ -325,7 +387,6 @@ export class Collector extends EventEmitter {
 		s.app = rec.app || s.app
 		s.action = rec.action
 		s.srcName = rec.srcName || s.srcName
-		this.incoming.set(key, s)
 		for (const [k, v] of this.incoming) if (now - v.last > 3600000) this.incoming.delete(k)
 	}
 
@@ -341,7 +402,6 @@ export class Collector extends EventEmitter {
 		const netCounts = {}
 		let wired = 0
 		let wireless = 0
-		if (!this.ipToMac) this.ipToMac = new Map()
 		for (const c of clients) {
 			const mac = lower(c.mac)
 			c._name = this.aliases.get(mac) || c.name || c.hostname || null
@@ -385,7 +445,8 @@ export class Collector extends EventEmitter {
 			const mac = lower(d.mac)
 			const online = d.state === 1
 			const ss = d['system-stats'] || {}
-			const t = d.last_seen ? d.last_seen * 1000 : now
+			// counters are timed by our poll clock: a switch's last_seen lags its counter updates by up to a minute
+			const t = now
 			const temps = Array.isArray(d.temperatures) ? d.temperatures.map((x) => ({ name: x.name, value: Math.round(num(x.value) * 10) / 10 })) : []
 			const temp = d.general_temperature ?? temps.find((x) => /cpu/i.test(x.name))?.value ?? temps[0]?.value ?? null
 			const ports = []
@@ -396,7 +457,9 @@ export class Collector extends EventEmitter {
 			for (const p of d.port_table || []) {
 				const idx = p.port_idx
 				const key = `${mac}:${idx}`
-				const r = this.rate(key, num(p.rx_bytes), num(p.tx_bytes), t, p['rx_bytes-r'], p['tx_bytes-r'])
+				let r = this.rate(key, num(p.rx_bytes), num(p.tx_bytes), t, p['rx_bytes-r'], p['tx_bytes-r'])
+				const sr = this.snmp.rates.get(key)
+				if (sr && now - sr.t < 20000) r = { down: sr.rx, up: sr.tx, age: Math.round((now - sr.t) / 1000), snmp: true }
 				const errs = num(p.rx_errors) + num(p.tx_errors) + num(p.rx_dropped) + num(p.tx_dropped)
 				const c = this.counters.get(key)
 				const errDelta = c.errors === undefined ? 0 : Math.max(0, errs - c.errors)
@@ -409,8 +472,16 @@ export class Collector extends EventEmitter {
 				rxAll += r.down
 				txAll += r.up
 				poeAll += num(p.poe_power)
+				// link change events (only once the switch has been seen before)
+				const pk = this.prev.ports.get(key)
+				if (pk !== undefined && pk !== up && online) {
+					const who = dd[0]?.name || cl[0]?._name || cl[0]?.ip || null
+					this.event('link', `${d.name} port ${idx} link ${up ? 'UP' : 'DOWN'}${who ? ` (${who})` : ''}${up && p.speed ? ` at ${p.speed >= 1000 ? p.speed / 1000 + 'G' : p.speed + 'M'}` : ''}`, { entity: { type: 'port', id: key }, level: up ? 'info' : 'warn' })
+				}
+				this.prev.ports.set(key, up)
 				ports.push({
 					idx,
+					key,
 					name: p.name || `Port ${idx}`,
 					up,
 					enabled: p.enable !== false && p.forward !== 'disabled',
@@ -426,12 +497,13 @@ export class Collector extends EventEmitter {
 					rx: mbps(r.down), // from the attached device into the switch
 					tx: mbps(r.up), // from the switch to the attached device
 					age: r.age,
-					util: p.speed ? Math.min(1, Math.max(r.down, r.up) * 8 / (num(p.speed) * 1e6)) : 0,
+					live: !!r.snmp,
+					util: p.speed ? Math.min(1, (Math.max(r.down, r.up) * 8) / (num(p.speed) * 1e6)) : 0,
 					errors: errs,
 					errorsRecent: now - (c.errSeen || 0) < 600000,
 					clients: cl.slice(0, 6).map((x) => ({ name: x._name, ip: x.ip, mac: x.mac })),
 					clientCount: cl.length,
-					devices: dd.map((x) => ({ name: x.name, ip: x.ip, type: x.type })),
+					devices: dd.map((x) => ({ name: x.name, ip: x.ip, type: x.type, mac: lower(x.mac) })),
 				})
 			}
 			ports.sort((a, b) => a.idx - b.idx)
@@ -461,6 +533,7 @@ export class Collector extends EventEmitter {
 				satisfaction: d.satisfaction ?? null,
 				uplink: {
 					device: upl.uplink_device_name || null,
+					mac: lower(upl.uplink_mac) || null,
 					port: upl.uplink_remote_port || null,
 					localPort: upl.port_idx || null,
 					speed: num(upl.speed),
@@ -477,19 +550,14 @@ export class Collector extends EventEmitter {
 				poeMax: num(d.total_max_power) || null,
 				clients: (d.type === 'uap' ? clientsByAp.get(mac) || [] : []).length,
 				history: { down: h.down.a, up: h.up.a },
-				age: online ? Math.round((now - t) / 1000) : null,
+				age: online ? Math.min(...ports.map((p) => p.age), d.last_seen ? Math.round((now - d.last_seen * 1000) / 1000) : 999) : null,
 			}
+			const pOnline = this.prev.switches.get(mac)
+			if (pOnline !== undefined && pOnline !== online) this.event('device', `${entry.name} is ${online ? 'back online' : 'OFFLINE'}`, { entity: { type: d.type === 'uap' ? 'ap' : 'switch', id: mac }, level: online ? 'info' : 'error' })
+			this.prev.switches.set(mac, online)
 			if (isPdu(d)) {
 				const outlets = d.outlet_table || []
-				others.push({
-					...entry,
-					kind: 'pdu',
-					ports: [],
-					outlets: outlets.length,
-					outletsOn: outlets.filter((o) => o.relay_state).length,
-					powerW: Math.round(outlets.reduce((s, o) => s + num(o.outlet_power), 0) * 10) / 10,
-					voltage: outlets.find((o) => num(o.outlet_voltage))?.outlet_voltage ?? null,
-				})
+				others.push({ ...entry, kind: 'pdu', ports: [], outlets: outlets.length, outletsOn: outlets.filter((o) => o.relay_state).length, powerW: Math.round(outlets.reduce((s, o) => s + num(o.outlet_power), 0) * 10) / 10, voltage: outlets.find((o) => num(o.outlet_voltage))?.outlet_voltage ?? null })
 				continue
 			}
 			if (d.type === 'udm' || d.type === 'uxg' || d.type === 'ugw') {
@@ -511,16 +579,16 @@ export class Collector extends EventEmitter {
 						uptime: www.uptime ?? null,
 						speed: num(w1.speed) || num(upl.speed),
 						isp: w1.isp_name || null,
-						maxDown: num(wan.speedtest_lastrun ? w1.max_rx : 0) || null,
 					},
 					speedtest: d['speedtest-status'] ? { down: d['speedtest-status'].xput_download, up: d['speedtest-status'].xput_upload, ping: d['speedtest-status'].latency, t: d['speedtest-status'].rundate } : null,
 					networks: [],
 				}
+				if (this.prev.wan && this.prev.wan !== gateway.wan.status) this.event('wan', `WAN ${gateway.wan.status === 'ok' ? 'is back' : gateway.wan.status}`, { entity: { type: 'wan' }, level: gateway.wan.status === 'ok' ? 'info' : 'error' })
+				this.prev.wan = gateway.wan.status
 				const wh = this.history('wan')
 				wh.down.push(gateway.wan.down)
 				wh.up.push(gateway.wan.up)
 				gateway.wan.history = { down: wh.down.a, up: wh.up.a }
-				// VLANs: per-network routed counters live on the gateway
 				const conf = new Map(this.netconf.map((n) => [n.name, n]))
 				for (const n of d.network_table || []) {
 					const cfgN = conf.get(n.name) || {}
@@ -529,24 +597,13 @@ export class Collector extends EventEmitter {
 					const up = mbps(n['tx_bytes-r'])
 					nh.down.push(down)
 					nh.up.push(up)
-					gateway.networks.push({
-						name: n.name,
-						vlan: n.vlan ?? cfgN.vlan ?? null,
-						subnet: n.ip_subnet || cfgN.ip_subnet || null,
-						purpose: cfgN.purpose || null,
-						clients: n.num_sta ?? netCounts[n.name] ?? 0,
-						down,
-						up,
-						watched: (this.cfg.networks || []).includes(n.name),
-						history: { down: nh.down.a, up: nh.up.a },
-					})
+					gateway.networks.push({ name: n.name, vlan: n.vlan ?? cfgN.vlan ?? null, subnet: n.ip_subnet || cfgN.ip_subnet || null, purpose: cfgN.purpose || null, clients: n.num_sta ?? netCounts[n.name] ?? 0, down, up, watched: (this.cfg.networks || []).includes(n.name), history: { down: nh.down.a, up: nh.up.a } })
 				}
 				gateway.networks.sort((a, b) => Number(b.watched) - Number(a.watched) || b.clients - a.clients)
 			} else if (d.type === 'usw') switches.push(entry)
 			else if (d.type === 'uap') aps.push(entry)
 			else others.push({ ...entry, kind: d.type, ports: [] })
 		}
-		// online switches by distance from the gateway, then the ones that are not connected (portable kit, spares)
 		switches.sort((a, b) => Number(b.online) - Number(a.online) || (a.depth ?? 9) - (b.depth ?? 9) || a.name.localeCompare(b.name))
 		this.state.gateway = gateway
 		this.state.switches = switches
@@ -563,20 +620,37 @@ export class Collector extends EventEmitter {
 			const oui = lower(c.oui)
 			if (ouis.some((o) => oui.includes(o))) discovered.push({ name: c._name || `${String(c.oui).split(/\s+/)[0]} device`, ip: c.ip, group: 'Discovered (by vendor)', role: 'unknown', discovered: true })
 		}
+		const allDevs = [...switches, gateway, ...aps].filter(Boolean)
 		const equipment = []
 		for (const e of [...this.cfg.equipment, ...discovered]) {
 			const c = clientByIp.get(e.ip)
-			const mac = lower(c?.mac)
 			const sw = c ? devByMac.get(lower(c.sw_mac || c.ap_mac)) : null
-			const swEntry = sw ? [...switches, gateway, ...aps].find((s) => s && s.mac === lower(sw.mac)) : null
+			const swEntry = sw ? allDevs.find((s) => s.mac === lower(sw.mac)) : null
 			const port = swEntry && c?.is_wired ? swEntry.ports.find((p) => p.idx === c.sw_port) : null
 			const pr = this.probes.get(e.ip) || null
+			const tl = this.telemetry.get(e.ip) || null
 			const h = this.history(`eq:${e.ip}`)
 			const down = port ? port.tx : mbps(c?.['rx_bytes-r'])
 			const up = port ? port.rx : mbps(c?.['tx_bytes-r'])
 			h.down.push(down)
 			h.up.push(up)
 			const peers = [...(this.peers.get(e.ip) || new Map()).values()].sort((a, b) => b.last - a.last).slice(0, 8)
+			const status = !c ? 'offline' : pr && !pr.ok ? 'unresponsive' : 'online'
+			const pStatus = this.prev.eq.get(e.ip)
+			if (pStatus !== undefined && pStatus !== status && !e.discovered) this.event('equipment', `${e.name} ${status === 'online' ? 'is OK again' : status === 'offline' ? 'left the network' : 'stopped answering (' + (pr?.error || e.probe) + ')'}`, { entity: { type: 'equipment', id: e.ip }, level: status === 'online' ? 'info' : e.hero ? 'error' : 'warn' })
+			this.prev.eq.set(e.ip, status)
+			// telemetry change events
+			if (tl && !tl.error) {
+				const sig = tl.kind === 'webpresenter' ? `wp:${tl.status}` : tl.kind === 'hyperdeck' ? `hd:${tl.recording ? 'rec' : tl.mode}` : tl.kind === 'atem' ? `atem:${tl.streaming?.state || '-'}` : ''
+				const pk = `tele:${e.ip}`
+				const ps = this.prev.eq.get(pk)
+				if (ps !== undefined && ps !== sig) {
+					if (tl.kind === 'webpresenter') this.event('stream', `${e.name}: stream ${tl.status}${tl.streaming && tl.bitrate ? ` at ${(tl.bitrate / 1e6).toFixed(1)} Mb/s` : ''}`, { entity: { type: 'equipment', id: e.ip }, level: /interrupt|error|fail/i.test(tl.status) ? 'error' : 'info' })
+					else if (tl.kind === 'hyperdeck') this.event('record', `${e.name}: ${tl.recording ? 'RECORDING' : tl.mode}`, { entity: { type: 'equipment', id: e.ip } })
+					else if (tl.kind === 'atem') this.event('stream', `${e.name}: stream ${tl.streaming?.state || 'unknown'}${tl.streaming?.url ? ' → ' + tl.streaming.url : ''}`, { entity: { type: 'equipment', id: e.ip } })
+				}
+				this.prev.eq.set(pk, sig)
+			}
 			equipment.push({
 				...e,
 				probeSpec: e.probe || null,
@@ -588,20 +662,21 @@ export class Collector extends EventEmitter {
 				network: c?.network || null,
 				uptime: c ? num(c.uptime) : 0,
 				lastSeen: c ? now : this.lastSeenByIp(e.ip),
-				switch: swEntry ? { name: swEntry.name, mac: swEntry.mac, port: c.sw_port, speed: port?.speed || null, poeW: port?.poeW || 0 } : null,
+				switch: swEntry ? { name: swEntry.name, mac: swEntry.mac, port: c.sw_port, key: port?.key || null, speed: port?.speed || null, poeW: port?.poeW || 0 } : null,
 				down,
 				up,
 				age: port?.age ?? null,
 				probe: pr,
+				telemetry: tl,
 				reachable: pr ? pr.ok : null,
-				status: !c ? 'offline' : pr && !pr.ok ? 'unresponsive' : 'online',
+				status,
 				peers,
 				history: { down: h.down.a, up: h.up.a },
 			})
 		}
 		this.state.equipment = equipment
 
-		// ATEM hero
+		// ATEM hero + stream detection
 		const atemCfg = this.cfg.atem
 		if (atemCfg?.ip) {
 			const eq = equipment.find((e) => e.ip === atemCfg.ip)
@@ -611,16 +686,122 @@ export class Collector extends EventEmitter {
 				equipment: eq || null,
 				incoming: incoming.map((s) => ({ ...s, live: now - s.last < 45000, ageS: Math.round((now - s.last) / 1000) })),
 				liveCount: incoming.filter((s) => now - s.last < 45000).length,
+				stream: this.detectStream(eq, equipment, incoming, now),
 			}
 		}
 
+		this.state.topology = this.buildTopology(gateway, switches, aps, others, equipment)
 		this.state.alerts = this.computeAlerts(now)
 		this.state.ts = now
 		this.state.ok = Object.keys(this.state.errors).length === 0
 	}
 
+	// Stream intake detector: the ATEM's switch port counters say how much is flowing INTO the switcher.
+	// A sustained rise above the quiet baseline = a stream is arriving. Sources are attributed from
+	// (1) flows through the gateway, (2) encoder telemetry (ATEM Mini streaming URL, Web Presenter status),
+	// (3) encoders whose outgoing rate rose by about the same amount at the same time.
+	detectStream(eq, equipment, incoming, now) {
+		const s = this.stream
+		if (!eq || !eq.online) {
+			s.state = 'idle'
+			s.rate = 0
+			return { ...s, intake: 0, sources: [], samples: undefined }
+		}
+		const intake = num(eq.down)
+		const minRise = num(this.th.stream_min_mbps) || 1.5
+		if (s.state === 'idle') {
+			// baseline = slow average of quiet intake (control traffic, multiview previews, discovery)
+			s.baseline = s.baseline ? s.baseline * 0.9 + Math.min(intake, s.baseline * 3 + 0.5) * 0.1 : intake
+		}
+		s.samples.push({ t: now, v: intake })
+		if (s.samples.length > 12) s.samples.shift()
+		const recent = s.samples.slice(-3).map((x) => x.v)
+		// an encoder that says it is streaming to this ATEM is proof on its own (and beats the counters, which the
+		// controller refreshes only when the switch informs it, every 30-90 s)
+		const confirmed = equipment.find((e) => e.ip !== eq.ip && e.telemetry?.kind === 'atem' && e.telemetry.streaming?.state === 'streaming' && e.telemetry.streaming.host === eq.ip)
+		const elevated = (recent.length >= 2 && recent.slice(-2).every((v) => v > s.baseline + minRise)) || !!confirmed
+		const quiet = recent.length >= 3 && recent.every((v) => v <= s.baseline + minRise * 0.6) && !confirmed
+		if (s.state === 'idle' && elevated) {
+			s.state = 'arriving'
+			s.since = now - 5000
+			s.peak = intake
+			s.rate = Math.max(0, intake - s.baseline) || (confirmed?.telemetry.streaming.bitrate ? confirmed.telemetry.streaming.bitrate / 1e6 : 0)
+			this.event('stream', confirmed ? `${confirmed.name} started streaming to the ATEM (${confirmed.telemetry.streaming.url})` : `Stream arriving at the ATEM: ~${(intake - s.baseline).toFixed(1)} Mb/s`, { entity: { type: 'atem' }, level: 'info' })
+		} else if (s.state === 'arriving' && quiet) {
+			const mins = Math.round((now - s.since) / 60000)
+			this.event('stream', `Stream into the ATEM stopped after ${mins < 1 ? '< 1 min' : mins + ' min'} (peak ${s.peak.toFixed(1)} Mb/s)`, { entity: { type: 'atem' }, level: 'warn' })
+			s.state = 'idle'
+			s.until = now
+			s.rate = 0
+		} else if (s.state === 'arriving') {
+			s.rate = Math.max(0, intake - s.baseline) || (confirmed?.telemetry.streaming.bitrate ? confirmed.telemetry.streaming.bitrate / 1e6 : s.rate)
+			s.peak = Math.max(s.peak, intake)
+		}
+		// attribute sources
+		const sources = []
+		for (const f of incoming) if (now - f.last < 45000 && f.action !== 'blocked') sources.push({ name: f.srcName || f.src, ip: f.src, confidence: 'confirmed', how: 'flow through the gateway', detail: `${f.proto} port ${f.dport}${f.service && f.service !== 'OTHER' ? ' ' + f.service : ''}${f.region ? ' from ' + f.region : ''}`, port: f.dport, proto: f.proto })
+		for (const e of equipment) {
+			if (e.ip === eq.ip || !e.telemetry || e.telemetry.error) continue
+			const tl = e.telemetry
+			if (tl.kind === 'atem' && tl.streaming?.state === 'streaming') {
+				const toUs = tl.streaming.host === eq.ip
+				sources.push({ name: e.name, ip: e.ip, confidence: toUs ? 'confirmed' : 'possible', how: toUs ? 'its stream URL points at this ATEM' : 'it is streaming (destination ' + (tl.streaming.host || '?') + ')', detail: `${tl.streaming.protocol || 'rtmp'}${tl.streaming.port ? ' port ' + tl.streaming.port : ''}${tl.streaming.bitrate ? ' · ' + (tl.streaming.bitrate / 1e6).toFixed(1) + ' Mb/s' : ''}${tl.streaming.service ? ' · ' + tl.streaming.service : ''}`, rate: tl.streaming.bitrate ? tl.streaming.bitrate / 1e6 : null, port: tl.streaming.port, proto: (tl.streaming.protocol || 'rtmp').toUpperCase() })
+			}
+			if (tl.kind === 'webpresenter' && tl.streaming) {
+				const br = tl.bitrate ? tl.bitrate / 1e6 : null
+				const match = s.state === 'arriving' && br && Math.abs(br - s.rate) / br < 0.35
+				sources.push({ name: e.name, ip: e.ip, confidence: match ? 'likely' : 'possible', how: match ? 'streaming at the same rate that is arriving' : 'it is streaming (destination unknown: the Web Presenter API does not tell)', detail: `${tl.status}${br ? ' · ' + br.toFixed(1) + ' Mb/s' : ''}${tl.format ? ' · ' + tl.format : ''}`, rate: br })
+			}
+		}
+		if (s.state === 'arriving') {
+			// correlation: an encoder whose outgoing rate is about the arriving rate
+			for (const e of equipment) {
+				if (e.ip === eq.ip || sources.some((x) => x.ip === e.ip) || !e.online) continue
+				if (!['encoder', 'switcher', 'computer'].includes(e.role)) continue
+				const out = num(e.up)
+				if (out >= 1 && Math.abs(out - s.rate) / Math.max(out, s.rate) < 0.3) sources.push({ name: e.name, ip: e.ip, confidence: 'possible', how: 'sending about the same rate at the same time', detail: `${out.toFixed(1)} Mb/s out via ${e.switch ? e.switch.name + ' port ' + e.switch.port : 'wifi'}`, rate: out })
+			}
+		}
+		const rank = { confirmed: 0, likely: 1, possible: 2 }
+		sources.sort((a, b) => rank[a.confidence] - rank[b.confidence])
+		return { state: s.state, intake, baseline: Math.round(s.baseline * 10) / 10, rate: Math.round(s.rate * 10) / 10, peak: Math.round(s.peak * 10) / 10, since: s.since, until: s.until, sources, port: eq.switch ? { switch: eq.switch.name, port: eq.switch.port, speed: eq.switch.speed, age: eq.age } : null }
+	}
+
+	buildTopology(gateway, switches, aps, others, equipment) {
+		const nodes = []
+		const links = []
+		const seen = new Set()
+		const add = (n) => {
+			if (seen.has(n.id)) return
+			seen.add(n.id)
+			nodes.push(n)
+		}
+		add({ id: 'internet', kind: 'internet', name: gateway?.wan?.isp || 'Internet', status: gateway?.wan?.status === 'ok' ? 'online' : 'offline', depth: -1 })
+		if (gateway) {
+			add({ id: gateway.mac, kind: 'gateway', name: gateway.name, ip: gateway.ip, model: gateway.modelName, status: gateway.online ? 'online' : 'offline', depth: 0, cpu: gateway.cpu, temp: gateway.temp, rate: { in: gateway.wan.down, out: gateway.wan.up } })
+			links.push({ from: 'internet', to: gateway.mac, speed: gateway.wan.speed, up: gateway.wan.status === 'ok', rate: { in: gateway.wan.down, out: gateway.wan.up }, kind: 'wan' })
+		}
+		const devs = [...switches, ...aps, ...others.filter((o) => o.kind === 'pdu')]
+		for (const d of devs) {
+			if (!d.online) continue
+			add({ id: d.mac, kind: d.type === 'uap' ? 'ap' : d.kind === 'pdu' ? 'pdu' : 'switch', name: d.name, ip: d.ip, model: d.modelName, status: 'online', depth: d.depth ?? 1, cpu: d.cpu, temp: d.temp, portsUp: d.portsUp, portsTotal: d.portsTotal, rate: { in: d.totals.down, out: d.totals.up }, clients: d.clients, alerts: 0 })
+			const parent = d.uplink.mac && seen.has(d.uplink.mac) ? d.uplink.mac : gateway?.mac
+			if (parent) {
+				// rate on the child's uplink port counters when we have them
+				const upPort = d.ports.find((p) => p.idx === d.uplink.localPort)
+				links.push({ from: parent, to: d.mac, fromPort: d.uplink.port, toPort: d.uplink.localPort, speed: d.uplink.speed, up: true, media: d.uplink.media, rate: upPort ? { in: upPort.tx, out: upPort.rx } : { in: d.uplink.down, out: d.uplink.up }, kind: d.uplink.media === 'wireless' ? 'mesh' : d.uplink.speed >= 10000 ? 'fiber' : 'copper' })
+			}
+		}
+		for (const e of equipment) {
+			if (e.discovered && !e.online) continue
+			add({ id: 'eq:' + e.ip, kind: 'equipment', name: e.name, ip: e.ip, role: e.role, group: e.group, status: e.status, hero: !!e.hero, depth: 9, rate: { in: e.down, out: e.up }, telemetry: e.telemetry ? { kind: e.telemetry.kind, summary: e.telemetry.summary || e.telemetry.streaming?.state || null, streaming: !!(e.telemetry.streaming === true || e.telemetry.streaming?.state === 'streaming'), recording: !!e.telemetry.recording } : null })
+			if (e.switch && seen.has(e.switch.mac)) links.push({ from: e.switch.mac, to: 'eq:' + e.ip, fromPort: e.switch.port, speed: e.switch.speed, up: true, rate: { in: e.up, out: e.down }, kind: 'edge' })
+		}
+		return { nodes, links }
+	}
+
 	lastSeenByIp(ip) {
-		const mac = this.ipToMac?.get(ip)
+		const mac = this.ipToMac.get(ip)
 		const ls = mac ? this.lastSeen.get(mac) : null
 		return ls ? ls * 1000 : null
 	}
@@ -628,38 +809,114 @@ export class Collector extends EventEmitter {
 	computeAlerts(now) {
 		const a = []
 		const st = this.state
-		for (const [k, v] of Object.entries(st.errors)) a.push({ level: 'error', scope: 'api', text: `UniFi ${k} poll failing: ${v}` })
+		const push = (level, scope, kind, entity, text, explain) => {
+			const id = `${scope}:${kind}:${entity?.id || entity?.type || scope}`
+			if (!this.alertSince.has(id)) {
+				this.alertSince.set(id, now)
+				if (st.ts) this.event('alert', `${level === 'error' ? 'PROBLEM' : level === 'warn' ? 'Warning' : 'Note'}: ${text}`, { entity, level, alertId: id })
+			}
+			a.push({ id, level, scope, kind, entity, text, explain, since: this.alertSince.get(id) })
+		}
+		for (const [k, v] of Object.entries(st.errors)) push('error', 'api', 'poll', { type: 'api', id: k }, `UniFi ${k} poll failing: ${v}`, 'NetWatch cannot read this part of the UniFi API. Check that the gateway is reachable from this computer and that the API key is still valid (UniFi Network > Settings > Control Plane > Integrations).')
 		const gw = st.gateway
 		if (gw) {
-			if (gw.wan.status !== 'ok') a.push({ level: 'error', scope: 'wan', text: `WAN ${gw.wan.status}` })
-			if (gw.wan.latency !== null && gw.wan.latency > this.th.wan_latency_ms) a.push({ level: 'warn', scope: 'wan', text: `WAN latency ${gw.wan.latency} ms` })
-			if (gw.cpu !== null && gw.cpu > this.th.cpu_pct) a.push({ level: 'warn', scope: 'gateway', text: `${gw.name} CPU ${gw.cpu}%` })
-			if (gw.mem !== null && gw.mem > this.th.mem_pct) a.push({ level: 'warn', scope: 'gateway', text: `${gw.name} memory ${gw.mem}%` })
-			if (gw.temp !== null && gw.temp > this.th.temp_c) a.push({ level: 'warn', scope: 'gateway', text: `${gw.name} ${gw.temp} °C` })
-		} else if (!st.errors.devices && st.updated.devices) a.push({ level: 'error', scope: 'gateway', text: 'Gateway not in the device list' })
+			if (gw.wan.status !== 'ok') push('error', 'wan', 'status', { type: 'wan' }, `WAN ${gw.wan.status}`, 'The internet link on the gateway is not healthy. Outgoing streams (Web Presenters) and incoming remote streams from outside the building depend on it.')
+			if (gw.wan.latency !== null && gw.wan.latency > this.th.wan_latency_ms) push('warn', 'wan', 'latency', { type: 'wan' }, `WAN latency ${gw.wan.latency} ms`, `The gateway's internet latency check is above ${this.th.wan_latency_ms} ms. Streams out of the building may buffer; remote contributors may see delay.`)
+			if (gw.cpu !== null && gw.cpu > this.th.cpu_pct) push('warn', 'gateway', 'cpu', { type: 'gateway', id: gw.mac }, `${gw.name} CPU ${gw.cpu}%`, 'The gateway is busy. Deep packet inspection, IDS/IPS or a traffic burst can do this; routing between VLANs (Dante/NDI to the studio) slows down when it saturates.')
+			if (gw.mem !== null && gw.mem > this.th.mem_pct) push('warn', 'gateway', 'mem', { type: 'gateway', id: gw.mac }, `${gw.name} memory ${gw.mem}%`, 'Gateway memory is nearly full; services may restart.')
+			if (gw.temp !== null && gw.temp > this.th.temp_c) push('warn', 'gateway', 'temp', { type: 'gateway', id: gw.mac }, `${gw.name} ${gw.temp} °C`, 'The gateway is running hot. Check rack airflow and fans.')
+		} else if (!st.errors.devices && st.updated.devices) push('error', 'gateway', 'missing', { type: 'gateway' }, 'Gateway not in the device list', 'The UniFi API answered but no gateway device was listed.')
 		for (const s of st.switches) {
 			if (!s.online) {
-				// portable Flex Minis and spares sit offline for months: only a switch seen in the last day is an alert
-				if (s.lastSeen && now - s.lastSeen < 86400000) a.push({ level: 'error', scope: 'switch', text: `${s.name} OFFLINE (last seen ${Math.round((now - s.lastSeen) / 60000)} min ago)` })
+				if (s.lastSeen && now - s.lastSeen < 86400000) push('error', 'switch', 'offline', { type: 'switch', id: s.mac }, `${s.name} OFFLINE (last seen ${Math.round((now - s.lastSeen) / 60000)} min ago)`, `${s.name} (${s.modelName}) stopped talking to the controller. Everything plugged into it has lost its network path unless it only lost management. Check its power, its uplink${s.uplink.device ? ` (${s.uplink.device} port ${s.uplink.port})` : ''} and the fiber/copper link.`)
 			} else {
-				if (s.cpu !== null && s.cpu > this.th.cpu_pct) a.push({ level: 'warn', scope: 'switch', text: `${s.name} CPU ${s.cpu}%` })
-				if (s.overheating || (s.temp !== null && s.temp > this.th.temp_c)) a.push({ level: 'warn', scope: 'switch', text: `${s.name} ${s.temp} °C` })
-				for (const p of s.ports) if (p.errorsRecent) a.push({ level: 'warn', scope: 'port', text: `${s.name} port ${p.idx} errors/drops` })
-				if (s.uplink.speed && s.uplink.speed < 1000 && s.uplink.media !== 'wireless') a.push({ level: 'warn', scope: 'switch', text: `${s.name} uplink at ${s.uplink.speed} Mb/s` })
+				if (s.cpu !== null && s.cpu > this.th.cpu_pct) push('warn', 'switch', 'cpu', { type: 'switch', id: s.mac }, `${s.name} CPU ${s.cpu}%`, 'Switch CPU is high; usually a broadcast/multicast storm (Dante, NDI or mDNS flooding) or STP churn. Look for a port with runaway traffic.')
+				if (s.overheating || (s.temp !== null && s.temp > this.th.temp_c)) push('warn', 'switch', 'temp', { type: 'switch', id: s.mac }, `${s.name} ${s.temp} °C`, 'The switch is hot. Check airflow, dust filters and that the fans run.')
+				for (const p of s.ports) if (p.errorsRecent) push('warn', 'port', 'errors', { type: 'port', id: p.key }, `${s.name} port ${p.idx} errors/drops`, `Port ${p.idx} on ${s.name} has counted new errors or dropped packets in the last 10 minutes. On a video or Dante link that means glitches: suspect the cable, the SFP, a duplex mismatch or a device sending more than the link can carry.`)
+				if (s.uplink.speed && s.uplink.speed < 1000 && s.uplink.media !== 'wireless') push('warn', 'switch', 'uplink', { type: 'switch', id: s.mac }, `${s.name} uplink at ${s.uplink.speed} Mb/s`, 'The uplink negotiated below gigabit; a bad cable or port. Everything behind this switch shares that slow link.')
 			}
 		}
 		for (const e of st.equipment) {
 			if (e.discovered) continue
 			const minSpeed = e.min_speed ?? (['switcher', 'encoder', 'recorder', 'computer'].includes(e.role) ? 1000 : 0)
-			if (!e.online) a.push({ level: e.hero ? 'error' : 'warn', scope: 'equipment', text: `${e.name} not on the network` })
-			else if (e.reachable === false) a.push({ level: e.hero ? 'error' : 'warn', scope: 'equipment', text: `${e.name} not answering (${e.probeSpec}: ${e.probe?.error || 'no reply'})` })
-			else if (e.probe?.info?.state === 'too many clients') a.push({ level: 'warn', scope: 'equipment', text: `${e.name} has no free control connection (too many clients): ATEM Software Control or Companion may fail to connect` })
-			else if (e.switch?.speed && minSpeed && e.switch.speed < minSpeed) a.push({ level: 'warn', scope: 'equipment', text: `${e.name} linked at ${e.switch.speed} Mb/s` })
+			const ent = { type: 'equipment', id: e.ip }
+			if (!e.online) push(e.hero ? 'error' : 'warn', 'equipment', 'offline', ent, `${e.name} not on the network`, `UniFi does not see ${e.name} (${e.ip}) on any switch port or access point${e.lastSeen ? `; it was last seen ${Math.round((now - e.lastSeen) / 60000)} min ago` : ''}. Powered off, unplugged, or its link is down.`)
+			else if (e.reachable === false) push(e.hero ? 'error' : 'warn', 'equipment', 'unresponsive', ent, `${e.name} not answering (${e.probeSpec}: ${e.probe?.error || 'no reply'})`, `${e.name} is on the network but its control port does not answer. The device may be booting, frozen, or a firewall/VLAN rule is in the way. Control from Companion and ATEM/HyperDeck software will fail until it answers.`)
+			else if (e.probe?.info?.state === 'too many clients') push('warn', 'equipment', 'clients', ent, `${e.name} has no free control connection (too many clients)`, 'Every control-connection slot of the ATEM is taken (ATEM Software Control, Companion, panels, NetWatch probes). Another controller will fail to connect until one disconnects. Close unused ATEM Software Control windows.')
+			else if (e.switch?.speed && minSpeed && e.switch.speed < minSpeed) push('warn', 'equipment', 'speed', ent, `${e.name} linked at ${e.switch.speed} Mb/s`, `${e.name} negotiated ${e.switch.speed} Mb/s on ${e.switch.name} port ${e.switch.port}. Video streams and NDI need gigabit: check the cable and the port.`)
+			if (e.telemetry && !e.telemetry.error) {
+				const tl = e.telemetry
+				if (tl.kind === 'webpresenter' && /interrupt|error|fail/i.test(tl.status)) push('error', 'stream', 'out', ent, `${e.name}: stream ${tl.status}`, 'The Web Presenter lost its connection to the streaming platform. Check the WAN, the stream key and the platform status.')
+				if (tl.kind === 'atem' && tl.streaming?.state && tl.streaming.state !== 'idle' && tl.streaming.state !== 'streaming') push('warn', 'stream', 'state', ent, `${e.name}: stream ${tl.streaming.state}`, 'The ATEM Mini is between states (connecting/stopping); if this persists its stream destination is not reachable.')
+			}
 		}
-		for (const o of st.others) if (o.kind === 'pdu' && o.online && o.outlets && o.outletsOn < o.outlets) a.push({ level: 'info', scope: 'power', text: `${o.name}: ${o.outlets - o.outletsOn} outlet(s) switched off` })
+		const at = st.atem
+		if (at?.equipment?.online && at.stream?.state === 'arriving' && at.stream.port?.speed && at.stream.port.speed < 1000) push('warn', 'stream', 'port', { type: 'atem' }, `Stream arriving over a ${at.stream.port.speed} Mb/s link`, 'The ATEM port is below gigabit while a stream is arriving.')
+		for (const o of st.others) if (o.kind === 'pdu' && o.online && o.outlets && o.outletsOn < o.outlets) push('info', 'power', 'outlets', { type: 'pdu', id: o.mac }, `${o.name}: ${o.outlets - o.outletsOn} outlet(s) switched off`, 'Some outlets on this PDU are off. Fine if intended.')
+		// clear memory of alerts that are gone
+		const ids = new Set(a.map((x) => x.id))
+		for (const [id, since] of this.alertSince) if (!ids.has(id)) {
+			this.alertSince.delete(id)
+			if (st.ts) this.event('clear', `Cleared: ${id.split(':').slice(0, 2).join(' ')} ${this.describeEntity(id)} (after ${Math.round((now - since) / 60000)} min)`, { level: 'info', alertId: id })
+		}
 		const order = { error: 0, warn: 1, info: 2 }
-		a.sort((x, y) => order[x.level] - order[y.level])
+		a.sort((x, y) => order[x.level] - order[y.level] || x.since - y.since)
 		return a
+	}
+
+	describeEntity(alertId) {
+		const id = alertId.split(':').slice(2).join(':')
+		const e = this.state.equipment.find((x) => x.ip === id)
+		if (e) return e.name
+		const s = [...this.state.switches, this.state.gateway, ...this.state.aps].find((x) => x && x.mac === id)
+		if (s) return s.name
+		return id
+	}
+
+	// everything the inspector needs about one thing: the entity, related UniFi events, flows and NetWatch events
+	details(type, id) {
+		const st = this.state
+		let entity = null
+		let names = []
+		if (type === 'alert') {
+			const alert = st.alerts.find((x) => x.id === id)
+			if (!alert) return { error: 'alert not found (it may have cleared)' }
+			const d = this.details(alert.entity?.type || alert.scope, alert.entity?.id)
+			return { alert, ...d }
+		}
+		if (type === 'equipment') {
+			entity = st.equipment.find((e) => e.ip === id) || null
+			if (entity) names = [entity.name, entity.unifiName, entity.ip, entity.mac].filter(Boolean)
+		} else if (type === 'switch' || type === 'ap' || type === 'gateway' || type === 'pdu') {
+			entity = [...st.switches, ...st.aps, ...st.others, st.gateway].find((x) => x && x.mac === id) || (type === 'gateway' ? st.gateway : null)
+			if (entity) names = [entity.name, entity.ip, entity.mac].filter(Boolean)
+		} else if (type === 'port') {
+			const cut = String(id).lastIndexOf(':') // "aa:bb:cc:dd:ee:ff:15" -> mac + port
+			const mac = String(id).slice(0, cut)
+			const idx = String(id).slice(cut + 1)
+			const sw = [...st.switches, st.gateway].find((x) => x && x.mac === mac)
+			const port = sw?.ports.find((p) => p.idx === Number(idx))
+			entity = port ? { ...port, switch: { name: sw.name, mac: sw.mac, ip: sw.ip } } : null
+			if (entity) names = [sw.name, ...port.clients.map((c) => c.name).filter(Boolean), ...port.clients.map((c) => c.ip).filter(Boolean), ...port.devices.map((d) => d.name)]
+		} else if (type === 'atem') {
+			entity = st.atem
+			names = [st.atem?.name, st.atem?.ip, st.atem?.equipment?.unifiName].filter(Boolean)
+		} else if (type === 'wan') {
+			entity = st.gateway ? { ...st.gateway.wan, gateway: st.gateway.name } : null
+			names = ['WAN', 'Internet', st.gateway?.name].filter(Boolean)
+		} else if (type === 'api') {
+			entity = { errors: st.errors, updated: st.updated }
+		}
+		const lc = names.map(lower).filter((n) => n.length > 2)
+		const matches = (text) => {
+			const t = lower(text)
+			return lc.some((n) => t.includes(n))
+		}
+		const log = st.log.filter((l) => matches(l.title + ' ' + l.message + ' ' + (l.device || ''))).slice(0, 25)
+		const ips = names.filter((n) => /^\d+\.\d+\.\d+\.\d+$/.test(n))
+		const flows = st.flows.recent.filter((f) => ips.includes(f.src) || ips.includes(f.dst)).slice(0, 25)
+		const events = st.events.filter((ev) => (ev.entity && ev.entity.id === id) || matches(ev.text)).slice(0, 25)
+		return { type, id, entity, log, flows, events, names }
 	}
 }
 

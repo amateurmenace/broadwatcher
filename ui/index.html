@@ -8,77 +8,100 @@
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-<header class="top">
-	<div class="brand">
-		<img src="icon.svg" alt="" width="34" height="34">
-		<div><b>BIG NetWatch</b><small id="gwName">connecting to the gateway…</small></div>
+<!-- HUD: the strip that is always on screen -->
+<header class="hud" id="hud">
+	<div class="hud-brand" id="brand" title="BIG NetWatch">
+		<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M2 15h4l3-9 4 14 3-8 2 3h4" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/></svg>
+		<span>NET<b>WATCH</b></span>
 	</div>
-	<nav class="tabs" id="tabs">
-		<a href="#overview" class="on">Overview</a>
-		<a href="#equipment">Equipment</a>
-		<a href="#switches">Switches</a>
-		<a href="#console">Console</a>
-		<a href="#flows">Flows</a>
-		<a href="#log">Events</a>
-	</nav>
-	<div class="status">
-		<div class="pill" id="healthPill"><span class="dot"></span><span>starting</span></div>
-		<div class="stat"><span>WAN ↓</span><b id="wanDown">–</b></div>
-		<div class="stat"><span>WAN ↑</span><b id="wanUp">–</b></div>
-		<div class="stat"><span>latency</span><b id="wanLat">–</b></div>
-		<div class="stat"><span>clients</span><b id="clientCount">–</b></div>
-		<div class="stat"><span>updated</span><b id="updated">–</b></div>
-		<div class="clock" id="clock"></div>
+	<button class="hud-ready" id="hudReady" title="Broadcast readiness (AI) — click for the reasoning">
+		<span class="lamp" id="readyLamp"></span>
+		<span class="ready-text"><b id="readyVerdict">STANDBY</b><small id="readyHeadline">waiting for the first assessment</small></span>
+	</button>
+	<div class="hud-cell intake" id="hudIntake" title="Traffic arriving at the ATEM (switch port counters)">
+		<label>ATEM INTAKE</label>
+		<div class="meter"><i id="intakeBar"></i><em id="intakeBase"></em></div>
+		<b id="intakeVal">–</b>
+		<small id="intakeSrc">no stream</small>
+	</div>
+	<div class="hud-cell" id="hudWan" title="Internet link on the UDM">
+		<label>WAN</label>
+		<b><span class="dn" id="wanDown">–</span> <span class="up" id="wanUp">–</span></b>
+		<small id="wanSub">–</small>
+	</div>
+	<div class="hud-cell" id="hudConsole" title="UDM Pro Max">
+		<label>CONSOLE</label>
+		<b id="consoleVal">–</b>
+		<small id="consoleSub">–</small>
+	</div>
+	<div class="hud-cell vlans" id="hudVlans" title="VLAN traffic through the gateway"></div>
+	<div class="hud-cell flows" id="hudFlows" title="Biggest flow in the last poll">
+		<label>TOP FLOW</label>
+		<div class="ticker" id="flowTicker">–</div>
+	</div>
+	<div class="hud-right">
+		<div class="hud-issues" id="hudIssues"></div>
+		<div class="clock" id="clock">00:00:00</div>
+		<button class="hud-toggle" id="hudToggle" title="Expand the HUD (H)">DETAILS <i>▾</i></button>
 	</div>
 </header>
+<section class="hud-panel" id="hudPanel" hidden>
+	<div class="hud-panel-grid">
+		<div class="hp" id="hpFlows"></div>
+		<div class="hp" id="hpVlans"></div>
+		<div class="hp" id="hpConsole"></div>
+		<div class="hp" id="hpAI"></div>
+	</div>
+</section>
 
-<main>
-	<section id="alerts" class="alerts hidden"></section>
+<div class="shell">
+	<main class="main" id="main">
+		<section class="issues" id="issues"></section>
 
-	<section id="overview" class="overview">
-		<div class="card atem" id="atemCard"></div>
-		<div class="card streams" id="streamsCard"></div>
-		<div class="card quick" id="quickCard"></div>
-	</section>
+		<section class="block" id="mapBlock">
+			<header class="bh"><h2>Signal map</h2><div class="bh-tools"><label class="chk"><input type="checkbox" id="mapAll"> every switch</label><span class="bh-note" id="mapNote"></span></div></header>
+			<div class="map-wrap" id="mapWrap"><svg id="map" xmlns="http://www.w3.org/2000/svg"></svg></div>
+		</section>
 
-	<section id="equipment">
-		<h2>Broadcast equipment <small id="eqSummary"></small></h2>
-		<div id="eqGroups"></div>
-	</section>
+		<section class="block" id="atemBlock">
+			<header class="bh"><h2>Streams into the ATEM</h2><span class="bh-note" id="atemNote"></span></header>
+			<div id="atemPanel"></div>
+		</section>
 
-	<section id="switches">
-		<h2>Switches <small id="swSummary"></small></h2>
-		<div class="legend">
-			<span><i class="sw sp10000"></i>10G</span><span><i class="sw sp2500"></i>2.5G</span><span><i class="sw sp1000"></i>1G</span><span><i class="sw sp100"></i>10/100</span><span><i class="sw down"></i>no link</span><span><i class="sw up uplink"></i>uplink / switch</span><span><i class="sw up poe"></i>PoE</span><span><i class="sw up err"></i>errors</span><span>bar = utilisation</span>
+		<section class="block" id="rackBlock">
+			<header class="bh"><h2>Switch rack</h2><span class="bh-note" id="rackNote"></span></header>
+			<div class="rack" id="rack"></div>
+		</section>
+
+		<section class="block" id="patchBlock">
+			<header class="bh"><h2>Broadcast equipment</h2><span class="bh-note" id="patchNote"></span></header>
+			<div id="patch"></div>
+		</section>
+
+		<section class="block two" id="tapeBlock">
+			<div>
+				<header class="bh"><h2>What changed</h2><span class="bh-note">NetWatch event tape</span></header>
+				<div class="tape" id="tape"></div>
+			</div>
+			<div>
+				<header class="bh"><h2>UniFi events</h2><span class="bh-note" id="logNote"></span></header>
+				<div class="tape" id="unifiLog"></div>
+			</div>
+		</section>
+		<footer class="foot">BIG NetWatch · Brookline Interactive Group · UniFi Network API on the UDM Pro Max · Blackmagic REST + ATEM protocol · local AI</footer>
+	</main>
+
+	<aside class="inspector" id="inspector">
+		<div class="insp-head">
+			<div><small id="inspKind">AI</small><b id="inspTitle">Broadcast readiness</b></div>
+			<button class="insp-close" id="inspClose" title="Back to the readiness view">✕</button>
 		</div>
-		<div id="swList"></div>
-	</section>
+		<div class="insp-body" id="inspBody"></div>
+	</aside>
+</div>
 
-	<section id="console">
-		<h2>Console &amp; networks</h2>
-		<div class="two">
-			<div class="card" id="gwCard"></div>
-			<div class="card" id="vlanCard"></div>
-		</div>
-		<div id="apList" class="aps"></div>
-	</section>
-
-	<section id="flows">
-		<h2>Traffic flows <small id="flowSummary"></small></h2>
-		<div class="two">
-			<div class="card" id="topTalkers"></div>
-			<div class="card" id="recentFlows"></div>
-		</div>
-	</section>
-
-	<section id="log">
-		<h2>UniFi events</h2>
-		<div class="card" id="logList"></div>
-	</section>
-	<footer>BIG NetWatch · Brookline Interactive Group · data from the UniFi Network API on the UDM Pro Max and direct probes of the equipment</footer>
-</main>
-
-<div id="tip" class="tip hidden"></div>
+<div id="tip" class="tip" hidden></div>
+<script src="map.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
