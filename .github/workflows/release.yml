@@ -9,8 +9,22 @@ permissions:
   contents: write
 
 jobs:
+  # create the release first, so the two builders below never race to create it (that race lost the mac dmg once)
+  prepare:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create the GitHub release if it does not exist yet
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          case "$TAG" in v*) ;; *) TAG="v$(node -p "require('./package.json').version")";; esac
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "BIG NetWatch ${TAG#v}" --notes "Mac (universal dmg / zip) and Windows (installer / portable) builds. Unsigned: Mac = right-click > Open on first launch, Windows = SmartScreen > More info > Run anyway."
+
   build:
     name: Build (${{ matrix.os }})
+    needs: prepare
     strategy:
       fail-fast: false
       matrix:
