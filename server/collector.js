@@ -246,7 +246,8 @@ export class Collector extends EventEmitter {
 	async pollProbes() {
 		// an ATEM that is read over its protocol (telemetry) is not also pinged with hellos: every hello opens a
 		// session the switcher has to time out, and the Minis only have a handful of session slots
-		const items = this.cfg.equipment.filter((e) => e.active !== false && e.probe && e.ip && !(e.telemetry === 'atem' && String(e.probe).startsWith('atem')))
+		// never send bare hellos to an ATEM: the switcher keeps every half-open session for about two minutes and runs out of slots
+		const items = this.cfg.equipment.filter((e) => e.active !== false && e.probe && e.ip && !String(e.probe).startsWith('atem'))
 		const res = await probeAll(items)
 		for (const [ip, r] of res) this.probes.set(ip, this.settle(ip, { ...r, t: Date.now() }))
 		this.state.updated.probe = Date.now()
@@ -254,7 +255,7 @@ export class Collector extends EventEmitter {
 
 	async pollTelemetry() {
 		const now = Date.now()
-		const items = this.cfg.equipment.filter((e) => e.active !== false && e.telemetry && e.ip)
+		const items = this.cfg.equipment.filter((e) => e.active !== false && e.ip && (e.telemetry || String(e.probe || '').startsWith('atem'))).map((e) => (e.telemetry || !String(e.probe || '').startsWith('atem') ? e : { ...e, telemetry: 'atem' }))
 		await Promise.all(
 			items.map(async (e) => {
 				try {
@@ -857,7 +858,7 @@ export class Collector extends EventEmitter {
 		this.cfg.equipment = clean
 		for (const ip of [...this.probes.keys()]) if (!clean.some((e) => e.ip === ip && e.active)) this.probes.delete(ip)
 		for (const ip of [...this.telemetry.keys()]) if (!clean.some((e) => e.ip === ip && e.active)) this.telemetry.delete(ip)
-		for (const [ip, c] of this.atems) if (!clean.some((e) => e.ip === ip && e.active && e.telemetry === 'atem')) {
+		for (const [ip, c] of this.atems) if (!clean.some((e) => e.ip === ip && e.active && (e.telemetry === 'atem' || String(e.probe || '').startsWith('atem')))) {
 			c.close()
 			this.atems.delete(ip)
 		}
