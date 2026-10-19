@@ -106,8 +106,12 @@ touching anything. The roadmap for the next phase is in `docs/ROADMAP.md`.
    (`Desktop\Town Meeting Companion`) has its own Python UniFi poller; Broadwatcher does not write into
    Companion (yet, see roadmap). The Electron app starts Companion if it is not running (`companion.autostart`).
 9. **Secrets:** the UniFi key is bundled in `config.json` (private repo, private build only); the Anthropic key is
-   never committed: it comes from the GitHub secret at build time or from the Settings screen into the user
-   config. `config.public.json` must stay free of keys and of BIG's devices.
+   never committed: it comes from the GitHub secret `ANTHROPIC_API_KEY` at build time (set 2026-10-19) or from
+   the Settings screen into the user config. `config.public.json` must stay free of keys and of BIG's devices.
+   The public builds go to https://github.com/amateurmenace/broadwatcher-community (releases + README only,
+   no source) once the secret `PUBLIC_RELEASE_TOKEN` (fine-grained PAT, Contents: write on that repo) exists;
+   until then they stay attached to the private release. 0.7.1 was copied there by hand. The private repo's
+   history contains the UniFi key: never make it public without rotating that key.
 8. **Two Claude sessions may be working in this repo.** On 2026-10-19 a second session (title "Gemini-format
    API endpoint in front of LM Studio", driven by Steve over remote control) committed 0.3.3 (Anthropic SDK)
    while this one was mid-edit. Run `git log` before committing, build on HEAD, commit small and often.
@@ -128,7 +132,14 @@ touching anything. The roadmap for the next phase is in `docs/ROADMAP.md`.
   include `RSDs RSis RSpr RSca` (remote sources; `RSis` carries the WAN IP; layout unknown).
 - LM Studio on this PC listens on 0.0.0.0:1234 (`gemma-flash`); Companion web UI on 127.0.0.1:8000 (bind_ip
   127.0.0.1, so the Mac cannot read it until the "one server, many viewers" roadmap item).
-- The Broadcast Pix PC has 192.168.20.75 (Default) and 10.56.20.33 (BIG_NDI); it is not on the Dante VLANs.
+- The Broadcast Pix PC has 192.168.20.75 (Default, Fiber Agg port 13, 10G), 10.56.20.33 "NDI NIC" (BIG_NDI,
+  LIGHTHOUSE port 10) and since 2026-10-19 192.168.5.19 "DANTE NIC" (BIG_MOBILE_DANTE, LIGHTHOUSE port 3,
+  profile "DANTE MOBILE Pro AV"). Steve manages Dante with Dante Director (cloud), site "BIG Mobile Dante";
+  passive PTP/mDNS monitoring does not conflict with it. A 9-second passive listen on 224.0.1.129 saw PTP v1
+  from BIG_DANTE (354) addresses only: leader 10.56.19.213 (PRISM 12x12, Town Hall), followers 10.56.19.29,
+  .128, .130; nothing from any 192.168.5.x device. Multicast is not routed between those VLANs in UniFi
+  (mdns and igmp off on both), so something bridges VLAN 354 into VLAN 2 at layer 2 (a Dante device with its
+  two ports in switched mode plugged into both?) — also a suspect for the MAC flapping of 08:06-08:35.
 - HD8 control slots (2026-10-19 07:43): after Steve's power-cycle Companion reconnected at 07:43:23, the NDI
   Machine bridge restarted the same second, ATEM Software Control reconnected, and Broadwatcher's hello was
   refused at 07:43:30. The switcher is full with those three; its exact capacity is still unmeasured. The NDI
