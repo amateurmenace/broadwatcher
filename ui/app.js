@@ -277,8 +277,8 @@ function renderAtem(s) {
 			<div class="kv">
 				<span>Out of it</span><b>${eq ? fmtRate(eq.up) : '–'}</b>
 				<span>Port</span><b>${eq?.switch ? `${esc(eq.switch.name)} · ${eq.switch.port} · ${speedTxt(eq.switch.speed)} · ${eq.age ?? '?'} s old` : 'not on a switch port'}</b>
-				<span>Control</span><b>${eq?.probe ? (eq.probe.ok ? `answers · ${esc(eq.probe.info?.state || '')} · ${eq.probe.ms.toFixed(0)} ms` : `<span class="error">no answer (${esc(eq.probe.error || '')})</span>`) : 'not probed'}</b>
-				${tl && !tl.error ? `<span>Switcher</span><b>${esc(tl.product || '')} v${esc(tl.version || '')}${tl.programName ? ` · program <span class="error">${esc(tl.programName)}</span> · preview ${esc(tl.previewName || '')}` : ''}</b><span>Own stream</span><b>${esc(tl.streaming?.state || 'unknown')}${tl.streaming?.service ? ' · ' + esc(tl.streaming.service) : ''}${tl.streaming?.url ? ' · ' + esc(tl.streaming.url) : ''}</b>` : tl?.error ? `<span>Switcher</span><b class="warn">${esc(tl.error)}</b>` : ''}
+				<span>Control</span><b>${eq?.probe ? (eq.probe.ok ? `${esc(eq.probe.info?.state || 'answers')}${eq.probe.ms ? ' · ' + eq.probe.ms.toFixed(0) + ' ms' : ''}` : `<span class="error">no answer (${esc(eq.probe.error || '')})</span>`) : tl?.mode === 'companion' ? 'via Companion' : 'not probed'}</b>
+				${tl && !tl.error ? `<span>Switcher</span><b>${tl.via === 'companion' ? `read through Companion "${esc(tl.label || '')}"` : `${esc(tl.product || '')} v${esc(tl.version || '')}`}${tl.programName ? ` · program <span class="error">${esc(tl.programName)}</span> · preview ${esc(tl.previewName || '')}` : ''}</b><span>Own stream</span><b>${esc(tl.streaming?.state || 'unknown')}${tl.streaming?.bitrate ? ' · ' + (tl.streaming.bitrate / 1e6).toFixed(1) + ' Mb/s' : ''}${tl.streaming?.duration && tl.streaming.duration !== '00:00:00' ? ' · ' + esc(tl.streaming.duration) : ''}${tl.streaming?.service ? ' · ' + esc(tl.streaming.service) : ''}${tl.streaming?.url ? ' · ' + esc(tl.streaming.url) : ''}</b>${tl.recording ? `<span>ISO record</span><b>${tl.recording.active ? `<span class="error">RECORDING</span> ${esc(tl.recording.duration || '')}` : 'idle'}${tl.recording.remaining ? ' · ' + esc(tl.recording.remaining) + ' left' : ''}${tl.recording.disk ? ' · ' + esc(tl.recording.disk) : ''}</b>` : ''}` : tl?.error ? `<span>Switcher</span><b class="warn">${esc(tl.error)}</b>` : ''}
 			</div>
 		</div>
 		<div>
@@ -288,6 +288,24 @@ function renderAtem(s) {
 			${flowRows.length ? `<table><thead><tr><th></th><th>From</th><th>To port</th><th class="num">Data</th><th class="num">Since</th></tr></thead><tbody>${flowRows.join('')}</tbody></table>` : '<div class="empty">none — only traffic that crosses the gateway (internet or another VLAN) shows up here; a stream from the same VLAN is detected from the port counters on the left instead</div>'}
 		</div>
 	</div>`
+}
+
+// ------------------------------------------------------------------ stream path check
+const PATH_WORD = { red: 'problem', amber: 'check', green: 'live', ok: 'used', idle: 'idle' }
+function renderPaths(s) {
+	const paths = s.streamPaths || []
+	const wan = s.gateway?.wan?.ip
+	$('pathNote').textContent = paths.length ? `${paths.length} port forward${paths.length === 1 ? '' : 's'} to broadcast gear on ${wan || 'the WAN address'} · internet → gateway → device · last hour` : 'no port forwards to broadcast gear found on the gateway'
+	if (!paths.length) return ($('pathPanel').innerHTML = '<div class="empty">the gateway has no port forwards that point at the roster (UniFi Network > Settings > Routing > Port Forwarding)</div>')
+	const rows = paths.map((p) => {
+		const src = p.hits.sources[0]
+		const who = src ? `${esc(src.name || src.ip)}${src.region ? ' · ' + esc(src.region) : ''}${src.name ? `<small class="mono">${esc(src.ip)}</small>` : ''}` : '<small>nobody</small>'
+		const hits = p.hits.count ? `${p.hits.count} flow${p.hits.count === 1 ? '' : 's'} · ${fmtBytes(p.hits.bytes)}${p.hits.blocked ? ` · <span class="error">${p.hits.blocked} blocked</span>` : ''}<small>last ${fmtAgo(p.hits.last)} ago${p.hits.live ? ' · <span class="ok">live now</span>' : ''}</small>` : `<small>nothing in the last hour</small>${p.hits.blocked ? `<span class="error">${p.hits.blocked} blocked</span>` : ''}`
+		const target = `${esc(p.target.name)}<small>${p.target.standby ? '<span class="warn">on standby</span>' : p.target.online ? `<span class="ok">on the network</span>${p.target.switch ? ' · ' + esc(p.target.switch) : ''}` : '<span class="error">not on the network</span>'}</small>`
+		const intake = p.intake ? (p.intake.state === 'arriving' ? `<span class="cyan">rose ${p.intake.rate} Mb/s</span><small>since ${fmtTime(p.intake.since)}</small>` : `quiet${p.intake.until ? `<small>last stream ended ${fmtAgo(p.intake.until)} ago</small>` : ''}`) : '<small>not the switcher</small>'
+		return `<tr class="click ${esc(p.status)}" data-sel="path:${esc(p.id)}"><td><span class="pl ${esc(p.status)}" title="${esc(PATH_WORD[p.status] || p.status)}"></span></td><td class="path-name"><b>${esc(p.name)}</b><span class="url">${esc(p.proto.replace('_', '+'))} ${esc(p.wanPorts)} → ${esc(p.target.ip)}:${esc(p.target.port || p.wanPorts)}</span></td><td>${who}</td><td>${hits}</td><td>${target}</td><td>${intake}</td><td class="verdict">${esc(p.verdict)}</td></tr>`
+	})
+	$('pathPanel').innerHTML = `<table class="paths"><thead><tr><th></th><th>Path</th><th>Sender (last hour)</th><th>Traffic</th><th>Target</th><th>Switcher intake</th><th>Verdict</th></tr></thead><tbody>${rows.join('')}</tbody></table>`
 }
 
 // ------------------------------------------------------------------ rack
@@ -399,6 +417,7 @@ function renderRoster(msg = '') {
 			<td><select data-f="role">${ROLES.map((r) => `<option ${e.role === r ? 'selected' : ''}>${r}</option>`).join('')}</select></td>
 			<td><input data-f="probe" value="${esc(e.probe || '')}" placeholder="tcp:9993 · atem · x32"></td>
 			<td><select data-f="telemetry"><option value="">none</option>${['webpresenter', 'hyperdeck', 'atem'].map((t) => `<option ${e.telemetry === t ? 'selected' : ''}>${t}</option>`).join('')}</select></td>
+			<td><input data-f="companion" class="short" value="${esc(e.companion || '')}" placeholder="atem" title="Companion connection label: the switcher is then read through Companion instead of a session of its own"></td>
 			<td><input data-f="min_speed" class="short" value="${e.min_speed ?? ''}" placeholder="1000"></td>
 			<td class="chk"><input type="checkbox" data-f="hero" ${e.hero ? 'checked' : ''} title="the main switcher (intake meter, stream detector)"></td>
 			<td><button class="btn quiet" data-del="${i}" title="remove">✕</button></td>
@@ -408,7 +427,7 @@ function renderRoster(msg = '') {
 	$('rosterEditor').innerHTML = `<header><h2>Broadcast equipment roster</h2><small>tick what is part of this broadcast; unticked devices stay on standby (no alerts, no probes) and can be switched on later</small></header>
 		<div class="body">
 			<div class="help">Probe: <b>tcp:&lt;port&gt;</b> (HyperDeck 9993, Videohub 9990, Web Presenter 9977), <b>atem</b> (ATEM protocol), <b>x32</b> (OSC). Telemetry reads the device itself: Web Presenter stream status, HyperDeck transport, ATEM program/stream. Min speed in Mb/s raises a warning when the link is slower (video gear defaults to 1000).</div>
-			<table><thead><tr><th>In</th><th>Name</th><th>IP</th><th>Group</th><th>Role</th><th>Probe</th><th>Telemetry</th><th>Min speed</th><th>Main</th><th></th></tr></thead><tbody>${rows}</tbody></table>
+			<table><thead><tr><th>In</th><th>Name</th><th>IP</th><th>Group</th><th>Role</th><th>Probe</th><th>Telemetry</th><th>Companion</th><th>Min speed</th><th>Main</th><th></th></tr></thead><tbody>${rows}</tbody></table>
 			<datalist id="groupList">${groups.map((g) => `<option value="${esc(g)}">`).join('')}</datalist>
 		</div>
 		<footer><button class="btn" id="rosterAdd">+ Add device</button><button class="btn primary" id="rosterSave">Save roster</button><button class="btn quiet" id="rosterCancel">Cancel</button><span class="msg" id="rosterMsg">${esc(msg)}</span></footer>`
@@ -417,7 +436,7 @@ function readRoster() {
 	const rows = [...$('rosterEditor').querySelectorAll('tbody tr')]
 	return rows.map((tr) => {
 		const get = (f) => tr.querySelector(`[data-f="${f}"]`)
-		return { active: get('active').checked, name: get('name').value, ip: get('ip').value.trim(), group: get('group').value, role: get('role').value, probe: get('probe').value.trim() || undefined, telemetry: get('telemetry').value || undefined, min_speed: get('min_speed').value.trim() || undefined, hero: get('hero').checked || undefined }
+		return { active: get('active').checked, name: get('name').value, ip: get('ip').value.trim(), group: get('group').value, role: get('role').value, probe: get('probe').value.trim() || undefined, telemetry: get('telemetry').value || undefined, companion: get('companion').value.trim() || undefined, min_speed: get('min_speed').value.trim() || undefined, hero: get('hero').checked || undefined }
 	})
 }
 async function saveRoster() {
@@ -524,6 +543,7 @@ function renderInspector() {
 		parts.push(`<h3>AI diagnosis</h3>${diag ? diag.error ? `<p class="error">${esc(diag.error)}</p>` : `<div class="ai-text">${mdLite(diag.text)}</div><div class="ai-meta">${esc(diag.model)} · ${Math.round(diag.ms / 1000)} s · ${fmtAgo(diag.t)} ago</div>` : '<p>Ask the AI to explain this alert from the live data, related events and flows.</p>'}<div class="insp-actions"><button class="btn" data-diagnose="${esc(a.id)}" ${!aiStatus?.enabled ? 'disabled title="AI not configured"' : ''}>${diag ? 'Diagnose again' : 'Diagnose with AI'}</button></div>`)
 	}
 	if (ent) parts.push(entitySection(type, ent))
+	if (type === 'equipment' && ent && ent.active && (ent.telemetry?.kind === 'atem' || ent.role === 'switcher')) parts.push(sessionSection(ent))
 	if (type === 'equipment' && ent) parts.push(`<div class="insp-actions">${ent.active ? `<button class="btn quiet" data-standby="${esc(ent.ip)}">Put on standby (not part of this broadcast)</button>` : `<button class="btn" data-activate="${esc(ent.ip)}">Add to this broadcast</button>`}<button class="btn quiet" id="editRosterInsp">Edit roster</button></div>`)
 	if (type === 'equipment' && ent?.history) parts.push(`<h3>Traffic · last ${Math.round((ent.history.down.length * 5) / 60)} min</h3>${scope('insp', [{ data: ent.history.down, color: 'in' }, { data: ent.history.up, color: 'out' }], 'spark')}`)
 	if (type === 'switch' && ent?.history) parts.push(`<h3>Traffic · all ports</h3>${scope('insp', [{ data: ent.history.down, color: 'in' }, { data: ent.history.up, color: 'out' }], 'spark')}`)
@@ -548,7 +568,7 @@ function entitySection(type, e) {
 			['Uptime', e.online ? fmtUptime(e.uptime) : ''],
 			['Traffic', `in ${fmtRate(e.down)} · out ${fmtRate(e.up)}${e.age !== null && e.age !== undefined ? ` · counters ${e.age} s old` : ''}`],
 			['Probe', e.probe ? (e.probe.ok ? `${esc(e.probeSpec)} answers · ${e.probe.ms.toFixed(0)} ms${e.probe.info?.state ? ' · ' + esc(e.probe.info.state) : ''}${e.probe.info?.name ? ' · ' + esc(e.probe.info.name) + ' ' + esc(e.probe.info.model || '') + ' fw ' + esc(e.probe.info.firmware || '') : ''}` : `${esc(e.probeSpec)}: ${esc(e.probe.error || 'no answer')}`) : e.probeSpec && e.active ? 'not yet' : ''],
-			t && !t.error ? ['Device', t.kind === 'webpresenter' ? `${esc(t.product || '')} ${esc(t.deviceName || '')} v${esc(t.version || '')} · stream ${esc(t.status)}${t.bitrate ? ' · ' + (t.bitrate / 1e6).toFixed(1) + ' Mb/s' : ''}${t.format ? ' · ' + esc(t.format) : ''}` : t.kind === 'hyperdeck' ? `${esc(t.product || '')} ${esc(t.deviceName || '')} v${esc(t.version || '')} · ${esc(t.summary)}` : t.kind === 'atem' ? `${esc(t.product || '')} v${esc(t.version || '')}${t.programName ? ' · program ' + esc(t.programName) + ' · preview ' + esc(t.previewName || '') : ''}${t.streaming ? ` · stream ${esc(t.streaming.state)}${t.streaming.service ? ' (' + esc(t.streaming.service) + ')' : ''}${t.streaming.url ? ' → ' + esc(t.streaming.url) : ''}${t.streaming.bitrate ? ' ' + (t.streaming.bitrate / 1e6).toFixed(1) + ' Mb/s' : ''}` : ''}` : ''] : t?.error ? ['Device', esc(t.error), 'bad'] : null,
+			t && !t.error ? ['Device', t.kind === 'webpresenter' ? `${esc(t.product || '')} ${esc(t.deviceName || '')} v${esc(t.version || '')} · stream ${esc(t.status)}${t.bitrate ? ' · ' + (t.bitrate / 1e6).toFixed(1) + ' Mb/s' : ''}${t.format ? ' · ' + esc(t.format) : ''}` : t.kind === 'hyperdeck' ? `${esc(t.product || '')} ${esc(t.deviceName || '')} v${esc(t.version || '')} · ${esc(t.summary)}` : t.kind === 'atem' ? `${t.via === 'companion' ? 'read through Companion' : `${esc(t.product || 'ATEM')}${t.version ? ' v' + esc(t.version) : ''}`}${t.programName ? ' · program ' + esc(t.programName) + ' · preview ' + esc(t.previewName || '') : ''}${t.streaming ? ` · stream ${esc(t.streaming.state)}${t.streaming.service ? ' (' + esc(t.streaming.service) + ')' : ''}${t.streaming.url ? ' → ' + esc(t.streaming.url) : ''}${t.streaming.bitrate ? ' ' + (t.streaming.bitrate / 1e6).toFixed(1) + ' Mb/s' : ''}` : ''}${t.recording?.active ? ' · RECORDING ' + esc(t.recording.duration || '') : ''}` : ''] : t?.error ? ['Device', esc(t.error), 'bad'] : null,
 			['Talks to', (e.peers || []).map((p) => `${p.dir === 'in' ? '←' : '→'} ${esc(p.name || p.ip)}${p.service && p.service !== 'OTHER' ? ' ' + esc(p.service) : ''} · ${fmtBytes(p.bytes)}`).join('<br>')],
 		])}`
 	}
@@ -589,7 +609,60 @@ function entitySection(type, e) {
 	}
 	if (type === 'wan') return `<h3>WAN · ${esc(e.gateway || '')}</h3>${kv([['Status', esc(e.status), e.status === 'ok' ? 'ok' : 'bad'], ['Address', `${esc(e.ip || '')}${e.isp ? ' · ' + esc(e.isp) : ''}`], ['Link', speedTxt(e.speed)], ['Latency', `${e.latency ?? '–'} ms`], ['Traffic', `↓ ${fmtRate(e.down)} ↑ ${fmtRate(e.up)}`], ['Internet uptime', fmtUptime(e.uptime)]])}`
 	if (type === 'api') return `<h3>UniFi API</h3><pre class="ai-text">${esc(JSON.stringify(e, null, 1))}</pre>`
+	if (type === 'path') {
+		return `<h3><span class="pl ${esc(e.status)}"></span> ${esc(e.name)}</h3><p class="explain">${esc(e.verdict)}</p>${kv([
+			['Path', `${esc(e.proto.replace('_', '+'))} WAN ${esc(e.wanPorts)} → ${esc(e.target.name)} ${esc(e.target.ip)}:${esc(e.target.port || e.wanPorts)}`],
+			['Sender URL', e.url ? `<span class="mono">${esc(e.url)}/…</span>` : ''],
+			['Target', e.target.standby ? 'on standby (not part of this broadcast)' : e.target.online ? `on the network${e.target.switch ? ' · ' + esc(e.target.switch) : ''}` : 'not on the network', e.target.standby ? 'bad' : e.target.online ? 'ok' : 'bad'],
+			['Last hour', `${e.hits.count} flow${e.hits.count === 1 ? '' : 's'} · ${fmtBytes(e.hits.bytes)}${e.hits.blocked ? ' · ' + e.hits.blocked + ' blocked' : ''}${e.hits.last ? ' · last ' + fmtAgo(e.hits.last) + ' ago' : ''}`],
+			['Senders', e.hits.sources.map((x) => `${esc(x.name || x.ip)}${x.name ? ' · ' + esc(x.ip) : ''}${x.region ? ' · ' + esc(x.region) : ''} · ${fmtBytes(x.bytes)} in ${x.flows} flow${x.flows === 1 ? '' : 's'} · ${esc(x.ports.join(', '))} · last ${fmtAgo(x.last)} ago`).join('<br>')],
+			e.intake ? ['Switcher intake', e.intake.state === 'arriving' ? `rose ${e.intake.rate} Mb/s since ${fmtTime(e.intake.since)}` : `quiet${e.intake.until ? ' · last stream ended ' + fmtAgo(e.intake.until) + ' ago' : ''}`] : null,
+		])}<p>Green = packets are arriving on this WAN port and reaching the target now; amber = they reach the gateway but the switcher's intake did not rise; red = wrong target (standby or off the network) or blocked. Only traffic that crosses the gateway shows here.</p>`
+	}
 	return ''
+}
+
+// the switcher's control connection: how it is read (Companion / own session / auto / none), what Broadwatcher
+// holds right now, and which other programs are believed to hold one of the few slots
+function sessionSection(e) {
+	const at = state?.atem
+	const ses = at && at.ip === e.ip ? at.session : null
+	const tl = e.telemetry || {}
+	const mode = ses?.mode || tl.mode || 'companion'
+	const own = ses?.own || tl.session || (tl.via === 'session' ? tl : null)
+	const comp = ses?.companion || (tl.via === 'companion' ? { ok: !tl.error, error: tl.error, connected: tl.connected } : null)
+	const ownTxt = !own ? 'none' : own.state === 'connected' ? `<span class="ok">held since ${fmtTime(own.connectedAt)}</span> · ${own.commands} updates${own.captured ? ` · ${own.captured} remote-source commands captured` : ''}` : own.state === 'refused' ? `<span class="warn">refused (${esc(own.error)})</span> at ${fmtTime(own.lastHello)} · ${own.refusals} in a row · next hello ${own.retryAt ? fmtTime(own.retryAt) : '–'}` : own.closed || own.error === 'released' ? 'released' : `${esc(own.state)}${own.error ? ' · ' + esc(own.error) : ''}${own.retryAt ? ' · next hello ' + fmtTime(own.retryAt) : ''}`
+	const compTxt = comp ? (comp.ok ? (comp.connected ? `<span class="ok">Companion is connected to the switcher</span>` : `<span class="warn">Companion is not connected to the switcher</span>`) : `<span class="warn">${esc(comp.error || 'Companion not reachable')}</span>`) : state?.companion ? (state.companion.ok ? 'Companion reachable' : `<span class="warn">Companion not reachable at ${esc(state.companion.url)}</span>`) : ''
+	const ctl = (ses?.controllers || []).map((c) => `<li><b>${esc(c.name)}</b>${c.where ? ' · ' + esc(c.where) : ''}: ${c.held === null ? 'unknown' : c.held ? '<span class="warn">holds a slot</span>' : 'not connected'} <small>${esc(c.how)}</small></li>`).join('')
+	return `<h3>Control connection</h3><div class="ctl">
+		<div class="row"><span>Read the switcher</span><select id="atemMode" data-ip="${esc(e.ip)}">${[['companion', 'through Companion (no slot)'], ['auto', 'Companion, own session only if Companion is away'], ['own', 'with Broadwatcher’s own session (one slot)'], ['none', 'not at all']].map(([v, l]) => `<option value="${v}" ${mode === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+		<div class="kv" style="margin-top:4px"><span>Companion</span><b>${compTxt || '–'}</b><span>Own session</span><b>${ownTxt}</b></div>
+		<div class="row" style="margin-top:8px">${own && own.state === 'connected' ? `<button class="btn quiet" data-atem-session="release" data-ip="${esc(e.ip)}">Release the slot</button>` : mode === 'own' || mode === 'auto' ? `<button class="btn quiet" data-atem-session="connect" data-ip="${esc(e.ip)}">Try to connect now</button>` : ''}${own && own.captured ? `<button class="btn quiet" data-capture="${esc(e.ip)}">Show protocol capture</button>` : ''}</div>
+		<p style="margin:8px 0 2px">An ATEM keeps only a handful of control slots, and a program that was closed keeps its slot for ~${Math.round((ses?.holdMs || 120000) / 60000)} min. Known slot holders:</p><ul>${ctl || '<li>none listed (config.json → atem.controllers)</li>'}</ul></div><div id="captureOut"></div>`
+}
+async function showCapture(ip) {
+	const out = $('captureOut')
+	if (!out) return
+	out.innerHTML = '<div class="empty">reading…</div>'
+	try {
+		const r = await fetch(`/api/atem/capture?ip=${encodeURIComponent(ip)}`)
+		const j = await r.json()
+		if (j.error) return (out.innerHTML = `<p class="warn">${esc(j.error)}</p>`)
+		const cmds = (j.commands || []).map((c) => `<div><b>${esc(c.name)}</b> <small>${c.total} received · ${c.samples.length} distinct bodies</small>${c.samples.slice(-4).map((s) => `<div class="cap"><b>${fmtTime(s.t)}</b> ${s.len} B${s.repeats > 1 ? ' ×' + s.repeats : ''}\n${esc(s.hex)}\n${esc(s.ascii)}${s.strings.length ? '\nstrings: ' + s.strings.map((x) => `@${x.at} "${esc(x.text)}"`).join('  ') : ''}${s.ipv4.length ? '\nipv4: ' + s.ipv4.map((x) => `@${x.at} ${esc(x.ip)}`).join('  ') : ''}\nu16: ${s.u16.join(' ')}</div>`).join('')}</div>`).join('')
+		out.innerHTML = `<h3>Protocol capture · ${esc(j.product || 'ATEM')} ${esc(j.version || '')}</h3>${cmds || '<p>no remote-source commands captured yet</p>'}<p><small>Command census this session: ${(j.seen || []).slice(0, 40).map((s) => `${esc(s.name)}×${s.n}`).join(' · ')}</small></p>`
+	} catch (e) {
+		out.innerHTML = `<p class="warn">${esc(e.message)}</p>`
+	}
+}
+async function atemSession(ip, action, mode) {
+	try {
+		const r = await fetch('/api/atem/session', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ip, action, mode }) })
+		const j = await r.json()
+		if (j.error) alert(j.error)
+	} catch (e) {
+		alert('could not change the switcher connection: ' + e.message)
+	}
+	setTimeout(refreshInspector, 600)
 }
 
 async function diagnose(id) {
@@ -663,6 +736,7 @@ function render(s) {
 	renderIssues(s)
 	renderMap(s)
 	renderAtem(s)
+	renderPaths(s)
 	renderRack(s)
 	renderPatch(s)
 	renderTape(s)
@@ -741,6 +815,8 @@ document.addEventListener('click', (e) => {
 		return select(n?.kind === 'ap' ? 'ap' : n?.kind === 'pdu' ? 'pdu' : n?.kind === 'gateway' ? 'gateway' : 'switch', id)
 	}
 	if (t.closest?.('[data-diagnose]')) return diagnose(t.closest('[data-diagnose]').getAttribute('data-diagnose'))
+	if (t.closest?.('[data-atem-session]')) return atemSession(t.closest('[data-atem-session]').getAttribute('data-ip'), t.closest('[data-atem-session]').getAttribute('data-atem-session'))
+	if (t.closest?.('[data-capture]')) return showCapture(t.closest('[data-capture]').getAttribute('data-capture'))
 	if (t.id === 'reassess') {
 		t.disabled = true
 		t.textContent = 'Assessing…'
@@ -752,6 +828,9 @@ document.addEventListener('click', (e) => {
 	if (t.closest?.('#hudReady')) return closeInspector()
 	if (t.closest?.('#hudToggle')) return toggleHud()
 	if (t.closest?.('#themeToggle')) return applyTheme(document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark')
+})
+document.addEventListener('change', (e) => {
+	if (e.target.id === 'atemMode') atemSession(e.target.getAttribute('data-ip'), 'mode', e.target.value)
 })
 document.addEventListener('keydown', (e) => {
 	if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') {

@@ -7,6 +7,9 @@
 //   GET  /api/ai/diagnose?id=       explanation of one alert
 //   POST /api/ai/ask {question}     free question about the live network
 //   GET  /api/config                the active configuration (API keys redacted)
+//   GET  /api/companion             Companion reachability and its connection list
+//   GET  /api/atem/capture?ip=      raw remote-source commands seen on our own switcher session (if any)
+//   POST /api/atem/session          {ip, action: connect|release} or {action: 'mode', mode: companion|auto|own|none}
 import http from 'node:http'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -30,13 +33,14 @@ export function loadConfig(bundledPath, userPath) {
 		const user = read(userPath)
 		const deep = (k) => ({ ...(base[k] || {}), ...(user[k] || {}) })
 		const outdated = (user.config_version || 0) < (base.config_version || 0)
-		const merged = outdated
-			? { ...base, gateway: deep('gateway'), poll: deep('poll'), thresholds: deep('thresholds'), ai: deep('ai'), snmp: deep('snmp'), server: deep('server') }
-			: { ...base, ...user, gateway: deep('gateway'), poll: deep('poll'), thresholds: deep('thresholds'), ai: deep('ai'), snmp: deep('snmp'), server: deep('server') }
-		// a roster edited in the app survives upgrades: the user's entries win, new bundled devices are appended
+		const deepKeys = { gateway: deep('gateway'), poll: deep('poll'), thresholds: deep('thresholds'), ai: deep('ai'), snmp: deep('snmp'), server: deep('server'), atem: deep('atem'), companion: deep('companion') }
+		const merged = outdated ? { ...base, ...deepKeys } : { ...base, ...user, ...deepKeys }
+		// a roster edited in the app survives upgrades: the user's entries win, new bundled devices are appended;
+		// fields that a newer bundle adds to a known device (e.g. its Companion label) are filled in when missing
 		if (user.equipment_edited && Array.isArray(user.equipment)) {
 			const byIp = new Map(user.equipment.map((e) => [e.ip, e]))
-			merged.equipment = [...user.equipment, ...base.equipment.filter((e) => !byIp.has(e.ip)).map((e) => ({ ...e, active: false }))]
+			const baseByIp = new Map(base.equipment.map((e) => [e.ip, e]))
+			merged.equipment = [...user.equipment.map((e) => (baseByIp.get(e.ip)?.companion && e.companion === undefined ? { ...e, companion: baseByIp.get(e.ip).companion } : e)), ...base.equipment.filter((e) => !byIp.has(e.ip)).map((e) => ({ ...e, active: false }))]
 			merged.equipment_edited = true
 		}
 		if (outdated) {
@@ -140,6 +144,33 @@ export function startServer({ config, configPath = null, host = '127.0.0.1', por
 					log('[config] could not save: ' + e.message)
 				}
 				return sendJson(res, { equipment: clean, saved, configPath })
+			}
+			if (p === '/api/companion') return sendJson(res, await collector.companion.status())
+			if (p === '/api/atem/capture') {
+				const c = collector.atems.get(q.get('ip') || config.atem?.ip)
+				return sendJson(res, c ? c.captureReport() : { error: 'Broadwatcher holds no session with this switcher (Control connection > own session, or node scripts/atem-capture.mjs when no show is on)' })
+			}
+			if (p === '/api/atem/session' && req.method === 'POST') {
+				const body = await readBody(req)
+				const ip = String(body.ip || config.atem?.ip || '')
+				if (body.action === 'mode') {
+					const mode = String(body.mode || '')
+					if (!['companion', 'auto', 'own', 'none'].includes(mode)) return sendJson(res, { error: 'mode must be companion, auto, own or none' }, 400)
+					config.atem = { ...(config.atem || {}), session: mode }
+					collector.cfg.atem = config.atem
+					let saved = false
+					try {
+						saved = saveUserConfig(configPath, { atem: config.atem, config_version: config.config_version || 0 })
+					} catch (e) {
+						log('[config] could not save: ' + e.message)
+					}
+					collector.event('device', `Switcher data source set to "${mode}"${mode === 'companion' ? ' (through Companion; Broadwatcher holds no control slot)' : mode === 'own' ? ' (Broadwatcher holds its own control slot)' : ''}`, { entity: { type: 'equipment', id: ip } })
+					collector.pollTelemetry().catch(() => {})
+					return sendJson(res, { ok: true, mode, saved })
+				}
+				const r = collector.atemSession(ip, body.action)
+				collector.pollTelemetry().catch(() => {})
+				return sendJson(res, r, r.error ? 400 : 200)
 			}
 			if (p === '/api/ai/status') return sendJson(res, ai.status())
 			if (p === '/api/ai/digest') {

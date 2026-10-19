@@ -1,10 +1,18 @@
 // Read-only clients for the Blackmagic ATEM protocol (UDP 9910).
 //  - readAtem(): one-shot: says hello, acknowledges the initial state dump, returns product, firmware,
 //    program/preview, input names and the streaming state (StRS/SRSS/SRSU), then lets the session time out.
+//    Test scripts only: the switcher keeps the abandoned session for ~2 minutes.
 //  - AtemClient: a persistent session that keeps acknowledging the switcher's packets, so it uses exactly
 //    ONE of the switcher's control-connection slots for as long as Broadwatcher runs (a new hello every few
 //    seconds would leave abandoned sessions behind until the switcher expires them, and the HD8 / Minis
 //    only have a handful of slots that Companion and ATEM Software Control need).
+//
+// Slot rules (measured on the HD8, 2026-10-19): a dead or half-open session is kept for ~2 minutes; the HD8
+// was full with three held sessions (Companion, ATEM Software Control, the NDI Machine bridge). So:
+//  * never more than one hello per two minutes per switcher, whatever happens;
+//  * when the switcher answers "too many clients", back off further (2, 4, 8, 15 min) instead of knocking
+//    every two minutes and snatching the slot a human controller is waiting for;
+//  * the app reads the switcher through Companion by default and only opens its own session on request.
 import dgram from 'node:dgram'
 import { EventEmitter } from 'node:events'
 
@@ -13,19 +21,117 @@ const FLAG_HELLO = 0x10
 const FLAG_ACK = 0x80
 const HELLO = Buffer.from([0x10, 0x14, 0x53, 0xab, 0, 0, 0, 0, 0, 0x3a, 0, 0, 0x01, 0, 0, 0, 0, 0, 0, 0])
 const STREAM_STATE = { 1: 'idle', 2: 'connecting', 4: 'streaming', 32: 'stopping' }
+// RTMS: best guess from atem-connection's RecordingStatus (Idle, Recording, Stopping as bits); the raw value is kept
+const RECORD_STATE = { 0: 'idle', 1: 'idle', 2: 'recording', 4: 'stopping' }
+const REFUSED_BACKOFF_MS = [120000, 240000, 480000, 900000]
 
 const cstr = (b, off, len) => {
 	const s = b.subarray(off, Math.min(b.length, off + len))
 	const z = s.indexOf(0)
 	return s.toString('utf8', 0, z < 0 ? s.length : z)
 }
+const tc = (h, m, s, f) => `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}${f !== undefined ? ':' + String(f).padStart(2, '0') : ''}`
+
+// a human-readable breakdown of an undocumented command body: hex, printable text, the small integers at the
+// usual alignments, IPv4-looking byte runs and C strings. Used for the remote-source commands (RSDs RSis RSpr RSca)
+// whose layout is not public; the capture view shows these so the layout can be worked out from live changes.
+export function decodeBody(body) {
+	const b = Buffer.from(body)
+	const u16 = []
+	for (let i = 0; i + 2 <= b.length && u16.length < 24; i += 2) u16.push(b.readUInt16BE(i))
+	const u32 = []
+	for (let i = 0; i + 4 <= b.length && u32.length < 12; i += 4) u32.push(b.readUInt32BE(i))
+	const strings = []
+	let run = ''
+	let runAt = 0
+	for (let i = 0; i <= b.length; i++) {
+		const c = i < b.length ? b[i] : 0
+		if (c >= 0x20 && c < 0x7f) {
+			if (!run) runAt = i
+			run += String.fromCharCode(c)
+		} else {
+			if (run.length >= 3) strings.push({ at: runAt, text: run })
+			run = ''
+		}
+	}
+	const ipv4 = []
+	for (let i = 0; i + 4 <= b.length; i++) {
+		const a = b[i]
+		if ((a === 10 || a === 192 || a === 172 || (a >= 100 && a <= 223)) && b[i + 1] !== 0 && (b[i + 3] !== 0 || b[i + 2] !== 0)) {
+			const s = `${b[i]}.${b[i + 1]}.${b[i + 2]}.${b[i + 3]}`
+			if (/^(10|192\.168|172\.(1[6-9]|2\d|3[01])|207\.180)\./.test(s)) ipv4.push({ at: i, ip: s })
+		}
+	}
+	return { len: b.length, hex: b.toString('hex').replace(/(..)/g, '$1 ').trim(), ascii: b.toString('latin1').replace(/[^\x20-\x7e]/g, '.'), u16, u32, strings, ipv4 }
+}
+
+function decodeKnown(name, body, d) {
+	switch (name) {
+		case '_pin':
+			d.product = cstr(body, 0, 44)
+			break
+		case '_ver':
+			d.version = `${body.readUInt16BE(0)}.${body.readUInt16BE(2)}`
+			break
+		case 'StRS':
+			d.streaming = { ...(d.streaming || {}), state: STREAM_STATE[body.readUInt16BE(0)] || `state ${body.readUInt16BE(0)}`, error: body.readUInt16BE(2) }
+			break
+		case 'SRSS':
+			d.streaming = { ...(d.streaming || {}), bitrate: body.readUInt32BE(0), cache: body.readUInt16BE(4) }
+			break
+		case 'SRST': // streaming duration hh:mm:ss:ff (+ drop-frame flag)
+			d.streaming = { ...(d.streaming || {}), duration: tc(body[0], body[1], body[2], body[3]), durationRaw: body.subarray(0, 8).toString('hex') }
+			break
+		case 'STAB': // audio bitrates (low / high quality)
+			d.streaming = { ...(d.streaming || {}), audioBitrateLow: body.readUInt32BE(0), audioBitrateHigh: body.length >= 8 ? body.readUInt32BE(4) : null }
+			break
+		case 'SRSU': {
+			const url = cstr(body, 64, 512)
+			let host = null
+			let port = null
+			let protocol = null
+			try {
+				const u = new URL(url)
+				host = u.hostname
+				port = Number(u.port) || (u.protocol === 'rtmps:' ? 443 : 1935)
+				protocol = u.protocol.replace(':', '')
+			} catch {}
+			d.streaming = { ...(d.streaming || {}), service: cstr(body, 0, 64), url, host, port, protocol, keySet: !!cstr(body, 576, 512) }
+			break
+		}
+		case 'RTMS': {
+			// record status: state bits, error bits, seconds of recording time left on the active disk (best effort)
+			const raw = body.readUInt16BE(0)
+			d.recording = { ...(d.recording || {}), state: RECORD_STATE[raw] || `state ${raw}`, raw, error: body.readUInt16BE(2), remainingS: body.length >= 8 ? body.readUInt32BE(4) : null, active: raw === 2 }
+			break
+		}
+		case 'RMRD': // record duration
+			d.recording = { ...(d.recording || {}), duration: tc(body.readUInt16BE(0), body[2], body[3], body[4]), durationRaw: body.subarray(0, 8).toString('hex') }
+			break
+		case 'InPr': {
+			const id = body.readUInt16BE(0)
+			d.inputs[id] = { long: cstr(body, 2, 20), short: cstr(body, 22, 4) }
+			break
+		}
+		case 'PrgI':
+			if (body[0] === 0) d.program = body.readUInt16BE(2)
+			break
+		case 'PrvI':
+			if (body[0] === 0) d.preview = body.readUInt16BE(2)
+			break
+		default:
+			return false
+	}
+	return true
+}
 
 export function readAtem(ip, { port = 9910, timeoutMs = 6000, capture = [] } = {}) {
+	const want = capture instanceof RegExp ? (n) => capture.test(n) : (n) => capture.includes(n)
 	return new Promise((resolve) => {
 		const sock = dgram.createSocket('udp4')
 		const t0 = Date.now()
 		let done = false
-		const result = { ok: false, ms: 0, product: null, version: null, streaming: null, inputs: {}, program: null, preview: null, commands: 0, unknown: [], raw: {} }
+		const result = { ok: false, ms: 0, product: null, version: null, streaming: null, recording: null, inputs: {}, program: null, preview: null, commands: 0, unknown: [], seen: {}, raw: {} }
 		const finish = (ok, error) => {
 			if (done) return
 			done = true
@@ -36,14 +142,6 @@ export function readAtem(ip, { port = 9910, timeoutMs = 6000, capture = [] } = {
 			result.ok = ok
 			result.ms = Date.now() - t0
 			if (error) result.error = error
-			if (result.streaming?.url) {
-				try {
-					const u = new URL(result.streaming.url)
-					result.streaming.host = u.hostname
-					result.streaming.port = Number(u.port) || (u.protocol === 'rtmps:' ? 443 : u.protocol === 'srt:' ? 0 : 1935)
-					result.streaming.protocol = u.protocol.replace(':', '')
-				} catch {}
-			}
 			resolve(result)
 		}
 		const timer = setTimeout(() => finish(result.commands > 0, result.commands ? undefined : 'timeout'), timeoutMs)
@@ -80,41 +178,11 @@ export function readAtem(ip, { port = 9910, timeoutMs = 6000, capture = [] } = {
 		})
 		function handle(name, body) {
 			result.commands++
-			if (capture.includes(name)) (result.raw[name] = result.raw[name] || []).push(Buffer.from(body))
+			result.seen[name] = (result.seen[name] || 0) + 1
+			if (want(name)) (result.raw[name] = result.raw[name] || []).push(Buffer.from(body))
 			try {
-				switch (name) {
-					case '_pin':
-						result.product = cstr(body, 0, 44)
-						break
-					case '_ver':
-						result.version = `${body.readUInt16BE(0)}.${body.readUInt16BE(2)}`
-						break
-					case 'StRS':
-						result.streaming = { ...(result.streaming || {}), state: STREAM_STATE[body.readUInt16BE(0)] || `state ${body.readUInt16BE(0)}`, error: body.readUInt16BE(2) }
-						break
-					case 'SRSS':
-						result.streaming = { ...(result.streaming || {}), bitrate: body.readUInt32BE(0), cache: body.readUInt16BE(4) }
-						break
-					case 'SRSU':
-						result.streaming = { ...(result.streaming || {}), service: cstr(body, 0, 64), url: cstr(body, 64, 512), keySet: !!cstr(body, 576, 512), bitrateLow: body.length >= 1092 ? body.readUInt32BE(1088) : null, bitrateHigh: body.length >= 1096 ? body.readUInt32BE(1092) : null }
-						break
-					case 'InPr': {
-						const id = body.readUInt16BE(0)
-						result.inputs[id] = { long: cstr(body, 2, 20), short: cstr(body, 22, 4) }
-						break
-					}
-					case 'PrgI':
-						if (body[0] === 0) result.program = body.readUInt16BE(2)
-						break
-					case 'PrvI':
-						if (body[0] === 0) result.preview = body.readUInt16BE(2)
-						break
-					case 'InCm':
-						finish(true)
-						break
-					default:
-						if (result.unknown.length < 300 && !result.unknown.includes(name)) result.unknown.push(name)
-				}
+				if (name === 'InCm') return finish(true)
+				if (!decodeKnown(name, body, result) && result.unknown.length < 300 && !result.unknown.includes(name)) result.unknown.push(name)
 			} catch {}
 		}
 		send(HELLO)
@@ -122,7 +190,7 @@ export function readAtem(ip, { port = 9910, timeoutMs = 6000, capture = [] } = {
 }
 
 export class AtemClient extends EventEmitter {
-	constructor(ip, { port = 9910, log = () => {} } = {}) {
+	constructor(ip, { port = 9910, log = () => {}, capture = /^RS/ } = {}) {
 		super()
 		this.ip = ip
 		this.port = port
@@ -130,14 +198,19 @@ export class AtemClient extends EventEmitter {
 		this.sock = null
 		this.state = 'idle' // idle | connecting | syncing | connected | refused | disconnected
 		this.error = null
-		this.data = { product: null, version: null, streaming: null, inputs: {}, program: null, preview: null }
+		this.data = { product: null, version: null, streaming: null, recording: null, inputs: {}, program: null, preview: null }
 		this.lastPacket = 0
+		this.lastHello = 0
 		this.connectedAt = 0
 		this.commands = 0
 		this.timer = null
 		this.retryAt = 0
+		this.refusals = 0
 		this.closed = false
 		this.attempts = [] // timestamps of hellos we sent; never more than one per SLOT_HOLD_MS
+		this.capture = capture instanceof RegExp ? (n) => capture.test(n) : Array.isArray(capture) ? (n) => capture.includes(n) : () => false
+		this.raw = new Map() // command name -> [{t, body(Buffer), n}] the last distinct bodies (n = repeats of the same body)
+		this.seen = new Map() // command name -> {n, last, len}
 	}
 
 	static get SLOT_HOLD_MS() {
@@ -152,6 +225,15 @@ export class AtemClient extends EventEmitter {
 		this.connect()
 	}
 
+	// a human asked for a connection: drop the long backoff, but never break the one-hello-per-two-minutes rule
+	connectNow() {
+		this.closed = false
+		this.refusals = 0
+		this.retryAt = 0
+		this.ensure()
+		return this.state === 'connecting' ? 'hello sent' : this.state === 'connected' ? 'already connected' : `next hello at ${new Date(this.retryAt).toLocaleTimeString()}`
+	}
+
 	connect() {
 		// one hello per two minutes, whatever happens: a flapping link can then hold at most two slots (one live,
 		// one expiring) instead of filling the switcher
@@ -162,6 +244,7 @@ export class AtemClient extends EventEmitter {
 			return
 		}
 		this.attempts.push(now)
+		this.lastHello = now
 		this.teardown()
 		this.state = 'connecting'
 		this.error = null
@@ -186,7 +269,7 @@ export class AtemClient extends EventEmitter {
 		const pid = msg.readUInt16BE(10)
 		if (flags & FLAG_HELLO) {
 			const code = msg[12]
-			if (code === 3) return this.fail('too many clients', AtemClient.SLOT_HOLD_MS, 'refused')
+			if (code === 3) return this.fail('too many clients', 0, 'refused')
 			if (code !== 2) return this.fail(`hello reply ${code}`, AtemClient.SLOT_HOLD_MS, 'refused')
 			this.state = 'syncing'
 			this.ack(sid, 0)
@@ -213,54 +296,31 @@ export class AtemClient extends EventEmitter {
 
 	handle(name, body) {
 		this.commands++
-		const d = this.data
-		try {
-			switch (name) {
-				case '_pin':
-					d.product = cstr(body, 0, 44)
-					break
-				case '_ver':
-					d.version = `${body.readUInt16BE(0)}.${body.readUInt16BE(2)}`
-					break
-				case 'StRS':
-					d.streaming = { ...(d.streaming || {}), state: STREAM_STATE[body.readUInt16BE(0)] || `state ${body.readUInt16BE(0)}`, error: body.readUInt16BE(2) }
-					break
-				case 'SRSS':
-					d.streaming = { ...(d.streaming || {}), bitrate: body.readUInt32BE(0), cache: body.readUInt16BE(4) }
-					break
-				case 'SRSU': {
-					const url = cstr(body, 64, 512)
-					let host = null
-					let port = null
-					let protocol = null
-					try {
-						const u = new URL(url)
-						host = u.hostname
-						port = Number(u.port) || (u.protocol === 'rtmps:' ? 443 : 1935)
-						protocol = u.protocol.replace(':', '')
-					} catch {}
-					d.streaming = { ...(d.streaming || {}), service: cstr(body, 0, 64), url, host, port, protocol, keySet: !!cstr(body, 576, 512) }
-					break
-				}
-				case 'InPr': {
-					const id = body.readUInt16BE(0)
-					d.inputs[id] = { long: cstr(body, 2, 20), short: cstr(body, 22, 4) }
-					break
-				}
-				case 'PrgI':
-					if (body[0] === 0) d.program = body.readUInt16BE(2)
-					break
-				case 'PrvI':
-					if (body[0] === 0) d.preview = body.readUInt16BE(2)
-					break
-				case 'InCm':
-					if (this.state !== 'connected') {
-						this.state = 'connected'
-						this.connectedAt = Date.now()
-						this.emit('connected')
-					}
-					break
+		const now = Date.now()
+		const s = this.seen.get(name) || { n: 0, last: 0, len: body.length }
+		s.n++
+		s.last = now
+		s.len = body.length
+		this.seen.set(name, s)
+		if (this.capture(name)) {
+			const list = this.raw.get(name) || []
+			const last = list[list.length - 1]
+			if (last && last.body.equals(body)) last.n++
+			else {
+				list.push({ t: now, body: Buffer.from(body), n: 1 })
+				if (list.length > 16) list.shift()
 			}
+			this.raw.set(name, list)
+		}
+		try {
+			if (name === 'InCm') {
+				if (this.state !== 'connected') {
+					this.state = 'connected'
+					this.connectedAt = now
+					this.refusals = 0
+					this.emit('connected')
+				}
+			} else decodeKnown(name, body, this.data)
 		} catch {}
 		if (this.state === 'connected') this.emit('update', name)
 	}
@@ -270,8 +330,15 @@ export class AtemClient extends EventEmitter {
 		this.teardown()
 		this.state = state
 		this.error = error
-		this.retryAt = Date.now() + retryMs
+		if (error === 'too many clients') {
+			// every refused hello is a knock on a full switcher: back off further each time so a human controller
+			// that is waiting for a slot gets it before we do
+			this.refusals++
+			retryMs = REFUSED_BACKOFF_MS[Math.min(this.refusals, REFUSED_BACKOFF_MS.length) - 1]
+		} else this.refusals = 0
+		this.retryAt = Date.now() + Math.max(retryMs, 0)
 		if (was === 'connected') this.emit('disconnected', error)
+		else if (state === 'refused') this.emit('refused', error)
 	}
 
 	teardown() {
@@ -285,10 +352,13 @@ export class AtemClient extends EventEmitter {
 		this.sock = null
 	}
 
+	// close our session on purpose; the switcher frees the slot about two minutes later
 	close() {
 		this.closed = true
+		const was = this.state
 		this.teardown()
 		this.state = 'idle'
+		if (was === 'connected') this.emit('released')
 	}
 
 	snapshot() {
@@ -296,11 +366,13 @@ export class AtemClient extends EventEmitter {
 		const live = this.state === 'connected'
 		return {
 			kind: 'atem',
+			via: 'session',
 			state: this.state,
-			error: live ? null : this.error || (this.state === 'connecting' || this.state === 'syncing' ? 'connecting' : 'not connected'),
+			error: live ? null : this.error || (this.state === 'connecting' || this.state === 'syncing' ? 'connecting' : this.closed ? 'released' : 'not connected'),
 			product: d.product,
 			version: d.version,
 			streaming: d.streaming,
+			recording: d.recording,
 			program: d.program,
 			preview: d.preview,
 			inputs: d.inputs,
@@ -308,8 +380,26 @@ export class AtemClient extends EventEmitter {
 			previewName: d.inputs[d.preview]?.long || null,
 			connectedAt: this.connectedAt,
 			lastPacket: this.lastPacket,
+			lastHello: this.lastHello,
 			commands: this.commands,
-			retryAt: this.state === 'connected' ? null : this.retryAt,
+			refusals: this.refusals,
+			retryAt: this.state === 'connected' || this.closed ? null : this.retryAt,
+			captured: [...this.raw.values()].reduce((n, l) => n + l.length, 0),
+			summary: live ? `${d.product || 'ATEM'}${d.streaming?.state ? ' · stream ' + d.streaming.state : ''}${d.recording?.active ? ' · RECORDING' : ''}` : null,
+		}
+	}
+
+	// the raw bodies of the captured (undocumented) commands, decoded as far as we can, plus the census of
+	// every command name the switcher sent in this session
+	captureReport() {
+		return {
+			ip: this.ip,
+			state: this.state,
+			product: this.data.product,
+			version: this.data.version,
+			connectedAt: this.connectedAt,
+			commands: [...this.raw.entries()].map(([name, list]) => ({ name, total: this.seen.get(name)?.n || 0, samples: list.map((x) => ({ t: x.t, repeats: x.n, ...decodeBody(x.body) })) })),
+			seen: [...this.seen.entries()].map(([name, s]) => ({ name, ...s })).sort((a, b) => b.n - a.n),
 		}
 	}
 }

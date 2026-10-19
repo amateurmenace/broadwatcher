@@ -2,14 +2,27 @@
 import { app, BrowserWindow, Menu, shell, dialog, nativeTheme } from 'electron'
 import fs from 'node:fs'
 import path from 'node:path'
+import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
-import { startServer, loadConfig } from './server/server.js'
+import { startServer, loadConfig, saveUserConfig } from './server/server.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const BUNDLED_CONFIG = path.join(__dirname, 'config.json')
 
 app.setName('Broadwatcher')
 nativeTheme.themeSource = 'dark'
+
+// one Broadwatcher per machine: a second copy would open a second session with every switcher it watches
+// (each ATEM has only a handful of control slots) and poll the gateway twice
+// (a development copy with NETWATCH_PORT set, and the --smoke build check, may run beside the installed app)
+const DEV = !!process.env.NETWATCH_PORT || process.argv.includes('--smoke')
+if (!DEV && !app.requestSingleInstanceLock()) app.quit()
+app.on('second-instance', () => {
+	if (win) {
+		if (win.isMinimized()) win.restore()
+		win.focus()
+	}
+})
 
 const userConfig = () => path.join(app.getPath('userData'), 'config.json')
 
@@ -33,13 +46,51 @@ async function boot() {
 	const cfgPath = ensureUserConfig()
 	const config = loadConfig(BUNDLED_CONFIG, cfgPath)
 	const port = Number(process.env.NETWATCH_PORT || config.server?.port || 8766)
+	const host = process.env.NETWATCH_HOST || config.server?.host || '127.0.0.1'
 	try {
-		running = await startServer({ config, configPath: cfgPath, host: '127.0.0.1', port })
+		running = await startServer({ config, configPath: cfgPath, host, port })
 	} catch (e) {
 		// port taken (another Broadwatcher or the standalone server): fall back to a random port
-		running = await startServer({ config, configPath: cfgPath, host: '127.0.0.1', port: 0 })
+		running = await startServer({ config, configPath: cfgPath, host, port: 0 })
 	}
+	maybeStartCompanion(config).catch(() => {})
 	return running
+}
+
+// Companion holds the control session with the switcher that Broadwatcher reads through its HTTP API, so if
+// Companion is not running when Broadwatcher starts, start it (config companion.autostart, default on)
+function companionExe() {
+	if (process.platform === 'win32') {
+		const candidates = [path.join(process.env.ProgramFiles || 'C:\\Program Files', 'Companion', 'Companion.exe'), path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Companion', 'Companion.exe')]
+		return candidates.find((p) => p && fs.existsSync(p)) || null
+	}
+	if (process.platform === 'darwin') return fs.existsSync('/Applications/Companion.app') ? '/Applications/Companion.app' : null
+	return null
+}
+async function companionUp(url) {
+	try {
+		const r = await fetch(url.replace(/\/+$/, '') + '/api/connections', { signal: AbortSignal.timeout(2000) })
+		return r.ok
+	} catch {
+		return false
+	}
+}
+async function maybeStartCompanion(config, force = false) {
+	const cfg = config.companion || {}
+	if (!force && cfg.autostart === false) return 'autostart is off'
+	const url = cfg.url || 'http://127.0.0.1:8000'
+	if (!/127\.0\.0\.1|localhost/.test(url)) return 'Companion runs on another machine'
+	if (await companionUp(url)) return 'Companion is already running'
+	const exe = companionExe()
+	if (!exe) return 'Companion is not installed on this machine'
+	try {
+		const child = process.platform === 'darwin' ? spawn('open', ['-a', exe], { detached: true, stdio: 'ignore' }) : spawn(exe, [], { detached: true, stdio: 'ignore', windowsHide: false })
+		child.unref()
+		running?.collector?.event('device', `Companion was not running: started ${path.basename(exe)} so it can hold the switcher session`)
+		return 'Companion started'
+	} catch (e) {
+		return 'could not start Companion: ' + e.message
+	}
 }
 
 function createWindow(url) {
@@ -76,6 +127,7 @@ function createWindow(url) {
 
 function buildMenu() {
 	const isMac = process.platform === 'darwin'
+	const cfg = loadConfig(BUNDLED_CONFIG, userConfig())
 	const template = [
 		...(isMac ? [{ role: 'appMenu' }] : []),
 		{
@@ -94,6 +146,23 @@ function buildMenu() {
 					},
 				},
 				{ label: 'Reset config to defaults', click: resetConfig },
+				{ type: 'separator' },
+				{
+					label: 'Start Companion now',
+					click: async () => {
+						const msg = await maybeStartCompanion(loadConfig(BUNDLED_CONFIG, userConfig()), true)
+						dialog.showMessageBox(win, { type: 'info', message: msg })
+					},
+				},
+				{
+					label: 'Start Companion with Broadwatcher',
+					type: 'checkbox',
+					checked: cfg.companion?.autostart !== false,
+					click: (item) => {
+						saveUserConfig(userConfig(), { companion: { ...(cfg.companion || {}), autostart: item.checked } })
+						if (running?.collector) running.collector.cfg.companion = { ...(running.collector.cfg.companion || {}), autostart: item.checked }
+					},
+				},
 				{ type: 'separator' },
 				{ label: 'Open UniFi Network', click: () => shell.openExternal(loadConfig(BUNDLED_CONFIG, userConfig()).gateway?.ui_url || 'https://192.168.20.1') },
 				{ type: 'separator' },

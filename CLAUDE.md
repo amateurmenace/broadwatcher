@@ -31,19 +31,30 @@ touching anything. The roadmap for the next phase is in `docs/ROADMAP.md`.
   explanations, event tape, roster (`setEquipment`), inspector `details()`.
 - `server/probe.js` TCP connect / X32 OSC `/xinfo`. `server/rest.js` Blackmagic REST (Web Presenter `livestreams/0`,
   HyperDeck `transports/0`). `server/atem.js` ATEM protocol: `readAtem` (one-shot, tests only) and `AtemClient`
-  (persistent, used by the app). `server/ai.js` digest + prompts (LM Studio / OpenAI-compatible or Anthropic).
-- `server/server.js` HTTP + SSE + `/api/*` (state, details, equipment GET/POST, ai/*); `loadConfig` merges the
-  bundled `config.json` with the user's copy (`config_version`, roster merge by IP when `equipment_edited`).
+  (persistent, opt-in; captures the undocumented `RS*` remote-source commands, `captureReport()`).
+  `server/companion.js` Companion HTTP API client (switcher state without a slot). `server/ai.js` digest +
+  prompts (LM Studio / OpenAI-compatible, or Anthropic through `@anthropic-ai/sdk`, Claude Opus 5.5 default).
+- `server/server.js` HTTP + SSE + `/api/*` (state, details, equipment GET/POST, ai/*, companion, atem/capture,
+  atem/session); `loadConfig` merges the bundled `config.json` with the user's copy (`config_version`, roster
+  merge by IP when `equipment_edited`; `atem` and `companion` blocks deep-merged).
+- Collector extras since 0.4.0: `atemTelemetry` (Companion/auto/own/none with hysteresis), `streamPaths`
+  (port forward → target → intake, data threshold 50 kB so port scanners do not count), `knownControllers`
+  (slot census: Companion API + process list via PowerShell/ps once a minute), `forwardHits` (last hour).
+- `scripts/atem-capture.mjs` one-shot remote-source capture to JSON (quiet hours only).
 - `ui/index.html`, `ui/styles.css` (light "paper" theme default, `data-theme="dark"`), `ui/app.js`, `ui/map.js` (SVG signal map).
 - `main.js` Electron shell: copies `config.json` to userData on first run, menu (Open config, Restart server, Reset).
 
 ## Rules that exist for a reason
 
-1. **Never send bare hellos or one-shot reads to an ATEM from the app.** The HD8 keeps a dead or half-open
-   session for ~2 minutes and only has a handful of control slots (Companion and ATEM Software Control need
-   them); the 0.1.0 app's 15-second hello probes clogged it and only a power-cycle cleared it. `AtemClient`
-   holds one session per switcher, pooled for the life of the process, and never attempts more than one hello
-   per two minutes under any failure. Keep it that way; measure nothing by opening sessions.
+1. **Never send bare hellos or one-shot reads to an ATEM from the app, and take no slot by default.** The HD8
+   keeps a dead or half-open session for ~2 minutes and has only a handful of control slots: on 2026-10-19 it
+   was full with three held sessions (Companion, ATEM Software Control, the NDI Machine ATEM bridge
+   `atem-remote.exe`), and Broadwatcher's hello was refused 7 s after a power-cycle. Since 0.4.0 the switcher is
+   read **through Companion's HTTP API** (`server/companion.js`, `atem.session = "companion"`), which costs
+   the switcher nothing. `AtemClient` (own session) is opt-in (`own`, or `auto` = only while Companion is
+   away), pooled for the life of the process, one hello per two minutes under any failure, and it backs off
+   2/4/8/15 min when refused. The raw remote-source capture needs an own session. Measure nothing by opening
+   sessions; `scripts/atem-capture.mjs` is the only one-shot reader and is for quiet hours.
 2. **Rates come from SNMP** (`snmp.community` = `netwatch`, enabled in UniFi 2026-10-18); the controller's
    copies refresh only when a switch informs it (30–90 s). UniFi `traffic-flows` never contains same-VLAN
    switch-to-switch traffic; inbound forwarded flows are logged against the WAN IP + WAN port, so the
@@ -56,8 +67,16 @@ touching anything. The roadmap for the next phase is in `docs/ROADMAP.md`.
    Styled scrollbars everywhere. No rounded "cards" grids.
 5. **Config upgrades:** bump `config_version` in `config.json` whenever the bundled device lists or defaults
    change; user edits of gateway/poll/thresholds/ai/snmp survive, a roster edited in the app always wins.
-6. **Companion is separate.** The Stream Deck config (`Desktop\Town Meeting Companion`) has its own Python
-   UniFi poller; Broadwatcher does not write into Companion (yet, see roadmap).
+6. **Companion is read, never written.** Broadwatcher reads Companion's HTTP API on this PC
+   (`GET /api/connections`, `GET /api/variable/<label>/<name>/value`; the bmd-atem connection is labelled
+   `atem` and exposes `pgm1_input`, `pvw1_input`, `stream_active`, `stream_bitrate`, `stream_cache_used`,
+   `stream_duration_hms`, `record_active`, `record_duration_hms`, `record_remaining_hms`, `record_filename`,
+   `record_disk_volume`, `long_N`/`short_N`, `aux1_input`). The Stream Deck config
+   (`Desktop\Town Meeting Companion`) has its own Python UniFi poller; Broadwatcher does not write into
+   Companion (yet, see roadmap). The Electron app starts Companion if it is not running (`companion.autostart`).
+8. **Two Claude sessions may be working in this repo.** On 2026-10-19 a second session (title "Gemini-format
+   API endpoint in front of LM Studio", driven by Steve over remote control) committed 0.3.3 (Anthropic SDK)
+   while this one was mid-edit. Run `git log` before committing, build on HEAD, commit small and often.
 7. Commit messages end with `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>`. Bash heredocs on this
    PC collapse `\\` to `\`: write code files with the Write tool, not heredocs.
 
@@ -73,5 +92,17 @@ touching anything. The roadmap for the next phase is in `docs/ROADMAP.md`.
 - Blackmagic REST at `http://<ip>/control/api/v1/` on Web Presenters (.71 control room, .76 field) and
   HyperDecks (.159 Studio HD, .92 Pro, .129 Mini); the HD8 has none. ATEM protocol commands seen on the HD8
   include `RSDs RSis RSpr RSca` (remote sources; `RSis` carries the WAN IP; layout unknown).
-- LM Studio on this PC listens on 0.0.0.0:1234 (`gemma-flash`); Companion web UI on 127.0.0.1:8000.
+- LM Studio on this PC listens on 0.0.0.0:1234 (`gemma-flash`); Companion web UI on 127.0.0.1:8000 (bind_ip
+  127.0.0.1, so the Mac cannot read it until the "one server, many viewers" roadmap item).
 - The Broadcast Pix PC has 192.168.20.75 (Default) and 10.56.20.33 (BIG_NDI); it is not on the Dante VLANs.
+- HD8 control slots (2026-10-19 07:43): after Steve's power-cycle Companion reconnected at 07:43:23, the NDI
+  Machine bridge restarted the same second, ATEM Software Control reconnected, and Broadwatcher's hello was
+  refused at 07:43:30. The switcher is full with those three; its exact capacity is still unmeasured. The NDI
+  Machine project (`A:\___ENGINEERING PROJECTS\NDI Machine`, `native/atem_remote.cpp`, official BMD SDK)
+  keeps `atem-remote.exe <ip> --server` alive while NDI Machine runs; its launcher is a Windows startup item.
+- Not ATEM clients: 192.168.20.176 (web UI "Blackmagic Design", syncs to AWS; Cloud Store-like),
+  192.168.20.237 "BIGs-Air-2" (only TCP 9990 = Videohub protocol).
+- The UDM logs flows to its own address, so a UniFi poller anywhere on the LAN shows up as flows to
+  192.168.20.1:443 (only this PC does, every ~11 s). No flow crosses the UDM on port 9910: every ATEM
+  controller is on the Default VLAN. Internet scanners knock on the forwarded ports all day (180-byte
+  flows from AWS addresses on 1935/5997); only flows above 50 kB count as stream attempts.

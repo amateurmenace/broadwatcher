@@ -25,6 +25,14 @@ broadcast readiness and explain problems.
   **confirmed** (a flow through the gateway aimed at the ATEM, or an ATEM Mini whose stream URL points at
   it), **likely** (a Web Presenter streaming at about the arriving rate), **possible** (an encoder sending
   about the same rate at the same moment).
+- **Stream path check**: one row per gateway port forward that points at broadcast gear (the remote-source
+  path into the HD8 on WAN 1937, the field Mini on 1935, the Tightrope and NDI Bridge forwards). Each row
+  shows who from the internet sent data to that WAN port in the last hour and how much, whether the target
+  is on the network, and whether the switcher's intake rose at the same time. Green = arriving and reaching
+  the target now, amber = reaches the gateway but the switcher's intake did not move (check the remote-source
+  setup, key and format), red = the forward points at a device that is on standby or off the network (the
+  classic case: a sender using the HD8's default port 1935 lands on the field Mini) or the firewall blocked
+  it. Port scanners knocking on open ports are listed as probes and ignored. Click a row for the senders.
 - **Switches**: one row per switch with its ports (top bar = link speed, line = activity, dot = PoE,
   outline = uplink, red = new errors), uptime, CPU, temperature, PoE budget, uplink and totals; "live via
   SNMP" means the counters are read straight from the switch every 3 s.
@@ -40,6 +48,12 @@ broadcast readiness and explain problems.
 - **Inspector / AI**: the right rail. With nothing selected it shows the AI verdict (Ready / Degraded /
   At risk / Down), why, what to do now, a *Reassess* button and **Ask the engineer**, a chat box that
   answers from the live state.
+- **Control connection** (in the switcher's inspector): how the switcher is read. By default Broadwatcher
+  reads the HD8 **through Bitfocus Companion**, which already holds a control session, so Broadwatcher takes
+  none of the switcher's few slots. The section shows Companion's connection state, Broadwatcher's own
+  session (none, held, refused with the next attempt time, or released), the list of programs believed to
+  hold a slot (Companion and the NDI Machine bridge are detected on this PC; ATEM Software Control on the Mac
+  cannot be seen from here), and the switch to *own session* for the raw protocol capture.
 
 ## How the stream detection works
 
@@ -73,9 +87,15 @@ The roster is edited in the app and saved there; everything else is edited in th
 roster edited in the app always wins over the bundled list (new bundled devices are appended on standby).
 
 - `gateway`: URL, Integrations API key, site.
-- `atem`: the switcher the intake meter and stream detector watch (`ip`, `control_port`).
+- `atem`: the switcher the intake meter and stream detector watch (`ip`, `control_port`); `session` = how it
+  is read: `companion` (default, through Companion, no slot), `auto` (Companion, own session only while
+  Companion is away for 3 min), `own` (always one session of its own; enables the protocol capture), `none`;
+  `controllers[]` = the programs listed in the slot census (`detect`: `companion`, `process:<exe>` or empty).
+- `companion`: `url` of Companion's HTTP API (`http://127.0.0.1:8000`), `atem_label` (the bmd-atem connection
+  label, `atem`), `autostart` (the Electron app starts Companion when it is not running).
 - `equipment[]`: `active`, `name`, `ip`, `group`, `role`, optional `probe` (`tcp:<port>`, `atem`, `x32`),
-  `telemetry` (`webpresenter`, `hyperdeck`, `atem`), `min_speed`, `hero: true` for the main switcher.
+  `telemetry` (`webpresenter`, `hyperdeck`, `atem`), `companion` (Companion connection label for a switcher),
+  `min_speed`, `hero: true` for the main switcher.
 - `networks[]`: VLANs in the HUD. `poll`: intervals. `thresholds`: alert levels incl. `stream_min_mbps`.
 - `snmp.community`: the SNMP v2c community (`netwatch`, enabled in UniFi on 2026-10-18).
 - `ai`: `base_url` of any OpenAI-compatible server (default LM Studio on the Broadcast Pix PC,
@@ -98,14 +118,15 @@ Without Electron (Node 22+): `node server/server.js [config.json]`, then open `h
 3. **Give remote encoders their own VLAN** (or let them arrive from the internet) so their streams cross
    the gateway and show up as *confirmed* flows with source and destination port.
 4. Keep **Traffic Identification / Flows** on.
-5. ATEM switchers have a handful of control-connection slots (ATEM Software Control, Companion, panels) and
-   the HD8 keeps a dead or half-open session for about two minutes before freeing its slot. Broadwatcher
-   therefore holds exactly one session per switcher for as long as it runs, keeps it across *Restart server*,
-   never sends bare hellos, and never opens more than one session per two minutes per switcher even if the
-   link flaps or the switcher refuses. A second running copy (for example on the Mac) is a second slot; set
-   the switcher's telemetry to *none* in that copy's roster if slots are tight. If a switcher ever reports
-   "too many clients" with only the expected controllers connected, something else is opening sessions in a
-   loop; the only way to clear phantom sessions quickly is a power-cycle of the switcher.
+5. ATEM switchers have a handful of control-connection slots and the HD8 keeps a dead or half-open session
+   for about two minutes before freeing its slot. On this network three programs hold a slot all the time:
+   Companion, ATEM Software Control and the NDI Machine ATEM bridge (`atem-remote.exe`, started with NDI
+   Machine), and that already fills the HD8: the fourth knock is refused with "too many clients". So
+   Broadwatcher takes **no slot**: it reads the switcher through Companion (the default), and only opens a
+   session of its own when switched to *own session* (one slot, never more than one hello per two minutes,
+   backing off 2, 4, 8 then 15 minutes when refused). A second copy of Broadwatcher on the Mac reads nothing
+   from the switcher until Companion's API is reachable from there. If the switcher refuses even with those
+   three closed, something else is opening sessions in a loop; a power-cycle of the switcher clears phantoms.
 
 ## Development
 
@@ -115,6 +136,8 @@ universal) and Windows (installer + portable) packages into it.
 
 Server modules: `server/unifi.js` (API client), `server/snmp.js` (SNMP v2c), `server/collector.js` (polls,
 rates, stream detector, topology, alerts, event tape, roster, inspector details), `server/probe.js`
-(TCP / X32 OSC), `server/rest.js` (Blackmagic REST), `server/atem.js` (read-only ATEM protocol client),
-`server/ai.js` (digest + prompts), `server/server.js` (HTTP + SSE + roster API). UI: `ui/app.js`,
-`ui/map.js`, `ui/styles.css` (light and dark themes).
+(TCP / X32 OSC), `server/rest.js` (Blackmagic REST), `server/atem.js` (read-only ATEM protocol client with
+the remote-source command capture), `server/companion.js` (Companion HTTP API), `server/ai.js` (digest +
+prompts), `server/server.js` (HTTP + SSE + roster API). UI: `ui/app.js`, `ui/map.js`, `ui/styles.css`
+(light and dark themes). `node scripts/atem-capture.mjs [ip]` captures the HD8's undocumented remote-source
+commands once (one abandoned session: only when no show is on).

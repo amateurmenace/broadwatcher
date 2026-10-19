@@ -1,6 +1,6 @@
 {
   "_comment": "Broadwatcher configuration. The app copies this file to its user-data folder on first run (menu: Broadwatcher > Open config file) and reads that copy from then on. The equipment roster is edited in the app (Broadcast equipment > Edit roster); 'active: false' = on standby: shown greyed, not probed, never an alert.",
-  "config_version": 3,
+  "config_version": 4,
   "gateway": {
     "name": "BIG WAN (UDM Pro Max)",
     "url": "https://192.168.20.1",
@@ -36,7 +36,13 @@
     "ip": "192.168.20.79",
     "control_port": 9910,
     "probe": "atem",
-    "_comment": "Streams arriving at the ATEM are detected from its switch-port counters (any source, even on the same VLAN) and attributed from gateway flows, the field ATEM Mini's own stream settings and the Web Presenters' status."
+    "session": "companion",
+    "_comment": "Streams arriving at the ATEM are detected from its switch-port counters (any source, even on the same VLAN) and attributed from gateway flows, the field ATEM Mini's own stream settings and the Web Presenters' status. session: how the switcher is read. 'companion' (default) = through Companion's HTTP API, Broadwatcher takes none of the switcher's few control slots; 'auto' = Companion, own session only while Companion is away; 'own' = always hold one session (one slot; enables the raw protocol capture); 'none' = no switcher telemetry. controllers: the programs believed to hold slots, shown in the switcher inspector (detect: 'companion', 'process:<exe name>' on this machine, or empty).",
+    "controllers": [
+      { "name": "Companion", "where": "this PC", "detect": "companion" },
+      { "name": "ATEM Software Control", "where": "control-room Mac", "detect": "" },
+      { "name": "NDI Machine ATEM bridge", "where": "this PC, atem-remote.exe (started with NDI Machine)", "detect": "process:atem-remote" }
+    ]
   },
   "networks": [
     "Default",
@@ -53,7 +59,8 @@
       "role": "switcher",
       "probe": "atem",
       "hero": true,
-      "telemetry": "atem"
+      "telemetry": "atem",
+      "companion": "atem"
     },
     {
       "active": true,
@@ -309,5 +316,11 @@
     "_comment": "Real-time port counters straight from the switches. Enable SNMP v2c in UniFi Network > Settings > System > SNMP, put the community string here and restart; empty = off (counters then come from the controller, which refreshes them only when a switch informs it, every 30-90 s).",
     "community": "netwatch",
     "every_s": 3
+  },
+  "companion": {
+    "_comment": "Bitfocus Companion on this machine. Its HTTP API (GET /api/connections, /api/variable/<label>/<name>/value) hands over the switcher state that Companion's own ATEM session already tracks, so Broadwatcher needs no control slot. atem_label = the label of Companion's bmd-atem connection for the main switcher (equipment entries can carry their own 'companion' label). autostart: the Electron app starts Companion when it is not running.",
+    "url": "http://127.0.0.1:8000",
+    "atem_label": "atem",
+    "autostart": true
   }
 }

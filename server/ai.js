@@ -12,7 +12,9 @@ You watch a UniFi network (UDM Pro Max gateway, USW switches, fiber link to Town
 signals: the ATEM Television Studio HD8 ISO switcher in Studio A (remote video streams arrive at it over the network),
 Blackmagic Web Presenters that push the programme to the internet, HyperDeck recorders, a Smart Videohub router,
 Dante audio (VLANs BIG_DANTE, BIG_MOBILE_DANTE) with X32 consoles and Sennheiser EW-DX mics, an NDI VLAN (BIG_NDI),
-Zoom running on a Mac, Tightrope playout servers, and a field kit (ATEM Mini Pro G2, Web Presenter 4K).
+Zoom running on a Mac, Tightrope playout servers, and a field kit (ATEM Mini Extreme ISO G2, Web Presenter 4K).
+Remote streams reach the HD8 from the internet through UDM port forwards (WAN 1937 -> HD8 1935; WAN 1935 goes to the
+field Mini instead); Broadwatcher reads the HD8's state through Bitfocus Companion, which holds the control session.
 Town Meeting nights are the critical events. Be concrete, terse and practical, like a senior broadcast engineer
 talking to a colleague: name devices, ports and numbers, say what is fine, what is risky and what to check first.
 
@@ -25,7 +27,11 @@ Rules of judgement:
 - Laptops, phones and watches connecting or disconnecting from Wi-Fi are normal; wired broadcast gear dropping is not.
 - Portable kit (Flex Minis, field switches) and spares being offline is normal; unidentified devices are low priority.
 - Devices listed as STANDBY are deliberately not part of this broadcast: never mention them as a problem.
-- A stream "arriving" at the ATEM is good news during a show, not a problem; "stopped" during a show is a problem.`
+- A stream "arriving" at the ATEM is good news during a show, not a problem; "stopped" during a show is a problem.
+- An ATEM has only a handful of control slots (Companion, ATEM Software Control, hardware panels, the NDI Machine bridge
+  each hold one). "too many clients" means the slots are full, not that the switcher is down; Broadwatcher holds none by default.
+- STREAM PATHS show the internet -> port forward -> device route of remote streams. A sender on WAN port 1935 lands on the
+  field Mini (usually on standby), not on the HD8, which listens on WAN 1937: say so plainly when a RED path shows it.`
 
 export class AI {
 	constructor(cfg = {}, log = console.log, thresholds = {}) {
@@ -135,14 +141,18 @@ export class AI {
 			L.push(`ATEM ${at.name} ${at.ip}: ${at.equipment?.status || 'not seen'}${at.equipment?.switch ? ` on ${at.equipment.switch.name} port ${at.equipment.switch.port} ${at.equipment.switch.speed}M` : ''}; intake ${rate(at.equipment?.down || 0)} outflow ${rate(at.equipment?.up || 0)}; control port: ${at.equipment?.probe ? (at.equipment.probe.ok ? at.equipment.probe.info?.state || 'ok' : 'NO ANSWER ' + (at.equipment.probe.error || '')) : 'unprobed'}`)
 			L.push(`  STREAM INTAKE: ${st.state || 'unknown'}${st.state === 'arriving' ? ` ~${rate(st.rate || 0)} above baseline ${rate(st.baseline || 0)} since ${new Date(st.since).toLocaleTimeString()}` : ` (baseline ${rate(st.baseline || 0)})`}; sources: ${(st.sources || []).map((x) => `${x.name} [${x.confidence}] ${x.detail || ''}`).join('; ') || 'none identified'}`)
 			if (at.incoming?.length) L.push('  flows into ATEM (last hour): ' + at.incoming.slice(0, 6).map((x) => `${x.srcName || x.src}${x.region ? '/' + x.region : ''} -> ${x.proto}:${x.dport} ${x.service || ''} ${(x.bytes / 1e6).toFixed(1)}MB ${x.live ? 'LIVE' : x.ageS + 's ago'}${x.action === 'blocked' ? ' BLOCKED' : ''}`).join('; '))
+			const ses = at.session
+			if (ses) L.push(`  switcher data source: ${ses.mode === 'companion' ? 'Companion (Broadwatcher holds no control slot)' : ses.mode}; Broadwatcher's own session: ${ses.own ? ses.own.state + (ses.own.error ? ' (' + ses.own.error + ')' : '') : 'none'}; Companion: ${ses.companion ? (ses.companion.ok ? (ses.companion.connected ? 'connected to the switcher' : 'NOT connected to the switcher') : ses.companion.error) : 'not used'}; slot holders: ${(ses.controllers || []).map((c) => `${c.name} ${c.held === null ? 'unknown' : c.held ? 'YES' : 'no'}`).join(', ') || 'unknown'}`)
 		}
+		const sp = state.streamPaths || []
+		if (sp.length) L.push('STREAM PATHS (internet -> gateway port forward -> device, last hour): ' + sp.map((p) => `[${p.status.toUpperCase()}] ${p.name}: WAN ${p.wanPorts} -> ${p.target.name} ${p.target.ip}:${p.target.port} (${p.target.standby ? 'STANDBY' : p.target.online ? 'online' : 'OFFLINE'}) ${p.hits.count} flows ${(p.hits.bytes / 1e6).toFixed(1)}MB${p.hits.blocked ? ' ' + p.hits.blocked + ' blocked' : ''}${p.hits.sources[0] ? ' from ' + (p.hits.sources[0].name || p.hits.sources[0].ip) + (p.hits.sources[0].region ? '/' + p.hits.sources[0].region : '') : ''}: ${p.verdict}`).join(' | '))
 		const standby = state.equipment.filter((e) => e.active === false)
 		if (standby.length) L.push('STANDBY (not part of this broadcast; ignore them, they are expected to be off or away): ' + standby.map((e) => e.name).join(', '))
 		L.push('EQUIPMENT IN THIS BROADCAST:')
 		for (const e of state.equipment) {
 			if (e.discovered || e.active === false) continue
 			const tl = e.telemetry
-			const tele = tl ? (tl.kind === 'webpresenter' ? `stream ${tl.status}${tl.bitrate ? ' ' + (tl.bitrate / 1e6).toFixed(1) + 'Mb/s' : ''}` : tl.kind === 'hyperdeck' ? `deck ${tl.summary}` : tl.kind === 'atem' ? `${tl.product || 'ATEM'} ${tl.streaming ? `streaming ${tl.streaming.state}${tl.streaming.url ? ' -> ' + tl.streaming.url : ''}${tl.streaming.bitrate ? ' ' + (tl.streaming.bitrate / 1e6).toFixed(1) + 'Mb/s' : ''}` : ''}${tl.error ? ' (' + tl.error + ')' : ''}` : '') : ''
+			const tele = tl ? (tl.kind === 'webpresenter' ? `stream ${tl.status}${tl.bitrate ? ' ' + (tl.bitrate / 1e6).toFixed(1) + 'Mb/s' : ''}` : tl.kind === 'hyperdeck' ? `deck ${tl.summary}` : tl.kind === 'atem' ? `${tl.via === 'companion' ? 'via Companion' : tl.product || 'ATEM'}${tl.programName ? ' program ' + tl.programName + (tl.previewName ? ' preview ' + tl.previewName : '') : ''} ${tl.streaming ? `own stream ${tl.streaming.state}${tl.streaming.url ? ' -> ' + tl.streaming.url : ''}${tl.streaming.bitrate ? ' ' + (tl.streaming.bitrate / 1e6).toFixed(1) + 'Mb/s' : ''}` : ''}${tl.recording?.active ? ' RECORDING ' + (tl.recording.duration || '') : ''}${tl.error ? ' (' + tl.error + ')' : ''}` : '') : ''
 			L.push(`  [${e.group}] ${e.name} ${e.ip} ${e.status.toUpperCase()}${e.switch ? ` on ${e.switch.name} p${e.switch.port} ${e.switch.speed}M` : e.online ? ' (wifi)' : e.lastSeen ? ' last seen ' + Math.round((state.ts - e.lastSeen) / 60000) + ' min ago' : ''} in ${rate(e.down)} out ${rate(e.up)}${e.probe ? (e.probe.ok ? ` probe ok ${Math.round(e.probe.ms)}ms${e.probe.info?.state ? ' (' + e.probe.info.state + ')' : ''}` : ` probe FAILED ${e.probe.error || ''}`) : ''}${tele ? ' ' + tele : ''}`)
 		}
 		const aps = state.aps || []

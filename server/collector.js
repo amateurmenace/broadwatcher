@@ -12,6 +12,8 @@ import { probeAll } from './probe.js'
 import { telemetry as restTelemetry } from './rest.js'
 import { AtemClient } from './atem.js'
 import { SnmpSwitch } from './snmp.js'
+import { Companion } from './companion.js'
+import { execFile } from 'node:child_process'
 
 const num = (x) => {
 	const n = Number(x)
@@ -47,6 +49,7 @@ const modelName = (d) => MODEL_NAMES[d.model] || d.model_display || d.shortname 
 // leaving a dead session on the switcher for two minutes and opening a second one
 const ATEM_POOL = new Map() // ip -> AtemClient
 const isPdu = (d) => /^USPPDU|PDU/i.test(d.model || '') || d.type === 'usp'
+const STREAM_HIT_BYTES = 50000 // a forwarded flow below this is a port scan or a handshake that went nowhere, not a stream
 const mbps = (bytesPerS) => Math.round((num(bytesPerS) * 8) / 1e5) / 10 // Mb/s with one decimal
 const lower = (s) => String(s || '').toLowerCase()
 
@@ -88,7 +91,13 @@ export class Collector extends EventEmitter {
 			events: [],
 			log: [],
 			updated: {},
+			streamPaths: [],
+			companion: null,
 		}
+		this.companion = new Companion(config.companion || {}, log)
+		this.companionState = new Map() // atem ip -> {lastOk, okSince} for the companion/auto hysteresis
+		this.forwardHits = new Map() // port-forward name -> [{t, src, srcName, region, bytes, action, wanPort}] last hour
+		this.processes = { t: 0, names: new Set() } // process census for the switcher slot list (refreshed every minute)
 		this.counters = new Map() // "mac:port" -> {rx, tx, t, down, up, tRate, errors}
 		this.hist = new Map() // key -> {down: Ring, up: Ring}
 		this.aliases = new Map() // mac -> name from rest/user
@@ -269,27 +278,14 @@ export class Collector extends EventEmitter {
 	async pollTelemetry() {
 		const now = Date.now()
 		const items = this.cfg.equipment.filter((e) => e.active !== false && e.ip && (e.telemetry || String(e.probe || '').startsWith('atem'))).map((e) => (e.telemetry || !String(e.probe || '').startsWith('atem') ? e : { ...e, telemetry: 'atem' }))
+		const companionStatus = await this.companion.status()
+		this.state.companion = { ...companionStatus, lastOk: this.companion.lastOk, connections: companionStatus.connections.filter((c) => /^bmd-|behringer|sennheiser|ndi|unifi|obs/i.test(c.module) || c.module === 'generic-http') }
 		await Promise.all(
 			items.map(async (e) => {
 				try {
 					let t = null
-					if (e.telemetry === 'atem') {
-						// one persistent session per switcher (one control slot), which doubles as the reachability probe
-						let c = this.atems.get(e.ip)
-						if (!c) {
-							c = new AtemClient(e.ip, { log: this.log })
-							this.atems.set(e.ip, c)
-						}
-						if (!c.listenerCount('connected')) {
-							c.on('connected', () => this.event('device', `${e.name}: connected to the switcher (${c.data.product || 'ATEM'})`, { entity: { type: 'equipment', id: e.ip } }))
-							c.on('disconnected', (err) => this.event('device', `${e.name}: switcher session lost (${err}); next attempt in 2 min`, { entity: { type: 'equipment', id: e.ip }, level: 'warn' }))
-						}
-						c.ensure()
-						t = c.snapshot()
-						const full = c.state === 'refused' && c.error === 'too many clients'
-						const reachable = c.state === 'connected' || full
-						this.probes.set(e.ip, this.settle(e.ip, { ok: reachable, ms: c.state === 'connected' ? 1 : 0, error: reachable ? undefined : c.error || 'connecting', info: { state: full ? 'too many clients' : c.state === 'connected' ? `connected · ${c.commands} updates` : c.state }, t: now }))
-					} else t = await restTelemetry(e.telemetry, e.ip)
+					if (e.telemetry === 'atem') t = await this.atemTelemetry(e, now)
+					else t = await restTelemetry(e.telemetry, e.ip)
 					if (t) this.telemetry.set(e.ip, { ...t, t: Date.now() })
 					else this.telemetry.delete(e.ip)
 				} catch (err) {
@@ -298,6 +294,137 @@ export class Collector extends EventEmitter {
 			}),
 		)
 		this.state.updated.telemetry = Date.now()
+	}
+
+	// How a switcher is read. Every app that talks to an ATEM takes one of its few control slots (the HD8 was full
+	// with Companion, ATEM Software Control and the NDI Machine bridge), so by default the switcher is read through
+	// Companion's HTTP API, which costs the switcher nothing. Modes (config atem.session):
+	//   companion  read through Companion; never open our own session (default)
+	//   auto       Companion when it answers; our own session only after Companion has been away for 3 minutes,
+	//              released again a minute after Companion is back
+	//   own        always hold our own session (one slot; needed for the raw protocol capture)
+	//   none       no switcher telemetry at all
+	// A switcher with no Companion label (the field Mini) is read with its own session unless the mode is "none".
+	atemMode(e) {
+		const mode = this.cfg.atem?.session || 'companion'
+		const label = e.companion || (e.ip === this.cfg.atem?.ip ? this.cfg.companion?.atem_label : null) || null
+		if (mode === 'none') return { mode, label }
+		if (mode === 'own' || !label) return { mode: 'own', label }
+		return { mode, label }
+	}
+
+	async atemTelemetry(e, now) {
+		const { mode, label } = this.atemMode(e)
+		const cs = this.companionState.get(e.ip) || { lastOk: this.state.started, okSince: 0 }
+		this.companionState.set(e.ip, cs)
+		let viaCompanion = null
+		if (mode === 'companion' || mode === 'auto') {
+			try {
+				viaCompanion = await this.companion.atem(label)
+				if (!viaCompanion) viaCompanion = { kind: 'atem', via: 'companion', label, error: `Companion has no connection labelled "${label}"` }
+			} catch (err) {
+				viaCompanion = { kind: 'atem', via: 'companion', label, error: `Companion not reachable at ${this.companion.url}` }
+			}
+		}
+		const companionLive = !!viaCompanion && !viaCompanion.error
+		if (companionLive) {
+			if (!cs.okSince) cs.okSince = now
+			cs.lastOk = now
+		} else cs.okSince = 0
+		const pooled = this.atems.get(e.ip)
+		const wantOwn = mode === 'own' || (mode === 'auto' && !companionLive && now - cs.lastOk > 180000)
+		const releaseOwn = mode === 'none' || mode === 'companion' || (mode === 'auto' && companionLive && now - cs.okSince > 60000)
+		if (wantOwn) {
+			let c = pooled
+			if (!c || c.closed) {
+				c = new AtemClient(e.ip, { log: this.log })
+				this.atems.set(e.ip, c)
+			}
+			if (!c.listenerCount('connected')) {
+				c.on('connected', () => this.event('device', `${e.name}: Broadwatcher holds a control connection (${c.data.product || 'ATEM'})`, { entity: { type: 'equipment', id: e.ip } }))
+				c.on('disconnected', (err) => this.event('device', `${e.name}: switcher session lost (${err}); next attempt in 2 min`, { entity: { type: 'equipment', id: e.ip }, level: 'warn' }))
+				c.on('refused', () => c.refusals === 1 && this.event('device', `${e.name} refused a control connection (too many clients): its slots are held by other controllers; Broadwatcher backs off (2, 4, 8, then 15 min)`, { entity: { type: 'equipment', id: e.ip }, level: 'warn' }))
+				c.on('released', () => this.event('device', `${e.name}: Broadwatcher released its control connection (the switcher frees the slot in ~2 min)`, { entity: { type: 'equipment', id: e.ip } }))
+			}
+			c.ensure()
+			const snap = c.snapshot()
+			const full = c.state === 'refused' && c.error === 'too many clients'
+			const reachable = c.state === 'connected' || full
+			this.probes.set(e.ip, this.settle(e.ip, { ok: reachable, ms: c.state === 'connected' ? 1 : 0, error: reachable ? undefined : c.error || 'connecting', info: { state: full ? 'too many clients' : c.state === 'connected' ? `connected · ${c.commands} updates` : c.state }, t: now }))
+			return { ...snap, mode, companion: viaCompanion ? { ok: companionLive, error: viaCompanion.error || null, label } : null }
+		}
+		if (pooled && !pooled.closed && releaseOwn) pooled.close()
+		const session = pooled ? pooled.snapshot() : null
+		if (mode === 'none') {
+			this.probes.delete(e.ip)
+			return null
+		}
+		if (!companionLive) {
+			// Companion itself is away: we cannot tell whether the switcher answers, so no probe verdict at all
+			this.probes.delete(e.ip)
+			return { ...viaCompanion, mode, session }
+		}
+		this.probes.set(e.ip, this.settle(e.ip, { ok: viaCompanion.connected, ms: 0, error: viaCompanion.connected ? undefined : viaCompanion.error || 'Companion is not connected to it', info: { state: viaCompanion.connected ? `via Companion "${label}"` : viaCompanion.companionStatus }, t: now }))
+		return { ...viaCompanion, mode, session }
+	}
+
+	// manual control of our own switcher session (inspector buttons)
+	atemSession(ip, action) {
+		const e = this.cfg.equipment.find((x) => x.ip === ip)
+		if (!e) return { error: 'unknown switcher' }
+		let c = this.atems.get(ip)
+		if (action === 'release') {
+			if (!c) return { ok: true, state: 'idle' }
+			c.close()
+			return { ok: true, state: c.state }
+		}
+		if (action === 'connect') {
+			if (!c || c.closed) {
+				c = new AtemClient(ip, { log: this.log })
+				this.atems.set(ip, c)
+			}
+			const note = c.connectNow()
+			return { ok: true, state: c.state, note }
+		}
+		return { error: 'unknown action' }
+	}
+
+	// the other programs that may hold one of the switcher's control slots: Companion (asked over its API), listed
+	// processes on this machine (tasklist / ps once a minute) and anything the roster says runs elsewhere
+	refreshProcesses(now) {
+		if (now - this.processes.t < 60000) return
+		this.processes.t = now
+		// tasklist takes 6-7 s on a busy PC; PowerShell answers in about a second
+		const win = process.platform === 'win32'
+		execFile(win ? 'powershell' : 'ps', win ? ['-NoProfile', '-NonInteractive', '-Command', '(Get-Process).ProcessName'] : ['-axo', 'comm'], { windowsHide: true, timeout: 20000, maxBuffer: 8 << 20 }, (err, out) => {
+			if (err) return
+			const names = new Set()
+			for (const line of String(out).split(/\r?\n/)) {
+				const n = line.trim().split('/').pop()
+				if (n) names.add(lower(n).replace(/\.exe$/, ''))
+			}
+			this.processes.names = names
+		})
+	}
+
+	knownControllers(now) {
+		this.refreshProcesses(now)
+		const list = Array.isArray(this.cfg.atem?.controllers) ? this.cfg.atem.controllers : []
+		const comp = this.state.companion
+		return list.map((k) => {
+			let held = null
+			let how = ''
+			if (k.detect === 'companion') {
+				const c = (comp?.connections || []).find((x) => x.module === 'bmd-atem' && (!k.label || x.label === k.label))
+				held = comp?.ok ? !!c && c.status === 'good' : null
+				how = comp?.ok ? (c ? `Companion connection "${c.label}" is ${c.status}` : 'Companion has no ATEM connection') : 'Companion not reachable'
+			} else if (String(k.detect || '').startsWith('process:')) {
+				const name = lower(k.detect.slice(8)).replace(/\.exe$/, '')
+				held = this.processes.names.size ? this.processes.names.has(name) : null
+				how = held === null ? 'process list not read yet' : held ? `${name} is running on this machine` : `${name} is not running`
+			} else how = 'cannot be seen from here'
+			return { name: k.name, where: k.where || '', held, how }
+		})
 	}
 
 	// one missed answer is not a failure (UDP, busy devices): the previous good result stands until two misses in a row
@@ -415,6 +542,11 @@ export class Collector extends EventEmitter {
 					rec.dst = t.ip
 					rec.dport = t.port
 					rec.dstName = this.cfg.equipment.find((e) => e.ip === t.ip)?.name || rec.dstName
+					// remembered per forward for the stream path check (who hit which WAN port, when, how much)
+					const hl = this.forwardHits.get(t.name) || []
+					hl.push({ t: rec.t, src: rec.src, srcName: rec.srcName, region: rec.srcRegion, bytes, packets: rec.packets, action: rec.action, wanPort: t.wanPort, proto: rec.proto })
+					if (hl.length > 400) hl.splice(0, hl.length - 400)
+					this.forwardHits.set(t.name, hl)
 				}
 			}
 			bytesTop.push(rec)
@@ -757,14 +889,18 @@ export class Collector extends EventEmitter {
 		if (atemCfg?.ip) {
 			const eq = equipment.find((e) => e.ip === atemCfg.ip)
 			const incoming = [...this.incoming.values()].sort((a, b) => b.last - a.last)
+			const pooled = this.atems.get(atemCfg.ip)
+			const { mode, label } = this.atemMode(eq || atemCfg)
 			this.state.atem = {
 				...atemCfg,
 				equipment: eq || null,
 				incoming: incoming.map((s) => ({ ...s, live: now - s.last < 45000, ageS: Math.round((now - s.last) / 1000) })),
 				liveCount: incoming.filter((s) => now - s.last < 45000).length,
 				stream: this.detectStream(eq, equipment, incoming, now),
+				session: { mode, label, own: pooled ? pooled.snapshot() : null, companion: eq?.telemetry?.via === 'companion' ? { ok: !eq.telemetry.error, error: eq.telemetry.error || null, connected: !!eq.telemetry.connected } : null, controllers: this.knownControllers(now), holdMs: AtemClient.SLOT_HOLD_MS },
 			}
 		}
+		this.state.streamPaths = this.streamPaths(now, equipment, clientByIp)
 
 		this.state.topology = this.buildTopology(gateway, switches, aps, others, equipment)
 		this.state.alerts = this.computeAlerts(now)
@@ -843,6 +979,79 @@ export class Collector extends EventEmitter {
 		return { state: s.state, intake, baseline: Math.round(s.baseline * 10) / 10, rate: Math.round(s.rate * 10) / 10, peak: Math.round(s.peak * 10) / 10, since: s.since, until: s.until, sources, port: eq.switch ? { switch: eq.switch.name, port: eq.switch.port, speed: eq.switch.speed, age: eq.age } : null }
 	}
 
+	// Stream path check: one row per UDM port forward that points at broadcast gear. Did anything from the internet
+	// hit that WAN port in the last hour (who, how much), is the target on the network, and for the switcher: did
+	// its intake rise while packets were being forwarded? The classic failure on this network is a sender using
+	// the HD8's default port 1935, which the UDM forwards to the field Mini (usually on standby) instead of WAN 1937.
+	streamPaths(now, equipment, clientByIp) {
+		const wanIp = this.state.gateway?.wan?.ip || null
+		const atemIp = this.cfg.atem?.ip || null
+		const forwards = this.portForwards || []
+		const heroFwd = atemIp ? forwards.find((x) => x.to === atemIp) : null
+		const paths = []
+		for (const f of forwards) {
+			const eq = equipment.find((e) => e.ip === f.to) || null
+			if (!eq && !/atem|rtmp|srt|ndi|stream|hyperdeck|presenter|bridge|patchbay/i.test(f.name)) continue
+			const hits = (this.forwardHits.get(f.name) || []).filter((h) => now - h.t < 3600000)
+			const allowed = hits.filter((h) => h.action !== 'blocked')
+			const blocked = hits.length - allowed.length
+			// internet scanners knock on every open port all day (a few hundred bytes per flow); only flows that carry
+			// data count as a stream attempt, the knocks are listed as probes
+			const srcs = new Map()
+			for (const h of allowed) {
+				const s = srcs.get(h.src) || { ip: h.src, name: h.srcName || null, region: h.region || null, bytes: 0, flows: 0, last: 0, first: h.t, ports: new Set() }
+				s.bytes += h.bytes
+				s.flows++
+				s.last = Math.max(s.last, h.t)
+				s.first = Math.min(s.first, h.t)
+				s.name = h.srcName || s.name
+				s.ports.add(`${h.proto} ${h.wanPort}`)
+				srcs.set(h.src, s)
+			}
+			const sources = [...srcs.values()].sort((a, b) => b.last - a.last).map((s) => ({ ...s, ports: [...s.ports], probe: s.bytes < STREAM_HIT_BYTES }))
+			const senders = sources.filter((s) => !s.probe)
+			const probes = sources.filter((s) => s.probe)
+			const data = allowed.filter((h) => srcs.get(h.src)?.bytes >= STREAM_HIT_BYTES)
+			const live = data.filter((h) => now - h.t < 120000)
+			const c = clientByIp.get(f.to)
+			const target = { ip: f.to, port: f.toPorts, name: eq?.name || c?._name || f.to, online: eq ? eq.online : !!c, standby: !!eq && !eq.active, isAtem: f.to === atemIp, equipment: !!eq, switch: eq?.switch ? `${eq.switch.name} port ${eq.switch.port}` : null }
+			const st = this.stream
+			const intake = target.isAtem ? { state: st.state, rate: Math.round(st.rate * 10) / 10, since: st.since, until: st.until } : null
+			const srcTxt = senders[0] ? `${senders[0].name || senders[0].ip}${senders[0].region ? ' (' + senders[0].region + ')' : ''}` : 'an unknown sender'
+			const last = data.reduce((n, h) => Math.max(n, h.t), 0)
+			const probeTxt = probes.length ? `; ${probes.length} connection probe${probes.length === 1 ? '' : 's'} (${probes.reduce((n, s) => n + s.flows, 0)} tiny flows from ${probes.slice(0, 2).map((s) => s.ip).join(', ')}${probes.length > 2 ? '…' : ''}) ignored` : ''
+			let status
+			let verdict
+			if (!data.length && !blocked) {
+				status = 'idle'
+				verdict = `no stream data from the internet on WAN port ${f.wanPorts} in the last hour${probeTxt}`
+			} else if (!data.length) {
+				status = blocked >= 3 ? 'red' : 'idle'
+				verdict = `${blocked} connection${blocked === 1 ? '' : 's'} to WAN port ${f.wanPorts} blocked by the firewall in the last hour${probeTxt}`
+			} else if (target.standby) {
+				status = 'red'
+				verdict = `${srcTxt} is sending to WAN port ${f.wanPorts}, which the gateway forwards to ${target.name} (on standby, not part of this broadcast)${heroFwd && heroFwd !== f ? `; the ${this.cfg.atem.name} listens on WAN port ${heroFwd.wanPorts}` : ''}`
+			} else if (!target.online) {
+				status = 'red'
+				verdict = `${srcTxt} reached WAN port ${f.wanPorts} but UniFi does not list ${target.name} on the network`
+			} else if (target.isAtem && live.length && st.state !== 'arriving') {
+				status = 'amber'
+				verdict = `packets from ${srcTxt} are being forwarded to the switcher but its intake has not risen: check the remote-source setup on the switcher (source enabled, stream key, format) and that the sender is really transmitting`
+			} else if (live.length) {
+				status = 'green'
+				verdict = `live: ${srcTxt} → ${target.name}${intake?.state === 'arriving' ? ` · intake up ${intake.rate} Mb/s` : ''}`
+			} else {
+				status = 'ok'
+				verdict = `last used ${Math.max(1, Math.round((now - last) / 60000))} min ago by ${srcTxt}`
+			}
+			const firstPort = String(f.wanPorts).split(/[,-]/)[0]
+			paths.push({ id: f.name, name: f.name, proto: f.proto, wanIp, wanPorts: f.wanPorts, target, hits: { count: data.length, probes: probes.reduce((n, s) => n + s.flows, 0), blocked, live: live.length, bytes: data.reduce((n, h) => n + h.bytes, 0), last, sources: [...senders, ...probes].slice(0, 6) }, intake, status, verdict, url: wanIp ? `${/srt/i.test(f.name) ? 'srt' : 'rtmp'}://${wanIp}:${firstPort}` : null })
+		}
+		const order = { red: 0, amber: 1, green: 2, ok: 3, idle: 4 }
+		paths.sort((a, b) => order[a.status] - order[b.status] || Number(b.target.isAtem) - Number(a.target.isAtem))
+		return paths
+	}
+
 	buildTopology(gateway, switches, aps, others, equipment) {
 		const nodes = []
 		const links = []
@@ -891,6 +1100,7 @@ export class Collector extends EventEmitter {
 			if (['webpresenter', 'hyperdeck', 'atem'].includes(raw.telemetry)) e.telemetry = raw.telemetry
 			if (raw.min_speed !== undefined && raw.min_speed !== null && raw.min_speed !== '') e.min_speed = Number(raw.min_speed) || 0
 			if (raw.hero) e.hero = true
+			if (raw.companion && /^[\w-]{1,40}$/.test(String(raw.companion))) e.companion = String(raw.companion) // Companion connection label (read the switcher through Companion)
 			clean.push(e)
 		}
 		if (!clean.some((e) => e.hero) && this.cfg.atem?.ip) {
@@ -956,7 +1166,7 @@ export class Collector extends EventEmitter {
 			const ent = { type: 'equipment', id: e.ip }
 			if (!e.online) push(e.hero ? 'error' : 'warn', 'equipment', 'offline', ent, `${e.name} not on the network`, `UniFi does not see ${e.name} (${e.ip}) on any switch port or access point${e.lastSeen ? `; it was last seen ${Math.round((now - e.lastSeen) / 60000)} min ago` : ''}. Powered off, unplugged, or its link is down.`)
 			else if (e.reachable === false) push(e.hero ? 'error' : 'warn', 'equipment', 'unresponsive', ent, `${e.name} not answering (${e.probeSpec}: ${e.probe?.error || 'no reply'})`, `${e.name} is on the network but its control port does not answer. The device may be booting, frozen, or a firewall/VLAN rule is in the way. Control from Companion and ATEM/HyperDeck software will fail until it answers.`)
-			else if (e.probe?.info?.state === 'too many clients') push('warn', 'equipment', 'clients', ent, `${e.name} has no free control connection (too many clients)`, 'Every control-connection slot of the ATEM is taken (ATEM Software Control, Companion, panels, Broadwatcher probes). Another controller will fail to connect until one disconnects. Close unused ATEM Software Control windows.')
+			else if (e.probe?.info?.state === 'too many clients') push('warn', 'equipment', 'clients', ent, `${e.name} refused Broadwatcher's control connection (all slots taken)`, `The switcher answered "too many clients": every one of its few control slots is held by another program (Companion, ATEM Software Control, hardware panels, the NDI Machine ATEM bridge, another Broadwatcher). Broadwatcher holds none and backs off (2, 4, 8, then 15 min between attempts). A program that was closed keeps its slot for about two minutes. To stop knocking altogether, read the switcher through Companion (switcher inspector > Control connection > Companion).`)
 			else if (e.switch?.speed && minSpeed && e.switch.speed < minSpeed) push('warn', 'equipment', 'speed', ent, `${e.name} linked at ${e.switch.speed} Mb/s`, `${e.name} negotiated ${e.switch.speed} Mb/s on ${e.switch.name} port ${e.switch.port}. Video streams and NDI need gigabit: check the cable and the port.`)
 			if (e.telemetry && !e.telemetry.error) {
 				const tl = e.telemetry
@@ -966,6 +1176,14 @@ export class Collector extends EventEmitter {
 		}
 		const at = st.atem
 		if (at?.equipment?.online && at.stream?.state === 'arriving' && at.stream.port?.speed && at.stream.port.speed < 1000) push('warn', 'stream', 'port', { type: 'atem' }, `Stream arriving over a ${at.stream.port.speed} Mb/s link`, 'The ATEM port is below gigabit while a stream is arriving.')
+		for (const p of st.streamPaths || []) {
+			const ent = { type: 'path', id: p.id }
+			const recent = p.hits.last && now - p.hits.last < 600000 && p.hits.bytes >= 500000
+			const heroFwd = (this.portForwards || []).find((x) => x.to === this.cfg.atem?.ip)
+			if (p.status === 'red' && recent && p.target.standby) push('warn', 'stream', 'path', ent, `Remote stream sent to WAN port ${p.wanPorts}, which goes to ${p.target.name} (standby)`, `${p.verdict}. ${heroFwd ? `Senders for the ${this.cfg.atem.name} must use ${/srt/i.test(heroFwd.name) ? 'srt' : 'rtmp'}://${p.wanIp}:${String(heroFwd.wanPorts).split(/[,-]/)[0]}/…, or swap the two port forwards in UniFi (Settings > Routing > Port Forwarding).` : ''}`)
+			else if (p.status === 'red' && recent && !p.target.online) push('warn', 'stream', 'path', ent, `Stream arriving for ${p.target.name}, which is not on the network`, `${p.verdict}. The gateway forwards the packets to ${p.target.ip} but nothing answers there: power, cable or the wrong forward target.`)
+			else if (p.status === 'amber') push('warn', 'stream', 'path', ent, `Stream reaches the gateway on WAN port ${p.wanPorts} but the switcher's intake did not rise`, `${p.verdict}. If the switcher rejects the stream (wrong key, wrong format, source disabled) the bytes still land on its switch port but no picture appears; the remote source must also be switched to an input (Streaming 1/2 macros).`)
+		}
 		for (const o of st.others) if (o.kind === 'pdu' && o.online && o.outlets && o.outletsOn < o.outlets) push('info', 'power', 'outlets', { type: 'pdu', id: o.mac }, `${o.name}: ${o.outlets - o.outletsOn} outlet(s) switched off`, 'Some outlets on this PDU are off. Fine if intended.')
 		// clear memory of alerts that are gone
 		const ids = new Set(a.map((x) => x.id))
@@ -1018,6 +1236,9 @@ export class Collector extends EventEmitter {
 		} else if (type === 'wan') {
 			entity = st.gateway ? { ...st.gateway.wan, gateway: st.gateway.name } : null
 			names = ['WAN', 'Internet', st.gateway?.name].filter(Boolean)
+		} else if (type === 'path') {
+			entity = (st.streamPaths || []).find((p) => p.id === id) || null
+			if (entity) names = [entity.target.name, entity.target.ip, ...entity.hits.sources.map((s) => s.ip)].filter(Boolean)
 		} else if (type === 'api') {
 			entity = { errors: st.errors, updated: st.updated }
 		}

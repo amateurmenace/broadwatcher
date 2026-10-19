@@ -48,6 +48,12 @@ port 15 with no picture.
 show WAN port → target, whether any inbound flow hit it in the last hour (bytes, source, country), whether the
 target is on the network, and whether the ATEM's intake rose at the same time. One row per path, green/amber/red.
 
+**Done in 0.4.0 (2026-10-19):** the *Stream path check* block and its alerts (`collector.streamPaths`); flows
+below 50 kB are listed as probes (AWS scanners knock on 1935/5997 all day). Also found and fixed the "too many
+clients" problem: Companion, ATEM Software Control and the NDI Machine bridge already fill the HD8, so the app
+now reads the switcher through Companion's HTTP API and holds no slot (`atem.session`); the capture of the
+remote-source commands lives in `AtemClient` (own-session mode) and `scripts/atem-capture.mjs`.
+
 ---
 
 ## 1. Should a mirror port watch the ATEM?
