@@ -293,14 +293,15 @@
     "Teradek"
   ],
   "ai": {
-    "_comment": "Any OpenAI-compatible chat server works (LM Studio on the Broadcast Pix PC by default, reachable on the LAN). To use Anthropic instead set provider to 'anthropic' and anthropic_api_key.",
+    "_comment": "Any OpenAI-compatible chat server works (LM Studio on the Broadcast Pix PC by default, reachable on the LAN). To use Anthropic instead set provider to 'anthropic' and put your key in anthropic_api_key (or set the ANTHROPIC_API_KEY environment variable); anthropic_model defaults to Claude Opus 5.5, anthropic_effort low|medium|high.",
     "enabled": true,
     "provider": "openai",
     "base_url": "http://192.168.20.75:1234/v1",
     "model": "gemma-flash",
     "api_key": "",
     "anthropic_api_key": "",
-    "anthropic_model": "claude-sonnet-5-5",
+    "anthropic_model": "claude-opus-5-5",
+    "anthropic_effort": "medium",
     "assess_every_s": 180,
     "timeout_ms": 90000
   },

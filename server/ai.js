@@ -2,7 +2,10 @@
 //  - an overall broadcast-readiness verdict (cached, refreshed on demand or when alerts change)
 //  - a diagnosis of one alert
 //  - answers to free questions about the network
-// Works with any OpenAI-compatible server (LM Studio on the Broadcast Pix PC by default) or Anthropic.
+// Works with any OpenAI-compatible server (LM Studio on the Broadcast Pix PC by default) or Anthropic's API
+// through the official SDK (set ai.provider = "anthropic" and ai.anthropic_api_key, or the ANTHROPIC_API_KEY
+// environment variable; the model defaults to Claude Opus 5.5).
+import Anthropic from '@anthropic-ai/sdk'
 
 const SYSTEM = `You are the network engineer on duty at Brookline Interactive Group (BIG), a community TV station.
 You watch a UniFi network (UDM Pro Max gateway, USW switches, fiber link to Town Hall) that carries live broadcast
@@ -26,7 +29,7 @@ Rules of judgement:
 
 export class AI {
 	constructor(cfg = {}, log = console.log, thresholds = {}) {
-		this.cfg = { enabled: true, provider: 'openai', base_url: '', model: '', api_key: '', anthropic_api_key: '', anthropic_model: 'claude-sonnet-5-5', timeout_ms: 90000, assess_every_s: 180, ...cfg }
+		this.cfg = { enabled: true, provider: 'openai', base_url: '', model: '', api_key: '', anthropic_api_key: '', anthropic_model: 'claude-opus-5-5', anthropic_effort: 'medium', timeout_ms: 90000, assess_every_s: 180, ...cfg }
 		this.thresholds = thresholds
 		this.log = log
 		this.assessment = null // {verdict, headline, reasons, actions, model, t, ms}
@@ -35,12 +38,15 @@ export class AI {
 		this.lastError = null
 	}
 
+	get hasAnthropicKey() {
+		return !!(this.cfg.anthropic_api_key || process.env.ANTHROPIC_API_KEY)
+	}
 	get provider() {
-		if (this.cfg.provider === 'anthropic' || (!this.cfg.base_url && this.cfg.anthropic_api_key)) return 'anthropic'
+		if (this.cfg.provider === 'anthropic' || (!this.cfg.base_url && this.hasAnthropicKey)) return 'anthropic'
 		return 'openai'
 	}
 	get enabled() {
-		return this.cfg.enabled !== false && (this.provider === 'anthropic' ? !!this.cfg.anthropic_api_key : !!this.cfg.base_url)
+		return this.cfg.enabled !== false && (this.provider === 'anthropic' ? this.hasAnthropicKey : !!this.cfg.base_url)
 	}
 	get modelName() {
 		return this.provider === 'anthropic' ? this.cfg.anthropic_model : this.cfg.model || '(server default)'
@@ -56,16 +62,32 @@ export class AI {
 		try {
 			let text
 			if (this.provider === 'anthropic') {
+				// official SDK; adaptive thinking is on by default on Claude Opus 5.5 (depth via output_config.effort),
+				// sampling parameters are not sent, and a safety decline is re-run on a fallback model server-side
+				const client = this.anthropic || (this.anthropic = new Anthropic({ apiKey: this.cfg.anthropic_api_key || undefined, timeout: this.cfg.timeout_ms, maxRetries: 2 }))
 				const sys = messages.filter((m) => m.role === 'system').map((m) => m.content).join('\n\n')
-				const r = await fetch('https://api.anthropic.com/v1/messages', {
-					method: 'POST',
-					headers: { 'content-type': 'application/json', 'x-api-key': this.cfg.anthropic_api_key, 'anthropic-version': '2023-06-01' },
-					body: JSON.stringify({ model: this.cfg.anthropic_model, max_tokens: maxTokens, temperature, system: sys, messages: messages.filter((m) => m.role !== 'system') }),
-					signal: AbortSignal.timeout(this.cfg.timeout_ms),
-				})
-				if (!r.ok) throw new Error(`Anthropic HTTP ${r.status}: ${(await r.text()).slice(0, 200)}`)
-				const j = await r.json()
-				text = (j.content || []).map((c) => c.text || '').join('')
+				let r
+				try {
+					r = await client.beta.messages.create({
+						model: this.cfg.anthropic_model,
+						max_tokens: Math.max(maxTokens, 4000),
+						betas: ['server-side-fallback-2026-07-01'],
+						fallbacks: 'default',
+						output_config: { effort: this.cfg.anthropic_effort || 'medium' },
+						system: sys,
+						messages: messages.filter((m) => m.role !== 'system'),
+					})
+				} catch (e) {
+					if (e instanceof Anthropic.BadRequestError && /fallback|beta|output_config|effort/i.test(e.message)) {
+						// an account or model that does not take the fallback / effort parameters: plain request
+						r = await client.messages.create({ model: this.cfg.anthropic_model, max_tokens: Math.max(maxTokens, 4000), system: sys, messages: messages.filter((m) => m.role !== 'system') })
+					} else if (e instanceof Anthropic.AuthenticationError) throw new Error('Anthropic API key rejected (check ai.anthropic_api_key)')
+					if (e instanceof Anthropic.RateLimitError) throw new Error('Anthropic rate limit, try again in a minute')
+					if (e instanceof Anthropic.APIError) throw new Error(`Anthropic API error ${e.status}: ${e.message}`)
+					throw e
+				}
+				if (r.stop_reason === 'refusal') throw new Error('the model declined this request' + (r.stop_details?.explanation ? ': ' + r.stop_details.explanation : ''))
+				text = r.content.filter((b) => b.type === 'text').map((b) => b.text).join('')
 			} else {
 				const r = await fetch(`${this.cfg.base_url.replace(/\/+$/, '')}/chat/completions`, {
 					method: 'POST',

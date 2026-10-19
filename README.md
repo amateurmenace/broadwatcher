@@ -79,7 +79,11 @@ roster edited in the app always wins over the bundled list (new bundled devices 
 - `networks[]`: VLANs in the HUD. `poll`: intervals. `thresholds`: alert levels incl. `stream_min_mbps`.
 - `snmp.community`: the SNMP v2c community (`netwatch`, enabled in UniFi on 2026-10-18).
 - `ai`: `base_url` of any OpenAI-compatible server (default LM Studio on the Broadcast Pix PC,
-  `http://192.168.20.75:1234/v1`, model `gemma-flash`) or `provider: "anthropic"` + `anthropic_api_key`.
+  `http://192.168.20.75:1234/v1`, model `gemma-flash`), or Anthropic's API for use away from the studio or for a
+  stronger model: set `provider: "anthropic"` and `anthropic_api_key` (or set the `ANTHROPIC_API_KEY` environment
+  variable on the machine), `anthropic_model` (default `claude-opus-5-5`) and `anthropic_effort` (`low`, `medium`,
+  `high`). Never paste the key anywhere but that file. A readiness assessment is a few thousand input tokens and a
+  few hundred out; at the default three-minute cadence that is roughly $0.50 an hour of open app on Opus 5.5.
 
 Without Electron (Node 22+): `node server/server.js [config.json]`, then open `http://127.0.0.1:8766`.
 `NETWATCH_HOST=0.0.0.0` exposes it to the LAN. `GET /api/ai/digest` shows exactly what the AI is told.
