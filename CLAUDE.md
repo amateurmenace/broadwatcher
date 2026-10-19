@@ -135,11 +135,21 @@ touching anything. The roadmap for the next phase is in `docs/ROADMAP.md`.
 - The Broadcast Pix PC has 192.168.20.75 (Default, Fiber Agg port 13, 10G), 10.56.20.33 "NDI NIC" (BIG_NDI,
   LIGHTHOUSE port 10) and since 2026-10-19 192.168.5.19 "DANTE NIC" (BIG_MOBILE_DANTE, LIGHTHOUSE port 3,
   profile "DANTE MOBILE Pro AV"). Steve manages Dante with Dante Director (cloud), site "BIG Mobile Dante";
-  passive PTP/mDNS monitoring does not conflict with it. A 9-second passive listen on 224.0.1.129 saw PTP v1
-  from BIG_DANTE (354) addresses only: leader 10.56.19.213 (PRISM 12x12, Town Hall), followers 10.56.19.29,
-  .128, .130; nothing from any 192.168.5.x device. Multicast is not routed between those VLANs in UniFi
-  (mdns and igmp off on both), so something bridges VLAN 354 into VLAN 2 at layer 2 (a Dante device with its
-  two ports in switched mode plugged into both?) — also a suspect for the MAC flapping of 08:06-08:35.
+  passive PTP/mDNS monitoring does not conflict with it. Two Dante clock domains: the mobile Dante devices
+  (X32 Dante card 192.168.5.122, .200, .132) clock on multicast **224.0.1.131**, Town Hall (leader PRISM
+  12x12 10.56.19.213, followers 10.56.19.29/.130) on 224.0.1.129. The Town Hall frames reach the DANTE NIC
+  and the mirror **tagged VLAN 354** (verified with tshark `vlan.id`): IGMP snooping is off, so multicast
+  floods to every port that allows tagged VLANs, and the Windows I210 driver passes tagged frames to Npcap.
+  There is no layer-2 bridge between the Dante VLANs (an earlier note said so; it was the wrong multicast
+  group). The 08:06-08:35 flapping coincided with re-patching in the audio rack (a Sennheiser moved from
+  AUDIO RACK port 14 to 11, an Audinate device sat on LIGHTHOUSE port 11 for 57 s).
+- Mirror port (2026-10-19): LIGHTHOUSE port 13 (2.5G) mirrors port 15 (the HD8); the PC's USB adapter
+  "Port 15 MIRROR" (Realtek 2.5GbE, 80:69:1a:e3:d0:e1) sits on it with no IP (169.254.x is expected).
+  Wireshark 4.6.6 + Npcap are installed (`C:\Program Files\Wireshark\tshark.exe`, interface name
+  `Port 15 MIRROR`). A mirror of a "forward all" port also shows every VLAN's flooded multicast, tagged.
+  First captures: the HD8's ATEM-protocol sessions (UDP 9910) came from StevesBIGLaptop 192.168.20.109
+  (Fiber Agg port 20) and **VR_Cart 192.168.20.128** (Gigabyte PC, Studio A CR Switch port 33), a slot holder
+  nobody had counted; Companion and the NDI Machine bridge were not running at the time.
 - HD8 control slots (2026-10-19 07:43): after Steve's power-cycle Companion reconnected at 07:43:23, the NDI
   Machine bridge restarted the same second, ATEM Software Control reconnected, and Broadwatcher's hello was
   refused at 07:43:30. The switcher is full with those three; its exact capacity is still unmeasured. The NDI
