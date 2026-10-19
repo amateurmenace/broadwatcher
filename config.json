@@ -328,7 +328,8 @@
     "_comment": "Stream forensics (roadmap section 1): the capture NIC on the LIGHTHOUSE mirror of the HD8's port, read with tshark. Set up 2026-10-19: port 13 mirrors port 15. Not used by the app yet.",
     "interface": "Port 15 MIRROR",
     "mirror": "LIGHTHOUSE port 13 mirrors port 15",
-    "tshark": "C:\\Program Files\\Wireshark\\tshark.exe"
+    "tshark": "C:\\Program Files\\Wireshark\\tshark.exe",
+    "enabled": true
   },
   "companion": {
     "_comment": "Bitfocus Companion on this machine. Its HTTP API (GET /api/connections, /api/variable/<label>/<name>/value) hands over the switcher state that Companion's own ATEM session already tracks, so Broadwatcher needs no control slot. atem_label = the label of Companion's bmd-atem connection for the main switcher (equipment entries can carry their own 'companion' label). autostart: the Electron app starts Companion when it is not running.",

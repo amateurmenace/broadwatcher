@@ -24,6 +24,8 @@ import { AI, ANTHROPIC_MODELS } from './ai.js'
 import { UniFi } from './unifi.js'
 import { SnmpSwitch } from './snmp.js'
 import { Companion } from './companion.js'
+import { Forensics } from './forensics.js'
+import { execFile } from 'node:child_process'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const UI_DIR = path.join(__dirname, '..', 'ui')
@@ -111,11 +113,12 @@ export function saveUserConfig(configPath, patch) {
 
 // what the Settings screen sees: every editable section, secrets replaced by "is set" + the last characters
 const mask = (v) => (v ? { set: true, hint: '…' + String(v).slice(-4) } : { set: false, hint: '' })
-function settingsView(config, ai, configPath) {
+function settingsView(config, ai, configPath, forensics = null) {
 	const g = config.gateway || {}
 	const a = config.ai || {}
 	return {
 		flavor: config.flavor || 'private',
+		capture: { interface: config.capture?.interface || '', tshark: config.capture?.tshark || '', enabled: config.capture?.enabled !== false, available: forensics ? forensics.available : false, running: forensics ? forensics.stats.running : false, error: forensics ? forensics.stats.error : null, tsharkDefault: forensics ? forensics.tshark : '' },
 		firstRun: !g.api_key,
 		configPath,
 		ai: { enabled: a.enabled !== false, provider: ai.provider, base_url: a.base_url || '', model: a.model || '', anthropic_model: a.anthropic_model || 'claude-opus-5-5', anthropic_effort: a.anthropic_effort || 'medium', assess_every_s: a.assess_every_s || 180, keys: { local: mask(a.api_key), anthropic: mask(a.anthropic_api_key), env: !!process.env.ANTHROPIC_API_KEY }, models: ANTHROPIC_MODELS, providers: ai.providers() },
@@ -188,10 +191,20 @@ export function startServer({ config, configPath = null, host = '127.0.0.1', por
 		const events = collector ? collector.state.events : []
 		collector.stop()
 		startCollector()
+		collector.forensics = forensics
 		collector.state.events = events
 		collector.event('device', `Settings changed (${why}): polling restarted`)
 	}
 	startCollector()
+
+	// stream forensics: tshark on the mirror of the switcher's port (config.capture), when set up on this machine
+	const forensics = new Forensics(config.capture || {}, { targetIp: config.atem?.ip || null, log, nameFor: (ip) => collector.nameFor(ip) })
+	forensics.on('event', (ev) => broadcast('event', { ...ev, kind: 'forensics', text: 'Mirror: ' + ev.text }))
+	collector.forensics = forensics
+	if (forensics.enabled) {
+		forensics.start()
+		log(`[forensics] tshark on "${forensics.cfg.interface}" for ${forensics.targetIp}`)
+	}
 
 	// automatic re-assessment: every assess_every_s, and soon after the set of alerts changes
 	const autoAssess = async () => {
@@ -217,13 +230,21 @@ export function startServer({ config, configPath = null, host = '127.0.0.1', por
 		const applied = []
 		const restart = []
 		const saved = {}
-		for (const section of ['ai', 'gateway', 'snmp', 'companion', 'server', 'thresholds', 'poll', 'atem']) {
+		for (const section of ['ai', 'gateway', 'snmp', 'companion', 'server', 'thresholds', 'poll', 'atem', 'capture']) {
 			if (!body[section] || typeof body[section] !== 'object') continue
 			const before = JSON.stringify(config[section] || {})
 			mergeSection(config, section, body[section])
 			if (JSON.stringify(config[section]) === before) continue
 			saved[section] = config[section]
-			if (section === 'ai') {
+			if (section === 'capture') {
+				forensics.stop()
+				forensics.cfg = { ...forensics.cfg, ...config.capture }
+				forensics.tshark = config.capture.tshark || forensics.tshark
+				forensics.stats.failures = 0
+				forensics.stats.error = null
+				if (forensics.enabled) forensics.start()
+				applied.push('capture')
+			} else if (section === 'ai') {
 				if (body.ai.provider) config.ai.provider_chosen = true // an explicit choice from now on
 				ai.configure(config.ai, config.thresholds)
 				applied.push('AI')
@@ -272,6 +293,14 @@ export function startServer({ config, configPath = null, host = '127.0.0.1', por
 			if (!st.ok) throw new Error(st.error)
 			const atem = st.connections.filter((x) => x.module === 'bmd-atem')
 			return { ok: true, connections: st.connections.length, atem: atem.map((x) => `${x.label}: ${x.status}`).join(', ') || 'no ATEM connection' }
+		}
+		if (section === 'capture') {
+			const exe = values.tshark || config.capture?.tshark || forensics.tshark
+			if (!fs.existsSync(exe)) throw new Error(`tshark not found at ${exe} (install Wireshark with Npcap)`)
+			const out = await new Promise((resolve, reject) => execFile(exe, ['-D'], { windowsHide: true, timeout: 15000 }, (e, stdout, stderr) => (e ? reject(new Error(String(stderr || e.message).trim().slice(0, 200))) : resolve(stdout))))
+			const interfaces = String(out).split(/\r?\n/).map((l) => l.match(/\(([^)]+)\)\s*$/)?.[1] || l.trim()).filter(Boolean)
+			const want = values.interface || config.capture?.interface
+			return { ok: true, interfaces, found: want ? interfaces.includes(want) : null }
 		}
 		if (section === 'snmp') {
 			const community = values.community || config.snmp?.community
@@ -372,7 +401,30 @@ export function startServer({ config, configPath = null, host = '127.0.0.1', por
 				}
 				return sendJson(res, { ...r, saved })
 			}
-			if (p === '/api/settings' && req.method === 'GET') return sendJson(res, settingsView(config, ai, configPath))
+			if (p === '/api/forensics' && req.method === 'GET') return sendJson(res, forensics.snapshot({ flows: Number(q.get('flows')) || 60, events: Number(q.get('events')) || 100 }))
+			if (p === '/api/forensics' && req.method === 'POST') {
+				const body = await readBody(req)
+				if (body.action === 'start') {
+					forensics.stats.failures = 0
+					forensics.stats.error = null
+					config.capture = { ...(config.capture || {}), enabled: true }
+					forensics.cfg.enabled = true
+					const ok = forensics.start()
+					collector.event('device', ok ? `Mirror capture started on "${forensics.cfg.interface}"` : `Mirror capture could not start: ${forensics.stats.error}`)
+					saveUserConfig(configPath, { capture: config.capture, config_version: config.config_version || 0 })
+					return sendJson(res, { ok, error: forensics.stats.error })
+				}
+				if (body.action === 'stop') {
+					forensics.stop()
+					config.capture = { ...(config.capture || {}), enabled: false }
+					forensics.cfg.enabled = false
+					collector.event('device', 'Mirror capture stopped')
+					saveUserConfig(configPath, { capture: config.capture, config_version: config.config_version || 0 })
+					return sendJson(res, { ok: true })
+				}
+				return sendJson(res, { error: 'action must be start or stop' }, 400)
+			}
+			if (p === '/api/settings' && req.method === 'GET') return sendJson(res, settingsView(config, ai, configPath, forensics))
 			if (p === '/api/settings' && req.method === 'POST') return sendJson(res, applySettings(await readBody(req)))
 			if (p === '/api/settings/test' && req.method === 'POST') {
 				const body = await readBody(req)
@@ -476,6 +528,7 @@ export function startServer({ config, configPath = null, host = '127.0.0.1', por
 				port: addr.port,
 				close: () => {
 					collector.stop()
+					forensics.stop()
 					clearInterval(aiTimer)
 					for (const r of sseClients) r.end()
 					server.close()

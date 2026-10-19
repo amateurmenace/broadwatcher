@@ -50,7 +50,7 @@
 <div class="shell" id="shell">
 	<main class="main" id="main">
 		<nav class="secnav" id="secnav">
-			<a href="#homeBlock">Health</a><a href="#gwBlock">Gateway</a><a href="#mapBlock">Signal map</a><a href="#atemBlock">Streams</a><a href="#pathBlock">Stream paths</a><a href="#rackBlock">Switches</a><a href="#patchBlock">Equipment</a><a href="#tapeBlock">Events</a>
+			<a href="#homeBlock">Health</a><a href="#gwBlock">Gateway</a><a href="#mapBlock">Signal map</a><a href="#atemBlock">Streams</a><a href="#pathBlock">Stream paths</a><a href="#forBlock">Forensics</a><a href="#rackBlock">Switches</a><a href="#patchBlock">Equipment</a><a href="#tapeBlock">Events</a>
 			<span class="spacer"></span><small id="freshness"></small>
 		</nav>
 
@@ -79,6 +79,11 @@
 		<section class="block" id="pathBlock">
 			<header class="bh"><h2>Stream path check</h2><span class="bh-note" id="pathNote"></span><button class="fold" data-fold="pathBlock" title="collapse / expand"></button></header>
 			<div class="bb"><div id="pathPanel"></div></div>
+		</section>
+
+		<section class="block" id="forBlock">
+			<header class="bh"><h2>Stream forensics</h2><div class="bh-tools"><button class="btn mini" id="forToggle" hidden>Start capture</button><span class="bh-note" id="forNote"></span></div><button class="fold" data-fold="forBlock" title="collapse / expand"></button></header>
+			<div class="bb"><div class="for" id="forPanel"></div></div>
 		</section>
 
 		<section class="block" id="rackBlock">

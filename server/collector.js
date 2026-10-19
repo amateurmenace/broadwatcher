@@ -912,6 +912,9 @@ export class Collector extends EventEmitter {
 		}
 		this.state.equipment = equipment
 
+		// the mirror-port view of the switcher's traffic (when tshark runs on this machine)
+		this.state.forensics = this.forensics ? this.forensics.snapshot({ flows: 30, events: 40 }) : null
+
 		// ATEM hero + stream detection
 		const atemCfg = this.cfg.atem
 		if (atemCfg?.ip) {
@@ -1039,7 +1042,8 @@ export class Collector extends EventEmitter {
 		}
 		// attribute sources
 		const sources = []
-		for (const f of incoming) if (now - f.last < 45000 && f.action !== 'blocked') sources.push({ name: f.srcName || f.src, ip: f.src, confidence: 'confirmed', how: 'flow through the gateway', detail: `${f.proto} port ${f.dport}${f.service && f.service !== 'OTHER' ? ' ' + f.service : ''}${f.region ? ' from ' + f.region : ''}`, port: f.dport, proto: f.proto })
+		// (a gateway flow counts as a source only when it carried real data: scanners knock on the forwarded ports all day)
+		for (const f of incoming) if (now - f.last < 45000 && f.action !== 'blocked' && (f.bytes >= STREAM_HIT_BYTES || f.packets >= 200)) sources.push({ name: f.srcName || f.src, ip: f.src, confidence: 'confirmed', how: 'flow through the gateway', detail: `${f.proto} port ${f.dport}${f.service && f.service !== 'OTHER' ? ' ' + f.service : ''}${f.region ? ' from ' + f.region : ''}`, port: f.dport, proto: f.proto })
 		for (const e of equipment) {
 			if (!e.active || e.ip === eq.ip || !e.telemetry || e.telemetry.error) continue
 			const tl = e.telemetry
@@ -1052,6 +1056,11 @@ export class Collector extends EventEmitter {
 				const match = s.state === 'arriving' && br && Math.abs(br - s.rate) / br < 0.35
 				sources.push({ name: e.name, ip: e.ip, confidence: match ? 'likely' : 'possible', how: match ? 'streaming at the same rate that is arriving' : 'it is streaming (destination unknown: the Web Presenter API does not tell)', detail: `${tl.status}${br ? ' · ' + br.toFixed(1) + ' Mb/s' : ''}${tl.format ? ' · ' + tl.format : ''}`, rate: br })
 			}
+		}
+		// the mirror port sees the stream itself: RTMP publish or SRT data from a sender is proof
+		for (const fl of this.state.forensics?.flows || []) {
+			if (!fl.live || sources.some((x) => x.ip === fl.peer && x.confidence === 'confirmed')) continue
+			if ((fl.app === 'RTMP' && (fl.state === 'streaming' || fl.state === 'publishing')) || (fl.app === 'SRT' && fl.state === 'streaming')) sources.push({ name: fl.name || fl.peer, ip: fl.peer, confidence: 'confirmed', how: 'seen on the mirror port', detail: `${fl.app} to port ${fl.targetPort}${fl.rtmp?.app ? ` · app '${fl.rtmp.app}'` : ''}${fl.rtmp?.publish ? ' · stream ' + fl.rtmp.publish : ''}${fl.srt?.latency ? ' · ' + fl.srt.latency + ' ms latency' : ''} · ${fl.inMbps} Mb/s`, rate: fl.inMbps, port: fl.targetPort, proto: fl.app })
 		}
 		if (s.state === 'arriving') {
 			// correlation: an encoder whose outgoing rate is about the arriving rate
@@ -1218,6 +1227,17 @@ export class Collector extends EventEmitter {
 		return ls ? ls * 1000 : null
 	}
 
+	// a name for an address: the roster first, then what UniFi calls the client
+	nameFor(ip) {
+		if (!ip) return null
+		const e = this.cfg.equipment.find((x) => x.ip === ip)
+		if (e) return e.name
+		const c = this.rawClients.find((x) => x.ip === ip)
+		if (c) return this.aliases.get(lower(c.mac)) || c.name || c.hostname || null
+		const mac = this.ipToMac.get(ip)
+		return mac ? this.aliases.get(mac) || null : null
+	}
+
 	computeAlerts(now) {
 		const a = []
 		const st = this.state
@@ -1273,6 +1293,15 @@ export class Collector extends EventEmitter {
 			else if (p.status === 'amber') push('warn', 'stream', 'path', ent, `Stream reaches the gateway on WAN port ${p.wanPorts} but the switcher's intake did not rise`, `${p.verdict}. If the switcher rejects the stream (wrong key, wrong format, source disabled) the bytes still land on its switch port but no picture appears; the remote source must also be switched to an input (Streaming 1/2 macros).`)
 		}
 		for (const o of st.others) if (o.kind === 'pdu' && o.online && o.outlets && o.outletsOn < o.outlets) push('info', 'power', 'outlets', { type: 'pdu', id: o.mac }, `${o.name}: ${o.outlets - o.outletsOn} outlet(s) switched off`, 'Some outlets on this PDU are off. Fine if intended.')
+		// what the mirror port saw in the last ten minutes
+		const fx = st.forensics
+		if (fx?.running) {
+			const recent = (fx.events || []).filter((e) => now - e.t < 600000)
+			const rej = recent.find((e) => e.kind === 'reject')
+			if (rej) push('warn', 'stream', 'rejected', { type: 'forensics', id: rej.peer || 'mirror' }, `The switcher turned a stream away: ${rej.text}`, 'Seen on the mirror port: the sender reached the switcher, and the switcher ended the connection or answered with an error. Usual causes: wrong stream key or application name, a video format the switcher does not accept, the remote source disabled on the switcher, or a second sender on the same key. The sender saw the same thing as a failed or dropped connection.')
+			const ref = recent.find((e) => e.kind === 'refused')
+			if (ref) push('warn', 'equipment', 'refused', { type: 'forensics', id: ref.peer || 'mirror' }, `Control connection refused: ${ref.text}`, `The switcher answered "too many clients". Sessions held right now: ${fx.sessions.filter((s) => s.state === 'held').map((s) => s.name || s.ip).join(', ') || 'none seen'}. Close one of those programs to make room; a closed one keeps its slot for about two minutes.`)
+		} else if (fx && fx.enabled && !fx.running && fx.error && fx.available) push('info', 'capture', 'down', { type: 'forensics', id: 'mirror' }, `Mirror capture is not running: ${fx.error}`, 'tshark on the mirror interface stopped. Start it again from the Stream forensics section or check that the adapter is still plugged into the mirror port.')
 		// clear memory of alerts that are gone
 		const ids = new Set(a.map((x) => x.id))
 		for (const [id, since] of this.alertSince) if (!ids.has(id)) {
@@ -1334,6 +1363,11 @@ export class Collector extends EventEmitter {
 		} else if (type === 'health') {
 			entity = st.health
 			names = []
+		} else if (type === 'forensics') {
+			const fx = this.forensics ? this.forensics.snapshot({ flows: 80, events: 120 }) : null
+			const peer = id && id !== 'mirror' ? id : null
+			entity = fx ? { ...fx, peer, name: peer ? this.nameFor(peer) : null, flows: fx.flows.filter((f) => !peer || f.peer === peer), events: fx.events.filter((e) => !peer || e.peer === peer), session: peer ? fx.sessions.find((s) => s.ip === peer) || null : null } : null
+			names = peer ? [peer, this.nameFor(peer)].filter(Boolean) : []
 		} else if (type === 'api') {
 			entity = { errors: st.errors, updated: st.updated }
 		}

@@ -34,7 +34,7 @@ window.Settings = (function () {
 		const pv = ai.providers || {}
 		const prov = ai.provider === 'anthropic' ? 'anthropic' : 'local'
 		const welcome = msg === 'welcome'
-		$('settingsEditor').innerHTML = `<header><h2>Settings</h2><small>${d.flavor === 'public' ? 'Broadwatcher Community' : 'Broadwatcher'} · saved to ${esc(d.configPath || 'the user config')}</small><nav class="jump">${['ai', 'gateway', 'snmp', 'companion', 'server', 'thresholds'].map((s) => `<a href="#set-${s}" data-jump="${s}">${{ ai: 'AI', gateway: 'UniFi gateway', snmp: 'SNMP', companion: 'Companion', server: 'Server', thresholds: 'Thresholds' }[s]}</a>`).join('')}</nav></header>
+		$('settingsEditor').innerHTML = `<header><h2>Settings</h2><small>${d.flavor === 'public' ? 'Broadwatcher Community' : 'Broadwatcher'} · saved to ${esc(d.configPath || 'the user config')}</small><nav class="jump">${['ai', 'gateway', 'snmp', 'companion', 'capture', 'server', 'thresholds'].map((s) => `<a href="#set-${s}" data-jump="${s}">${{ ai: 'AI', gateway: 'UniFi gateway', snmp: 'SNMP', companion: 'Companion', capture: 'Capture', server: 'Server', thresholds: 'Thresholds' }[s]}</a>`).join('')}</nav></header>
 		<div class="body settings">
 			${welcome ? `<div class="welcome"><h3>Welcome</h3><p>Broadwatcher needs three things to start watching a network: the address and an Integrations API key of your UniFi gateway, the SNMP community if you want live port counters, and an AI provider for the readiness verdict (a local OpenAI-compatible server such as LM Studio, or Claude with your own Anthropic key). Everything else can wait.</p></div>` : ''}
 			<section id="set-ai"><h3>AI</h3>
@@ -72,6 +72,12 @@ window.Settings = (function () {
 				${field('ATEM connection label', `<input id="cmp_atem_label" value="${esc(d.companion.atem_label)}" class="short" placeholder="atem">`)}
 				<div class="row"><label class="chk"><input type="checkbox" id="cmp_autostart" ${d.companion.autostart ? 'checked' : ''}> start Companion with Broadwatcher</label><button class="btn" type="button" data-test="companion">Test Companion</button><span class="msg" id="test-companion"></span></div>
 			</section>
+			<section id="set-capture"><h3>Capture (mirror port)</h3>
+				<p class="hint">A switch port mirrored from the switcher's port, plugged into a spare network adapter of this computer, lets Broadwatcher read every stream and control session as the switcher sees them (needs Wireshark with Npcap, or tshark). Leave the interface empty to turn it off.</p>
+				${field('Capture interface', `<input id="cap_interface" value="${esc(d.capture?.interface || '')}" placeholder="the adapter's name in Windows / macOS, e.g. Port 15 MIRROR">`, d.capture?.running ? `running · ${esc(d.capture.error || '')}` : d.capture?.error ? esc(d.capture.error) : 'as listed by tshark -D')}
+				${field('tshark', `<input id="cap_tshark" value="${esc(d.capture?.tshark || '')}" placeholder="${esc(d.capture?.tsharkDefault || 'C:\\\\Program Files\\\\Wireshark\\\\tshark.exe')}">`, 'empty = the default path for this operating system')}
+				<div class="row"><label class="chk"><input type="checkbox" id="cap_enabled" ${d.capture?.enabled !== false ? 'checked' : ''}> capture on</label><button class="btn" type="button" data-test="capture">List interfaces</button><span class="msg" id="test-capture"></span></div>
+			</section>
 			<section id="set-server"><h3>Server</h3>
 				${field('Listen on', `<select id="srv_host"><option value="127.0.0.1" ${d.server.host === '127.0.0.1' ? 'selected' : ''}>this computer only (127.0.0.1)</option><option value="0.0.0.0" ${d.server.host === '0.0.0.0' ? 'selected' : ''}>the whole LAN (0.0.0.0) · phones and other computers</option></select>`, 'takes effect after Broadwatcher restarts')}
 				${field('Port', num('srv_port', d.server.port, 1024, 65535))}
@@ -104,6 +110,7 @@ window.Settings = (function () {
 			snmp: { community: secretVal('snmp_community'), every_s: Number(val('snmp_every_s')) || 3 },
 			companion: { url: val('cmp_url').trim(), atem_label: val('cmp_atem_label').trim() || 'atem', autostart: $('cmp_autostart').checked },
 			server: { host: val('srv_host'), port: Number(val('srv_port')) || 8766 },
+			capture: { interface: val('cap_interface').trim(), tshark: val('cap_tshark').trim(), enabled: $('cap_enabled').checked },
 			thresholds: { wan_latency_ms: Number(val('th_wan_latency_ms')), cpu_pct: Number(val('th_cpu_pct')), mem_pct: Number(val('th_mem_pct')), temp_c: Number(val('th_temp_c')), stream_min_mbps: Number(val('th_stream_min_mbps')) },
 		}
 	}
@@ -122,7 +129,7 @@ window.Settings = (function () {
 			const r = await fetch('/api/settings/test', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ section, values }) })
 			const j = await r.json()
 			if (!j.ok) throw new Error(j.error || 'failed')
-			out.textContent = section === 'ai' ? `OK · ${j.model} answered "${j.reply}" in ${(j.ms / 1000).toFixed(1)} s` : section === 'gateway' ? `OK · ${j.gateway} · ${j.devices} devices, ${j.switches} switches` : section === 'companion' ? `OK · ${j.connections} connections · ATEM: ${j.atem}` : section === 'snmp' ? `OK · ${j.switch} answered for ${j.ports} ports` : 'OK'
+			out.textContent = section === 'ai' ? `OK · ${j.model} answered "${j.reply}" in ${(j.ms / 1000).toFixed(1)} s` : section === 'gateway' ? `OK · ${j.gateway} · ${j.devices} devices, ${j.switches} switches` : section === 'companion' ? `OK · ${j.connections} connections · ATEM: ${j.atem}` : section === 'snmp' ? `OK · ${j.switch} answered for ${j.ports} ports` : section === 'capture' ? `tshark sees: ${j.interfaces.join(' · ')}${j.found === false ? ' · the configured interface is not among them' : j.found ? ' · configured interface found' : ''}` : 'OK'
 			out.className = 'msg ok'
 		} catch (e) {
 			out.textContent = 'failed: ' + e.message

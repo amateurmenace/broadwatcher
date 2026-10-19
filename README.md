@@ -52,6 +52,17 @@ broadcast readiness and explain problems.
   setup, key and format), red = the forward points at a device that is on standby or off the network (the
   classic case: a sender using the HD8's default port 1935 lands on the field Mini) or the firewall blocked
   it. Port scanners knocking on open ports are listed as probes and ignored. Click a row for the senders.
+- **Stream forensics**: with a switch port mirrored from the switcher's port into a spare network adapter of
+  this computer, Broadwatcher runs tshark on it and shows the switcher's traffic as the switcher sees it:
+  every **control session** (who holds one, since when, how many packets a second; two programs on one
+  computer show as two sessions) and every hello the switcher **refused** with "too many clients"; every
+  **flow** at its port (RTMP with the app name, a masked stream key, the encoder and the switcher's answer;
+  SRT handshakes with version, latency and stream id; the HTTPS the switcher itself opens to the cloud),
+  with rates both ways; and an event tape. A sender the switcher turns away is the point of it: a reset or a
+  close before any publish is accepted shows as "rejected", with an alert that names the usual causes
+  (wrong key or app, a format it will not take, the remote source switched off). Start/stop in the section
+  header; the interface and tshark path live in Settings > Capture. Mirroring copies packets in the switch's
+  hardware and does not touch the switcher's own traffic; a 2.5G mirror port never drops copies of a 1G link.
 - **Switches**: one row per switch with its ports (top bar = link speed, line = activity, dot = PoE,
   outline = uplink, red = new errors, violet corner = labelled by hand), uptime, CPU, temperature, PoE
   budget, uplink and totals; "live" means the counters are read straight from the switch over SNMP every
@@ -164,6 +175,10 @@ roster edited in the app always wins over the bundled list (new bundled devices 
   `roster` = the IPs that are active in that show) and `active_profile`; edited with *Prepare a broadcast*.
 - `server`: `host` (`127.0.0.1`, or `0.0.0.0` for phones), `port`, `token` (the phone access key, generated).
 - `port_labels`: hand-written labels per switch port (`"<switch mac>:<port>": {name, ip, note}`).
+- `capture`: `interface` (the adapter on the mirror port, as tshark lists it), `tshark` (path; empty = the
+  usual place), `enabled`. Setting up the mirror in UniFi: Devices > the switch > Ports > a spare port >
+  Port Manager > Operation Mirroring, source = the switcher's port. Install Wireshark with Npcap on this
+  computer; give the adapter no IP (it gets none anyway).
 - `equipment[]`: `active`, `name`, `ip`, `group`, `role`, optional `probe` (`tcp:<port>`, `atem`, `x32`),
   `telemetry` (`webpresenter`, `hyperdeck`, `atem`), `companion` (Companion connection label for a switcher),
   `min_speed`, `hero: true` for the main switcher.

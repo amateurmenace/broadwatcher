@@ -58,6 +58,17 @@ touching anything. The roadmap for the next phase is in `docs/ROADMAP.md`.
   `profiles[]`, `active_profile`; `setProfiles`, `activateProfile(id, {applyRoster})`, `testProbes`), puts
   `state.health`, `state.tiles`, `state.profiles` in every state, and logs verdict changes to the tape. The AI
   gets the score in its digest and its verdict is overridden by the score (`aiVerdict` kept).
+- `server/forensics.js` (0.8.0): two tshark sidecars on the mirror NIC (`config.capture`): the main one prints
+  one `-T fields` line per packet (no payload; RTMP via the Info column + `amf.string`, SRT via `srt.*`), the
+  second prints the payload of hello-sized UDP 9910 packets for the hello reply code. Tracks flows per
+  (peer, proto, ports) with state (opening/established/publishing/streaming/rejected/reset/closed/no answer),
+  ATEM sessions per client socket (held = the switcher's ~1/s "Time" keepalive still arrives), events ring.
+  `/api/forensics` GET/POST(start|stop); `state.forensics` (snapshot) feeds the stream sources, the alerts
+  ("turned a stream away", "control connection refused") and the AI digest. UI block "Stream forensics",
+  Settings > Capture (interface, tshark, enabled, "List interfaces" = `tshark -D`). Verified with an ffmpeg
+  publish to the HD8 using a wrong key: connect accepted, then the switcher closes the connection before
+  any publish → "rejected" + alert. Killing node abruptly can orphan tshark: the restart recipe kills
+  `tshark` and `dumpcap` too.
 - Phone page: `ui/m.html` + `m.js` + `m.css` + `manifest.webmanifest` + `icon-512.png`, served at `/m`;
   non-loopback requests need `server.token` (`?key=` once, then the `bw_key` cookie; manifest and icons are
   public); `/api/phone` lists the LAN links; Electron menu "Open on a phone…" (switches `server.host` to
@@ -149,7 +160,10 @@ touching anything. The roadmap for the next phase is in `docs/ROADMAP.md`.
   `Port 15 MIRROR`). A mirror of a "forward all" port also shows every VLAN's flooded multicast, tagged.
   First captures: the HD8's ATEM-protocol sessions (UDP 9910) came from StevesBIGLaptop 192.168.20.109
   (Fiber Agg port 20) and **VR_Cart 192.168.20.128** (Gigabyte PC, Studio A CR Switch port 33), a slot holder
-  nobody had counted; Companion and the NDI Machine bridge were not running at the time.
+  nobody had counted. Later the same day the HD8 held **four** sessions at once (laptop, VR_Cart, and two
+  from this PC: Companion + the NDI Machine bridge), so its capacity is at least four. Since the forward
+  moved to WAN 1935, internet scanners (91.230.168.233, 54.236.100.41 …) open RTMP connections to the HD8
+  directly; the mirror shows them as RTMP flows that close within a second.
 - HD8 control slots (2026-10-19 07:43): after Steve's power-cycle Companion reconnected at 07:43:23, the NDI
   Machine bridge restarted the same second, ATEM Software Control reconnected, and Broadwatcher's hello was
   refused at 07:43:30. The switcher is full with those three; its exact capacity is still unmeasured. The NDI

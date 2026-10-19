@@ -76,6 +76,11 @@ Yes, for diagnosis; not as the day-to-day data source.
 - **Alternative for day-to-day:** SNMP counters on port 15 (already live, 3 s) plus encoder telemetry; keep
   mirroring as the debugging tool. Size: ~2 days including the parser and UI.
 
+**Done in 0.8.0 (2026-10-19):** LIGHTHOUSE port 13 mirrors port 15 into a 2.5G USB adapter on the Broadcast
+Pix PC; `server/forensics.js` runs tshark on it and the *Stream forensics* section shows control sessions
+(per socket, with refused hellos), flows with RTMP/SRT detail and the switcher's answers, and an event tape;
+a sender the switcher turns away raises an alert. Verified with an ffmpeg publish using a wrong key.
+
 ---
 
 ## 2. Dante network monitor (default BIG_MOBILE_DANTE, selectable)

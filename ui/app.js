@@ -399,6 +399,45 @@ function renderPaths(s) {
 	$('pathPanel').innerHTML = `<table class="paths"><thead><tr><th></th><th>Path</th><th>Sender (last hour)</th><th>Traffic</th><th>Target</th><th>Switcher intake</th><th>Verdict</th></tr></thead><tbody>${rows.join('')}</tbody></table>`
 }
 
+// ------------------------------------------------------------------ stream forensics (the mirror port)
+const SESSION_LAMP = { held: 'online', refused: 'offline', connecting: 'unresponsive', new: 'unresponsive', gone: '' }
+function renderForensics(s) {
+	const fx = s.forensics
+	const note = $('forNote')
+	const btn = $('forToggle')
+	if (!fx) {
+		btn.hidden = true
+		note.textContent = 'no mirror capture on this machine'
+		return ($('forPanel').innerHTML = '<div class="empty">a mirror of the switcher\'s switch port, read with tshark, shows every stream and every control session as the switcher sees them: set the capture interface in Settings &gt; Capture</div>')
+	}
+	btn.hidden = !fx.available
+	btn.textContent = fx.running ? 'Stop capture' : 'Start capture'
+	btn.setAttribute('data-for-action', fx.running ? 'stop' : 'start')
+	note.textContent = fx.running ? `tshark on "${fx.interface}" · ${fx.pps} packets/s · since ${fmtTime(fx.since)}${fx.restarts ? ` · ${fx.restarts} restarts` : ''}` : fx.available ? `stopped${fx.error ? ' · ' + fx.error : ''}` : `not available · ${fx.error || 'tshark or the interface is missing'}`
+	const held = fx.sessions.filter((x) => x.state === 'held')
+	const perHost = new Map()
+	for (const x of fx.sessions) perHost.set(x.ip, (perHost.get(x.ip) || 0) + (x.state === 'held' ? 1 : 0))
+	const sess = fx.sessions
+		.map((x) => `<tr class="click" data-sel="forensics:${esc(x.ip)}"><td><span class="tally ${SESSION_LAMP[x.state] || ''}"></span></td><td>${esc(x.name || x.ip)}<small class="mono">${esc(x.ip)}:${x.port}${perHost.get(x.ip) > 1 ? ` · ${perHost.get(x.ip)} sessions from this host` : ''}</small></td><td>${x.state === 'held' ? `<span class="ok">holds a session</span><small>since ${fmtTime(x.since)} · ${x.pps} pkt/s</small>` : x.state === 'refused' ? `<span class="error">refused</span><small>too many clients · ${x.refusals}× · last ${fmtAgo(x.hello?.t)} ago</small>` : x.state === 'gone' ? `gone<small>last ${fmtAgo(x.last)} ago</small>` : `${esc(x.state)}<small>${x.hello ? esc(x.hello.text) + ' · ' : ''}last ${fmtAgo(x.last)} ago</small>`}</td></tr>`)
+		.join('')
+	const flows = fx.flows
+		.map((f) => `<tr class="click ${f.live ? 'live' : ''}" data-sel="forensics:${esc(f.peer)}"><td><span class="tally ${f.live ? 'online' : /reset|rejected|no answer/.test(f.state) ? 'offline' : ''}"></span></td><td>${esc(f.name || f.peer)}${f.name ? `<small class="mono">${esc(f.peer)}</small>` : ''}</td><td><span class="tag">${esc(f.app)}</span><small>${f.outbound ? `from the switcher → ${esc(f.peer)}:${f.peerPort}` : `${esc(f.proto)} → switcher port ${f.targetPort}`}</small></td><td class="${/reset|rejected|no answer/.test(f.state) ? 'error' : f.state === 'streaming' || f.state === 'publishing' ? 'cyan' : ''}">${esc(f.state)}<small>${esc(f.detail || '')}</small></td><td class="num"><span class="dn">${fmtRate(f.inMbps)}</span><small class="up">${fmtRate(f.outMbps)} back</small></td><td class="num">${fmtTime(f.first)}<small>${f.live ? 'live' : 'last ' + fmtAgo(f.last) + ' ago'}</small></td></tr>`)
+		.join('')
+	const evs = fx.events.map((e) => `<div class="tl ${e.level === 'warn' ? 'warn' : 'info'}"><span class="t">${fmtTime(e.t)}</span><span class="m">${esc(e.text)}</span></div>`).join('')
+	$('forPanel').innerHTML = `<div><h4>Control sessions on the switcher <small>· ${held.length} held${fx.target ? ' · ' + esc(fx.target) : ''}</small></h4>${sess ? `<table><thead><tr><th></th><th>Program / host</th><th>State</th></tr></thead><tbody>${sess}</tbody></table>` : '<div class="empty">no ATEM protocol traffic seen yet</div>'}</div>
+	<div><h4>Flows at the switcher's port <small>· ${fx.flows.filter((f) => f.live).length} live · last 30 min</small></h4>${flows ? `<table><thead><tr><th></th><th>Peer</th><th>What</th><th>State</th><th class="num">In</th><th class="num">Since</th></tr></thead><tbody>${flows}</tbody></table>` : '<div class="empty">no unicast flow with the switcher yet</div>'}</div>
+	<div class="tape">${evs || '<div class="empty" style="padding:12px">nothing happened yet</div>'}</div>`
+}
+async function forensicsAction(action) {
+	try {
+		const r = await fetch('/api/forensics', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action }) })
+		const j = await r.json()
+		if (j.error) alert(j.error)
+	} catch (e) {
+		alert('could not change the capture: ' + e.message)
+	}
+}
+
 // ------------------------------------------------------------------ rack
 function portTip(sw, p) {
 	const who = [...p.devices.map((d) => `${d.name} (${d.type})`), ...p.clients.map((c) => `${c.name || c.ip || c.mac}${c.ip && c.name ? ' · ' + c.ip : ''}`)]
@@ -754,6 +793,14 @@ function entitySection(type, e) {
 	if (type === 'health') {
 		return `<h3><span class="lamp sm ${esc(verdictClass(e.verdict) === 'ready' ? 'ok' : verdictClass(e.verdict) === 'degraded' ? 'warn' : 'bad')}"></span> ${esc(nice(e.verdict))} · ${e.score}/100</h3><p class="explain">${esc(e.headline)}</p><p>Profile "${esc(e.profile?.name || '')}" expects: ${esc(Object.entries(e.profile?.expect || {}).filter(([, v]) => v).map(([k]) => k.replace('_', ' ')).join(', ') || 'nothing in particular')}. Each factor is weighed; critical ones (internet, switches, the switcher, an interrupted stream) pull the verdict to at least "At risk" when they fail.</p><ul class="factors">${e.factors.map((f) => `<li class="${esc(f.level)}"><b>${esc(f.label)}</b><em>${f.value === null ? 'n/a' : Math.round(f.value * 100) + '%'}</em><span>${esc(f.reason)}${f.critical ? ' <small>(critical)</small>' : ''} <small>· weight ${f.weight}</small></span></li>`).join('')}</ul>`
 	}
+	if (type === 'forensics') {
+		const ses = e.session
+		return `<h3>${esc(e.name || e.peer || 'Mirror port')}</h3>${kv([
+			['Capture', e.running ? `tshark on "${esc(e.interface)}" · ${e.pps} packets/s` : 'not running'],
+			ses ? ['Control session', ses.state === 'held' ? `held since ${fmtTime(ses.since)} · ${ses.pps} pkt/s` : `${esc(ses.state)}${ses.hello ? ' · last hello ' + esc(ses.hello.text) + ' at ' + fmtTime(ses.hello.t) : ''}${ses.refusals ? ' · refused ' + ses.refusals + '×' : ''}`, ses.state === 'held' ? 'ok' : ses.state === 'refused' ? 'bad' : ''] : null,
+			['Flows', (e.flows || []).slice(0, 12).map((f) => `${esc(f.app)} → port ${f.targetPort} · ${esc(f.state)}${f.detail ? ' · ' + esc(f.detail) : ''} · ${fmtBytes(f.bytesIn)} in · ${fmtTime(f.first)}${f.live ? ' · live' : ''}`).join('<br>') || 'none'],
+		])}<h3>What the mirror saw</h3>${tapeRows((e.events || []).slice(0, 40), (ev) => `<div class="tl ${ev.level === 'warn' ? 'warn' : 'info'}"><span class="t">${fmtTime(ev.t)}</span><span class="m">${esc(ev.text)}</span></div>`)}`
+	}
 	if (type === 'vlan') {
 		return `<h3>${esc(vlanLabel(e.name))}${e.vlan ? ` · VLAN ${e.vlan}` : ''}</h3>${kv([
 			['Subnet', esc(e.subnet || '')],
@@ -897,6 +944,7 @@ function render(s) {
 	renderMap(s)
 	if (!folded('atemBlock')) renderAtem(s)
 	if (!folded('pathBlock')) renderPaths(s)
+	if (!folded('forBlock')) renderForensics(s)
 	if (!folded('rackBlock') && !labelEdit) renderRack(s)
 	if (!folded('patchBlock')) renderPatch(s)
 	if (!folded('tapeBlock')) renderTape(s)
@@ -991,6 +1039,7 @@ document.addEventListener('click', (e) => {
 	const fold = t.closest?.('[data-fold]')
 	if (fold) return toggleFold(fold.getAttribute('data-fold'))
 	if (t.id === 'prepareBtn') return Prepare.open()
+	if (t.id === 'forToggle') return forensicsAction(t.getAttribute('data-for-action'))
 	const tile = t.closest?.('[data-tile]')
 	if (tile) return tileClick(tile.getAttribute('data-tile'))
 	if (t.id === 'mapIn') return NetMap.zoom(1.25)

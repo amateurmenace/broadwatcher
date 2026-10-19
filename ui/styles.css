@@ -347,6 +347,16 @@ tr.click:hover td { background: var(--panel2); }
 .cap { font-family: var(--mono); font-size: 11px; white-space: pre-wrap; word-break: break-all; color: var(--ink2); background: var(--panel2); padding: 6px 8px; border-radius: var(--radius); margin: 4px 0; }
 .cap b { color: var(--ink); }
 
+/* stream forensics */
+.for { display: grid; grid-template-columns: minmax(320px, 420px) 1fr; gap: 20px; align-items: start; }
+.for h4 { margin: 0 0 6px; font-family: var(--serif); font-weight: 400; font-size: 14px; color: var(--ink2); }
+.for h4 small { font-size: 11px; }
+.for td { vertical-align: middle; }
+.for td.num { white-space: nowrap; }
+.for tr.live td { background: rgba(14, 124, 156, 0.05); }
+.for .tape { grid-column: 1 / -1; max-height: 240px; }
+@media (max-width: 1300px) { .for { grid-template-columns: 1fr; } }
+
 /* ---------------------------------------------------------------- rack */
 .rack { display: flex; flex-direction: column; gap: 8px; }
 .ru { display: grid; grid-template-columns: 256px 1fr 216px; align-items: center; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); min-height: 72px; }

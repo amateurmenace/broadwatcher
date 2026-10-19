@@ -81,5 +81,10 @@
     "url": "http://127.0.0.1:8000",
     "atem_label": "atem",
     "autostart": false
+  },
+  "capture": {
+    "interface": "",
+    "tshark": "",
+    "enabled": true
   }
 }
