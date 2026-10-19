@@ -60,6 +60,7 @@ window.Settings = (function () {
 				${field('Integrations API key', secret('gw_api_key', d.gateway.key, 'from UniFi Network > Settings > Control Plane > Integrations'))}
 				${field('Site', `<input id="gw_site" value="${esc(d.gateway.site)}" class="short">`)}
 				${field('Dashboard link', `<input id="gw_ui_url" value="${esc(d.gateway.ui_url)}" placeholder="https://192.168.1.1/network/default/dashboard">`)}
+				${field('VLANs in the top bar', `<input id="gw_networks" value="${esc((d.networks || []).join(', '))}" placeholder="Default, BIG_NDI, BIG_MOBILE_DANTE">`, `network names as UniFi spells them, in the order shown; known: ${esc((d.knownNetworks || []).map((n) => n.name + (n.vlan ? ' (' + n.vlan + ')' : '')).join(', ') || 'none yet')}. Three or four fit; the bar sheds them on narrow windows.`)}
 				<div class="row"><button class="btn" type="button" data-test="gateway">Test gateway</button><span class="msg" id="test-gateway"></span></div>
 			</section>
 			<section id="set-snmp"><h3>SNMP (live port counters)</h3>
@@ -107,6 +108,7 @@ window.Settings = (function () {
 		return {
 			ai: { enabled: $('ai_enabled').checked, provider: prov === 'anthropic' ? 'anthropic' : 'openai', base_url: val('ai_base_url').trim(), model: val('ai_model').trim(), api_key: secretVal('ai_api_key'), anthropic_api_key: secretVal('ai_anthropic_api_key'), anthropic_model: val('ai_anthropic_model'), anthropic_effort: val('ai_anthropic_effort'), assess_every_s: Number(val('ai_assess_every_s')) || 180 },
 			gateway: { name: val('gw_name').trim(), url: val('gw_url').trim(), api_key: secretVal('gw_api_key'), site: val('gw_site').trim() || 'default', ui_url: val('gw_ui_url').trim() },
+			networks: val('gw_networks').split(',').map((s) => s.trim()).filter(Boolean),
 			snmp: { community: secretVal('snmp_community'), every_s: Number(val('snmp_every_s')) || 3 },
 			companion: { url: val('cmp_url').trim(), atem_label: val('cmp_atem_label').trim() || 'atem', autostart: $('cmp_autostart').checked },
 			server: { host: val('srv_host'), port: Number(val('srv_port')) || 8766 },

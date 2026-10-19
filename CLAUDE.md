@@ -108,7 +108,10 @@ touching anything. The roadmap for the next phase is in `docs/ROADMAP.md`.
    serif headings, plain sans, tabular numbers, hairlines, calm colours (orange = into a device, teal = out).
    Styled scrollbars everywhere. No rounded "cards" grids.
 5. **Config upgrades:** bump `config_version` in `config.json` whenever the bundled device lists or defaults
-   change; user edits of gateway/poll/thresholds/ai/snmp survive, a roster edited in the app always wins.
+   change; user edits of gateway/poll/thresholds/ai/snmp/capture survive (`DEEP_KEYS`), a roster edited in the
+   app always wins, and so do `port_labels`, `profiles`, `active_profile` and, once the VLAN list was edited in
+   Settings (`networks_edited`), `networks` (`USER_KEYS` in `server/server.js`, 0.8.1). Before 0.8.1 a version
+   bump silently dropped those.
 6. **Companion is read, never written.** Broadwatcher reads Companion's HTTP API on this PC
    (`GET /api/connections`, `GET /api/variable/<label>/<name>/value`; the bmd-atem connection is labelled
    `atem` and exposes `pgm1_input`, `pvw1_input`, `stream_active`, `stream_bitrate`, `stream_cache_used`,

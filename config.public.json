@@ -1,7 +1,7 @@
 {
   "_comment": "Broadwatcher Community: the public build's defaults. No keys, no site-specific devices. Everything here is edited in the app (Settings, Edit roster) on first run and saved to the user config file.",
   "flavor": "public",
-  "config_version": 5,
+  "config_version": 6,
   "gateway": {
     "name": "UniFi gateway",
     "url": "https://192.168.1.1",

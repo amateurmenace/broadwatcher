@@ -9,9 +9,11 @@ broadcast readiness and explain problems.
 
 - **HUD** (always on top): the readiness lamp and headline, the **ATEM intake** meter (traffic arriving at
   the switcher, with its quiet level marked), WAN in/out and latency, console CPU/temperature, one cell per
-  broadcast VLAN (name, VLAN number, in/out and a 10-minute sparkline, client count), the open-issue count,
-  the clock, Settings, the light/dark switch and the readiness-rail toggle (or the `R` key). Cells drop off
-  one by one on narrow windows instead of being cut.
+  broadcast VLAN (name, VLAN number, in/out and a 10-minute sparkline, client count; which VLANs and in what
+  order is a Settings field), the open-alert count ("2 warnings", "1 error" or "all clear"), the clock,
+  Settings, the light/dark switch and the readiness-rail toggle (or the `R` key). The clock and the controls
+  always fit; the cells drop off whole on narrow windows instead of being cut (console under 1700 px, then
+  the VLANs one by one).
 - **Section bar**: Health · Gateway · Signal map · Streams · Stream paths · Switches · Equipment · Events,
   each a jump link; every section has a ▾ to collapse it (remembered), so the map can take the room.
 - **Broadcast health** (the glance board): one lamp and a score out of 100 computed from everything that
@@ -182,7 +184,9 @@ roster edited in the app always wins over the bundled list (new bundled devices 
 - `equipment[]`: `active`, `name`, `ip`, `group`, `role`, optional `probe` (`tcp:<port>`, `atem`, `x32`),
   `telemetry` (`webpresenter`, `hyperdeck`, `atem`), `companion` (Companion connection label for a switcher),
   `min_speed`, `hero: true` for the main switcher.
-- `networks[]`: VLANs in the HUD. `poll`: intervals. `thresholds`: alert levels incl. `stream_min_mbps`.
+- `networks[]`: VLANs in the HUD, in that order (Settings > UniFi gateway > *VLANs in the top bar*; once
+  edited there, `networks_edited` keeps your list across upgrades). `poll`: intervals. `thresholds`: alert
+  levels incl. `stream_min_mbps`.
 - `snmp.community`: the SNMP v2c community (`netwatch`, enabled in UniFi on 2026-10-18).
 - `ai`: `base_url` of any OpenAI-compatible server (default LM Studio on the Broadcast Pix PC,
   `http://192.168.20.75:1234/v1`, model `gemma-flash`), or Anthropic's API for use away from the studio or for a

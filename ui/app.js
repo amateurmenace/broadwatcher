@@ -226,9 +226,9 @@ function renderHud(s) {
 	$('consoleSub').textContent = gw ? `${gw.modelName} · ${s.clients.total} clients · up ${fmtUptime(gw.uptime)}` : '–'
 	const nets = (s.networks || []).filter((n) => n.watched).slice(0, 4)
 	$('hudVlans').innerHTML = nets
-		.map((n) => `<div class="vl" title="${esc(n.name)}${n.subnet ? ' · ' + esc(n.subnet) : ''} · ${n.clients} clients"><label>${esc(vlanLabel(n.name))}<i>${n.vlan ?? ''}</i></label><div class="nums"><span class="dn">↓${fmtRate(n.down)}</span><span class="up">↑${fmtRate(n.up)}</span></div>${scope('vl:' + n.name, [{ data: (n.history?.down || []).slice(-60), color: 'in' }, { data: (n.history?.up || []).slice(-60), color: 'out' }], 'vspark', { bare: true })}<small>${n.clients} client${n.clients === 1 ? '' : 's'}</small></div>`)
+		.map((n) => `<div class="vl" title="${esc(n.name)}${n.vlan ? ' · VLAN ' + n.vlan : ''}${n.subnet ? ' · ' + esc(n.subnet) : ''} · ${n.clients} clients · orange = into the VLAN, teal = out of it, last 10 minutes"><label>${esc(vlanLabel(n.name))}${n.vlan ? `<i>vlan ${n.vlan}</i>` : ''}</label><div class="nums"><span class="dn">↓${fmtRate(n.down)}</span><span class="up">↑${fmtRate(n.up)}</span></div>${scope('vl:' + n.name, [{ data: (n.history?.down || []).slice(-60), color: 'in' }, { data: (n.history?.up || []).slice(-60), color: 'out' }], 'vspark', { bare: true })}<small>${n.clients} client${n.clients === 1 ? '' : 's'}</small></div>`)
 		.join('')
-	$('hudIssues').innerHTML = (errors ? `<span class="error">${errors} ✕</span>` : '') + (warns ? `<span class="warn">${warns} !</span>` : '') + (!errors && !warns ? '<span class="ok">0 issues</span>' : '')
+	$('hudIssues').innerHTML = (errors ? `<span class="error" title="open problems (error-level alerts)">${errors} <i>error${errors === 1 ? '' : 's'}</i></span>` : '') + (warns ? `<span class="warn" title="open warnings">${warns} <i>warning${warns === 1 ? '' : 's'}</i></span>` : '') + (!errors && !warns ? '<span class="ok" title="no open alerts">all clear</span>' : '')
 	document.title = (errors ? '✕ ' : warns ? '! ' : '') + 'Broadwatcher'
 	drawScopes()
 }

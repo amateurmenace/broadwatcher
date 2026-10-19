@@ -30,7 +30,10 @@ import { execFile } from 'node:child_process'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const UI_DIR = path.join(__dirname, '..', 'ui')
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.woff2': 'font/woff2', '.webmanifest': 'application/manifest+json' }
-const DEEP_KEYS = ['gateway', 'poll', 'thresholds', 'ai', 'snmp', 'server', 'atem', 'companion']
+const DEEP_KEYS = ['gateway', 'poll', 'thresholds', 'ai', 'snmp', 'server', 'atem', 'companion', 'capture']
+// what the user made in the app and a newer bundle must never take away: port labels, show profiles, the
+// VLAN list once it was edited in Settings (networks_edited), the roster (handled below)
+const USER_KEYS = ['port_labels', 'profiles', 'active_profile', 'networks_edited', 'equipment_edited']
 const BUNDLED_SECRETS = { ai: ['anthropic_api_key', 'api_key'], gateway: ['api_key'], snmp: ['community'] }
 
 // The bundled config is the source of truth for the equipment list, the ATEM, SNMP and AI defaults; the user's
@@ -46,7 +49,9 @@ export function loadConfig(bundledPath, userPath) {
 		const deep = (k) => ({ ...(base[k] || {}), ...(user[k] || {}) })
 		const outdated = (user.config_version || 0) < (base.config_version || 0)
 		const deepKeys = Object.fromEntries(DEEP_KEYS.map((k) => [k, deep(k)]))
-		const merged = outdated ? { ...base, ...deepKeys } : { ...base, ...user, ...deepKeys }
+		const kept = Object.fromEntries(USER_KEYS.filter((k) => user[k] !== undefined).map((k) => [k, user[k]]))
+		if (user.networks_edited && Array.isArray(user.networks)) kept.networks = user.networks
+		const merged = outdated ? { ...base, ...kept, ...deepKeys } : { ...base, ...user, ...deepKeys }
 		// a secret the bundle carries (the Anthropic key embedded at build time, the UniFi key, the SNMP community)
 		// fills a field the user's copy has empty: an empty field is "never set", not a choice
 		for (const [section, keys] of Object.entries(BUNDLED_SECRETS)) {
@@ -113,7 +118,7 @@ export function saveUserConfig(configPath, patch) {
 
 // what the Settings screen sees: every editable section, secrets replaced by "is set" + the last characters
 const mask = (v) => (v ? { set: true, hint: '…' + String(v).slice(-4) } : { set: false, hint: '' })
-function settingsView(config, ai, configPath, forensics = null) {
+function settingsView(config, ai, configPath, forensics = null, collectorNetworks = []) {
 	const g = config.gateway || {}
 	const a = config.ai || {}
 	return {
@@ -123,6 +128,8 @@ function settingsView(config, ai, configPath, forensics = null) {
 		configPath,
 		ai: { enabled: a.enabled !== false, provider: ai.provider, base_url: a.base_url || '', model: a.model || '', anthropic_model: a.anthropic_model || 'claude-opus-5-5', anthropic_effort: a.anthropic_effort || 'medium', assess_every_s: a.assess_every_s || 180, keys: { local: mask(a.api_key), anthropic: mask(a.anthropic_api_key), env: !!process.env.ANTHROPIC_API_KEY }, models: ANTHROPIC_MODELS, providers: ai.providers() },
 		gateway: { name: g.name || '', url: g.url || '', site: g.site || 'default', ui_url: g.ui_url || '', key: mask(g.api_key) },
+		networks: Array.isArray(config.networks) ? config.networks : [],
+		knownNetworks: (collectorNetworks || []).map((n) => ({ name: n.name, vlan: n.vlan, clients: n.clients })),
 		snmp: { community: config.snmp?.community || '', every_s: config.snmp?.every_s || 3 },
 		companion: { url: config.companion?.url || 'http://127.0.0.1:8000', atem_label: config.companion?.atem_label || 'atem', autostart: config.companion?.autostart !== false },
 		server: { host: config.server?.host || '127.0.0.1', port: config.server?.port || 8766 },
@@ -230,6 +237,18 @@ export function startServer({ config, configPath = null, host = '127.0.0.1', por
 		const applied = []
 		const restart = []
 		const saved = {}
+		// the VLANs shown in the top bar: a list of network names
+		if (Array.isArray(body.networks)) {
+			const list = body.networks.map((n) => String(n).trim()).filter(Boolean).slice(0, 12)
+			if (JSON.stringify(list) !== JSON.stringify(config.networks || [])) {
+				config.networks = list
+				config.networks_edited = true
+				collector.cfg.networks = list
+				saved.networks = list
+				saved.networks_edited = true
+				applied.push('VLANs in the top bar')
+			}
+		}
 		for (const section of ['ai', 'gateway', 'snmp', 'companion', 'server', 'thresholds', 'poll', 'atem', 'capture']) {
 			if (!body[section] || typeof body[section] !== 'object') continue
 			const before = JSON.stringify(config[section] || {})
@@ -424,7 +443,7 @@ export function startServer({ config, configPath = null, host = '127.0.0.1', por
 				}
 				return sendJson(res, { error: 'action must be start or stop' }, 400)
 			}
-			if (p === '/api/settings' && req.method === 'GET') return sendJson(res, settingsView(config, ai, configPath, forensics))
+			if (p === '/api/settings' && req.method === 'GET') return sendJson(res, settingsView(config, ai, configPath, forensics, collector.state.networks))
 			if (p === '/api/settings' && req.method === 'POST') return sendJson(res, applySettings(await readBody(req)))
 			if (p === '/api/settings/test' && req.method === 'POST') {
 				const body = await readBody(req)

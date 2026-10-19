@@ -1,6 +1,6 @@
 {
   "_comment": "Broadwatcher configuration. The app copies this file to its user-data folder on first run (menu: Broadwatcher > Open config file) and reads that copy from then on. The equipment roster is edited in the app (Broadcast equipment > Edit roster); 'active: false' = on standby: shown greyed, not probed, never an alert.",
-  "config_version": 5,
+  "config_version": 6,
   "gateway": {
     "name": "BIG WAN (UDM Pro Max)",
     "url": "https://192.168.20.1",
@@ -47,7 +47,6 @@
   "networks": [
     "Default",
     "BIG_NDI",
-    "BIG_DANTE",
     "BIG_MOBILE_DANTE"
   ],
   "active_profile": "idle",

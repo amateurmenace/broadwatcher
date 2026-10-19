@@ -831,9 +831,10 @@ export class Collector extends EventEmitter {
 					const up = mbps(n['tx_bytes-r'])
 					nh.down.push(down)
 					nh.up.push(up)
-					gateway.networks.push({ name: n.name, vlan: n.vlan ?? cfgN.vlan ?? null, subnet: n.ip_subnet || cfgN.ip_subnet || null, purpose: cfgN.purpose || null, clients: n.num_sta ?? netCounts[n.name] ?? 0, down, up, watched: (this.cfg.networks || []).includes(n.name), history: { down: nh.down.a, up: nh.up.a } })
+					gateway.networks.push({ name: n.name, vlan: n.vlan ?? cfgN.vlan ?? null, subnet: n.ip_subnet || cfgN.ip_subnet || null, purpose: cfgN.purpose || null, clients: n.num_sta ?? netCounts[n.name] ?? 0, down, up, watched: (this.cfg.networks || []).includes(n.name), order: (this.cfg.networks || []).indexOf(n.name), history: { down: nh.down.a, up: nh.up.a } })
 				}
-				gateway.networks.sort((a, b) => Number(b.watched) - Number(a.watched) || b.clients - a.clients)
+				// the watched VLANs first, in the order the config lists them (the top bar shows them in that order), then the rest by size
+				gateway.networks.sort((a, b) => (a.watched ? a.order : 1e6) - (b.watched ? b.order : 1e6) || b.clients - a.clients)
 			} else if (d.type === 'usw') switches.push(entry)
 			else if (d.type === 'uap') aps.push(entry)
 			else others.push({ ...entry, kind: d.type, ports: [] })
