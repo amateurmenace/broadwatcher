@@ -241,21 +241,28 @@ export class Collector extends EventEmitter {
 	}
 
 	async pollProbes() {
-		const items = this.cfg.equipment.filter((e) => e.probe && e.ip)
+		// an ATEM that is read over its protocol (telemetry) is not also pinged with hellos: every hello opens a
+		// session the switcher has to time out, and the Minis only have a handful of session slots
+		const items = this.cfg.equipment.filter((e) => e.probe && e.ip && !(e.telemetry === 'atem' && String(e.probe).startsWith('atem')))
 		const res = await probeAll(items)
 		for (const [ip, r] of res) this.probes.set(ip, { ...r, t: Date.now() })
 		this.state.updated.probe = Date.now()
 	}
 
 	async pollTelemetry() {
+		const now = Date.now()
 		const items = this.cfg.equipment.filter((e) => e.telemetry && e.ip)
 		await Promise.all(
 			items.map(async (e) => {
 				try {
 					let t = null
 					if (e.telemetry === 'atem') {
+						// one protocol session per 20 s is plenty, and it doubles as the reachability probe
+						const prev = this.telemetry.get(e.ip)
+						if (prev && now - prev.t < 19000) return
 						const r = await readAtem(e.ip, { timeoutMs: 6000 })
 						t = r.ok || r.commands ? { kind: 'atem', product: r.product, version: r.version, streaming: r.streaming, program: r.program, preview: r.preview, inputs: r.inputs, programName: r.inputs[r.program]?.long || null, previewName: r.inputs[r.preview]?.long || null, error: r.error || null, otherCommands: r.unknown } : { kind: 'atem', error: r.error || 'no answer' }
+						this.probes.set(e.ip, { ok: !!(r.ok || r.commands), ms: r.ms, error: r.ok || r.commands ? undefined : r.error || 'no answer', info: { state: r.error === 'too many clients' ? 'too many clients' : r.ok ? 'accepting connections' : r.commands ? 'partial answer' : undefined }, t: now })
 					} else t = await restTelemetry(e.telemetry, e.ip)
 					if (t) this.telemetry.set(e.ip, { ...t, t: Date.now() })
 					else this.telemetry.delete(e.ip)
