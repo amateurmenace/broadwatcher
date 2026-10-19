@@ -701,7 +701,9 @@ function renderAiView() {
 		parts.push(`<div class="ai-meta">${esc(ai.model)} · ${Math.round(ai.ms / 1000)} s · ${fmtAgo(ai.t)} ago · confidence ${esc(ai.confidence || '?')}</div>`)
 	}
 	if (aiStatus?.lastError) parts.push(`<p class="error">AI error: ${esc(aiStatus.lastError)}</p>`)
-	parts.push(`<div class="insp-actions"><button class="btn" id="reassess" ${!aiStatus?.enabled || aiStatus?.busy ? 'disabled' : ''}>Reassess now</button></div>`)
+	const pv = aiStatus?.providers
+	const seg = pv ? `<span class="seg mini" title="which AI judges readiness"><button type="button" class="${pv.active === 'openai' ? 'on' : ''}" data-ai-provider="openai" title="${esc(pv.local ? 'local server: ' + pv.localUrl : 'no local server set up (Settings)')}">Local</button><button type="button" class="${pv.active === 'anthropic' ? 'on' : ''}" data-ai-provider="anthropic" title="${esc(pv.anthropic ? pv.anthropicModel : 'no Anthropic key yet (Settings)')}">Claude</button></span>` : ''
+	parts.push(`<div class="insp-actions"><button class="btn" id="reassess" ${!aiStatus?.enabled || aiStatus?.busy ? 'disabled' : ''}>Reassess now</button>${seg}<button class="btn quiet" id="aiSettings" title="AI settings">Settings</button></div>`)
 	parts.push(`<h3>Ask the engineer</h3><p>Questions are answered from the live state: "is the field kit ready?", "why is the NDI VLAN busy?", "what changed in the last hour?"</p><div class="ask"><input id="askInput" placeholder="ask about the network…" ${!aiStatus?.enabled ? 'disabled' : ''}><button class="btn" id="askBtn" ${!aiStatus?.enabled ? 'disabled' : ''}>Ask</button></div><div id="askOut">${qa
 		.slice()
 		.reverse()
@@ -828,7 +830,35 @@ document.addEventListener('click', (e) => {
 	if (t.closest?.('#hudReady')) return closeInspector()
 	if (t.closest?.('#hudToggle')) return toggleHud()
 	if (t.closest?.('#themeToggle')) return applyTheme(document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark')
+	if (t.closest?.('#settingsBtn')) return Settings.open('', { onSaved: refreshAiStatus })
+	if (t.id === 'aiSettings') return Settings.open('ai', { onSaved: refreshAiStatus })
+	const prov = t.closest?.('[data-ai-provider]')
+	if (prov) return switchAiProvider(prov.getAttribute('data-ai-provider'))
 })
+// the one-click local/cloud switch: only between providers that are set up; otherwise open Settings
+async function switchAiProvider(provider) {
+	const pv = aiStatus?.providers || {}
+	if ((provider === 'anthropic' && !pv.anthropic) || (provider === 'openai' && !pv.local)) return Settings.open('ai', { onSaved: refreshAiStatus })
+	if (pv.active === provider) return
+	try {
+		await fetch('/api/settings', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ai: { provider } }) })
+	} catch (e) {
+		alert('could not switch the AI: ' + e.message)
+	}
+	aiInfo = null
+	refreshAiStatus()
+}
+function refreshAiStatus() {
+	fetch('/api/ai/status').then((r) => r.json()).then((st) => {
+		aiStatus = st
+		if (st.assessment) aiInfo = st.assessment
+		if (state) {
+			renderHud(state)
+			renderHudPanel(state)
+		}
+		if (!selection) renderInspector()
+	}).catch(() => {})
+}
 document.addEventListener('change', (e) => {
 	if (e.target.id === 'atemMode') atemSession(e.target.getAttribute('data-ip'), 'mode', e.target.value)
 })
@@ -873,6 +903,10 @@ fetch('/api/ai/status').then((r) => r.json()).then((st) => {
 	aiStatus = st
 	if (st.assessment) aiInfo = st.assessment
 	if (!selection) renderInspector()
+}).catch(() => {})
+// first run of a fresh install (no gateway key yet): open the settings with the welcome note
+fetch('/api/settings').then((r) => r.json()).then((s) => {
+	if (s && s.firstRun) Settings.open('gateway', { welcome: true, onSaved: refreshAiStatus })
 }).catch(() => {})
 fetch('/api/state').then((r) => r.json()).then((s) => s.ts && render(s)).catch(() => {})
 connect()

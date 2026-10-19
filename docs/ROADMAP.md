@@ -233,7 +233,8 @@ phone) so it is not open to every guest on Wi-Fi; Electron shows a QR code to op
 7. **Resilience:** watchdog restart on crash, log file with rotation, memory caps, a `/api/health` the Companion
    HEALTH page can watch, and a visible "data freshness" per source.
 8. **Config UI** for thresholds, polling, the AI endpoint and the SNMP community, not only the roster; a
-   "test" button next to each.
+   "test" button next to each. *Done in 0.5.0:* the Settings screen (AI local/Claude toggle with keys, gateway,
+   SNMP, Companion, server, thresholds, each with Test), plus the public "Broadwatcher Community" flavour.
 9. **Security:** the embedded UniFi key is read-only for most things but can read client lists; keep the repo
    private, rotate the key if the laptop is ever lost, add the LAN token before exposing the server.
 

@@ -43,6 +43,7 @@
 	<div class="hud-right">
 		<div class="hud-issues" id="hudIssues"></div>
 		<div class="clock" id="clock">00:00:00</div>
+		<button class="theme-toggle" id="settingsBtn" title="Settings (AI, gateway, SNMP, Companion, server)">⚙</button>
 		<button class="theme-toggle" id="themeToggle" title="Light / dark">◐</button>
 		<button class="hud-toggle" id="hudToggle" title="Expand the HUD (H)">Details <i>▾</i></button>
 	</div>
@@ -111,8 +112,13 @@
 	<div class="editor" id="rosterEditor"></div>
 </div>
 
+<div class="overlay" id="settingsOverlay" hidden>
+	<div class="editor" id="settingsEditor"></div>
+</div>
+
 <div id="tip" class="tip" hidden></div>
 <script src="map.js"></script>
+<script src="settings.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

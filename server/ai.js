@@ -33,9 +33,16 @@ Rules of judgement:
 - STREAM PATHS show the internet -> port forward -> device route of remote streams. A sender on WAN port 1935 lands on the
   field Mini (usually on standby), not on the HD8, which listens on WAN 1937: say so plainly when a RED path shows it.`
 
+export const AI_DEFAULTS = { enabled: true, provider: 'openai', base_url: '', model: '', api_key: '', anthropic_api_key: '', anthropic_model: 'claude-opus-5-5', anthropic_effort: 'medium', timeout_ms: 90000, assess_every_s: 180 }
+export const ANTHROPIC_MODELS = [
+	{ id: 'claude-opus-5-5', label: 'Claude Opus 5.5 (best judgement)', price: '$4 / $20 per M tokens' },
+	{ id: 'claude-sonnet-5-5', label: 'Claude Sonnet 5.5 (fast)', price: '$2 / $10 per M tokens' },
+	{ id: 'claude-haiku-5-5', label: 'Claude Haiku 5.5 (cheapest)', price: '$0.10 / $0.50 per M tokens' },
+]
+
 export class AI {
 	constructor(cfg = {}, log = console.log, thresholds = {}) {
-		this.cfg = { enabled: true, provider: 'openai', base_url: '', model: '', api_key: '', anthropic_api_key: '', anthropic_model: 'claude-opus-5-5', anthropic_effort: 'medium', timeout_ms: 90000, assess_every_s: 180, ...cfg }
+		this.cfg = { ...AI_DEFAULTS, ...cfg }
 		this.thresholds = thresholds
 		this.log = log
 		this.assessment = null // {verdict, headline, reasons, actions, model, t, ms}
@@ -59,7 +66,30 @@ export class AI {
 	}
 
 	status() {
-		return { enabled: this.enabled, provider: this.provider, model: this.modelName, endpoint: this.provider === 'anthropic' ? 'api.anthropic.com' : this.cfg.base_url, busy: this.busy, lastError: this.lastError, assessment: this.assessment }
+		return { enabled: this.enabled, provider: this.provider, model: this.modelName, endpoint: this.provider === 'anthropic' ? 'api.anthropic.com' : this.cfg.base_url, busy: this.busy, lastError: this.lastError, assessment: this.assessment, providers: this.providers() }
+	}
+
+	// which providers are set up (the local/cloud toggle in the UI switches between the usable ones)
+	providers() {
+		return { local: !!this.cfg.base_url, anthropic: this.hasAnthropicKey, active: this.provider, enabled: this.enabled, localModel: this.cfg.model || '(server default)', anthropicModel: this.cfg.anthropic_model, localUrl: this.cfg.base_url }
+	}
+
+	// new settings from the Settings screen: forget the cached verdicts and the SDK client
+	configure(cfg = {}, thresholds) {
+		this.cfg = { ...AI_DEFAULTS, ...cfg }
+		if (thresholds) this.thresholds = thresholds
+		this.anthropic = null
+		this.assessment = null
+		this.diagnoses.clear()
+		this.lastError = null
+	}
+
+	// try a provider with the given (unsaved) settings: one tiny request
+	async test(cfg = {}) {
+		const probe = new AI({ ...this.cfg, ...cfg }, this.log, this.thresholds)
+		if (!probe.enabled) throw new Error(probe.provider === 'anthropic' ? 'no Anthropic API key' : 'no server URL for the local AI')
+		const r = await probe.chat([{ role: 'system', content: 'You are a connectivity test. Reply with the single word OK.' }, { role: 'user', content: 'Say OK.' }], { maxTokens: 20, temperature: 0 })
+		return { ok: true, provider: probe.provider, model: probe.modelName, endpoint: probe.provider === 'anthropic' ? 'api.anthropic.com' : probe.cfg.base_url, ms: r.ms, reply: r.text.slice(0, 60) }
 	}
 
 	async chat(messages, { maxTokens = 900, temperature = 0.2 } = {}) {

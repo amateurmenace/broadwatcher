@@ -7,9 +7,15 @@ import { fileURLToPath } from 'node:url'
 import { startServer, loadConfig, saveUserConfig } from './server/server.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const BUNDLED_CONFIG = path.join(__dirname, 'config.json')
+// flavour: "private" (BIG's own build, config.json with the site's keys) or "public" (Broadwatcher Community,
+// config.public.json without keys; scripts/build-flavor.mjs sets package.json flavor at build time)
+let FLAVOR = process.env.BW_FLAVOR || 'private'
+try {
+	FLAVOR = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8')).flavor || FLAVOR
+} catch {}
+const BUNDLED_CONFIG = path.join(__dirname, FLAVOR === 'public' ? 'config.public.json' : 'config.json')
 
-app.setName('Broadwatcher')
+app.setName(FLAVOR === 'public' ? 'Broadwatcher Community' : 'Broadwatcher')
 nativeTheme.themeSource = 'dark'
 
 // one Broadwatcher per machine: a second copy would open a second session with every switcher it watches
@@ -133,6 +139,7 @@ function buildMenu() {
 		{
 			label: 'Broadwatcher',
 			submenu: [
+				{ label: 'Settings…', accelerator: 'CmdOrCtrl+,', click: () => win?.webContents.executeJavaScript('window.Settings && Settings.open()').catch(() => {}) },
 				{ label: 'Reload dashboard', accelerator: 'CmdOrCtrl+R', click: () => win?.reload() },
 				{ label: 'Open in browser', click: () => running && shell.openExternal(running.url) },
 				{ type: 'separator' },
@@ -164,7 +171,13 @@ function buildMenu() {
 					},
 				},
 				{ type: 'separator' },
-				{ label: 'Open UniFi Network', click: () => shell.openExternal(loadConfig(BUNDLED_CONFIG, userConfig()).gateway?.ui_url || 'https://192.168.20.1') },
+				{
+					label: 'Open UniFi Network',
+					click: () => {
+						const g = loadConfig(BUNDLED_CONFIG, userConfig()).gateway || {}
+						shell.openExternal(g.ui_url || g.url || 'https://192.168.1.1')
+					},
+				},
 				{ type: 'separator' },
 				isMac ? { role: 'close' } : { role: 'quit' },
 			],

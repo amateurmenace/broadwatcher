@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 jobs:
-  # create the release first, so the two builders below never race to create it (that race lost the mac dmg once)
+  # create the release first, so the builders below never race to create it (that race lost the mac dmg once)
   prepare:
     runs-on: ubuntu-latest
     steps:
@@ -20,15 +20,16 @@ jobs:
         run: |
           TAG="${GITHUB_REF_NAME}"
           case "$TAG" in v*) ;; *) TAG="v$(node -p "require('./package.json').version")";; esac
-          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "BIG NetWatch ${TAG#v}" --notes "Mac (universal dmg / zip) and Windows (installer / portable) builds. Unsigned: Mac = right-click > Open on first launch, Windows = SmartScreen > More info > Run anyway."
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "Broadwatcher ${TAG#v}" --notes "Broadwatcher (BIG build, keys embedded) and Broadwatcher Community (public build, no keys: enter your own in Settings). Mac universal dmg / zip and Windows installer / portable. Unsigned: Mac = right-click > Open on first launch, Windows = SmartScreen > More info > Run anyway."
 
   build:
-    name: Build (${{ matrix.os }})
+    name: Build ${{ matrix.flavor }} (${{ matrix.os }})
     needs: prepare
     strategy:
       fail-fast: false
       matrix:
         os: [macos-latest, windows-latest]
+        flavor: [private, public]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -38,17 +39,25 @@ jobs:
           cache: npm
       - name: Install
         run: npm ci || npm install
+      - name: Embed the Anthropic key into the private build (repository secret ANTHROPIC_API_KEY, optional)
+        if: matrix.flavor == 'private'
+        run: node scripts/embed-secrets.mjs
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       - name: Build and publish to the GitHub release
-        run: npx electron-builder --publish always
+        run: node scripts/build-flavor.mjs ${{ matrix.flavor }} --publish always
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
       - name: Keep the installers as workflow artifacts too
         uses: actions/upload-artifact@v4
         with:
-          name: BIG-NetWatch-${{ matrix.os }}
+          name: Broadwatcher-${{ matrix.flavor }}-${{ matrix.os }}
           path: |
             dist/*.dmg
             dist/*.zip
             dist/*.exe
+            dist/public/*.dmg
+            dist/public/*.zip
+            dist/public/*.exe
           if-no-files-found: warn

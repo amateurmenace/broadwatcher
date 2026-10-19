@@ -41,8 +41,17 @@ touching anything. The roadmap for the next phase is in `docs/ROADMAP.md`.
   (port forward → target → intake, data threshold 50 kB so port scanners do not count), `knownControllers`
   (slot census: Companion API + process list via PowerShell/ps once a minute), `forwardHits` (last hour).
 - `scripts/atem-capture.mjs` one-shot remote-source capture to JSON (quiet hours only).
-- `ui/index.html`, `ui/styles.css` (light "paper" theme default, `data-theme="dark"`), `ui/app.js`, `ui/map.js` (SVG signal map).
-- `main.js` Electron shell: copies `config.json` to userData on first run, menu (Open config, Restart server, Reset).
+- `ui/index.html`, `ui/styles.css` (light "paper" theme default, `data-theme="dark"`), `ui/app.js`, `ui/map.js` (SVG signal map),
+  `ui/settings.js` (Settings screen: AI local/Claude toggle + keys, gateway, SNMP, Companion, server, thresholds;
+  `/api/settings`, `/api/settings/test`; an empty secret field keeps the stored secret, null clears it).
+- `main.js` Electron shell: flavour from `package.json.flavor` (set by `scripts/build-flavor.mjs`) picks
+  `config.json` (private) or `config.public.json` (Community); copies it to userData on first run; single-instance
+  lock (skipped with NETWATCH_PORT / --smoke); Companion autostart; menu (Settings, Open config, Restart server,
+  Start Companion, Reset).
+- Two flavours per release (`.github/workflows/release.yml` matrix os × flavor): private = `Broadwatcher-…`
+  with `config.json`; public = `Broadwatcher Community` (`Broadwatcher-Community-…`, own appId/userData,
+  `config.public.json`, no keys). `scripts/embed-secrets.mjs` writes the `ANTHROPIC_API_KEY` repository secret
+  into the private build's config at CI time (never commit the key).
 
 ## Rules that exist for a reason
 
@@ -74,6 +83,9 @@ touching anything. The roadmap for the next phase is in `docs/ROADMAP.md`.
    `record_disk_volume`, `long_N`/`short_N`, `aux1_input`). The Stream Deck config
    (`Desktop\Town Meeting Companion`) has its own Python UniFi poller; Broadwatcher does not write into
    Companion (yet, see roadmap). The Electron app starts Companion if it is not running (`companion.autostart`).
+9. **Secrets:** the UniFi key is bundled in `config.json` (private repo, private build only); the Anthropic key is
+   never committed: it comes from the GitHub secret at build time or from the Settings screen into the user
+   config. `config.public.json` must stay free of keys and of BIG's devices.
 8. **Two Claude sessions may be working in this repo.** On 2026-10-19 a second session (title "Gemini-format
    API endpoint in front of LM Studio", driven by Steve over remote control) committed 0.3.3 (Anthropic SDK)
    while this one was mid-edit. Run `git log` before committing, build on HEAD, commit small and often.

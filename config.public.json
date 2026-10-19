@@ -1,0 +1,79 @@
+{
+  "_comment": "Broadwatcher Community: the public build's defaults. No keys, no site-specific devices. Everything here is edited in the app (Settings, Edit roster) on first run and saved to the user config file.",
+  "flavor": "public",
+  "config_version": 4,
+  "gateway": {
+    "name": "UniFi gateway",
+    "url": "https://192.168.1.1",
+    "api_key": "",
+    "site": "default",
+    "ui_url": ""
+  },
+  "server": {
+    "host": "127.0.0.1",
+    "port": 8766
+  },
+  "poll": {
+    "devices_s": 5,
+    "clients_s": 10,
+    "flows_s": 10,
+    "log_s": 30,
+    "probe_s": 15,
+    "history_points": 120,
+    "telemetry_s": 10
+  },
+  "thresholds": {
+    "wan_latency_ms": 80,
+    "cpu_pct": 85,
+    "mem_pct": 90,
+    "temp_c": 70,
+    "port_error_rate": 1,
+    "stream_min_mbps": 1.5
+  },
+  "atem": {
+    "name": "ATEM switcher",
+    "ip": "",
+    "control_port": 9910,
+    "probe": "atem",
+    "session": "companion",
+    "controllers": [
+      { "name": "Companion", "where": "this computer", "detect": "companion" },
+      { "name": "ATEM Software Control", "where": "", "detect": "" }
+    ]
+  },
+  "networks": [],
+  "equipment": [],
+  "auto_discover_ouis": [
+    "Blackmagic",
+    "Audinate",
+    "Sennheiser",
+    "BEHRINGER",
+    "NewTek",
+    "Vizrt",
+    "AJA",
+    "Ross",
+    "Haivision",
+    "Teradek"
+  ],
+  "ai": {
+    "enabled": true,
+    "provider": "anthropic",
+    "base_url": "",
+    "model": "",
+    "api_key": "",
+    "anthropic_api_key": "",
+    "anthropic_model": "claude-opus-5-5",
+    "anthropic_effort": "medium",
+    "assess_every_s": 180,
+    "timeout_ms": 90000
+  },
+  "snmp": {
+    "community": "",
+    "every_s": 3
+  },
+  "companion": {
+    "url": "http://127.0.0.1:8000",
+    "atem_label": "atem",
+    "autostart": false
+  }
+}

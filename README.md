@@ -78,11 +78,43 @@ it from Settings > Apps.
 The app talks to the UDM at `https://192.168.20.1` with the embedded Integrations API key, so it works only
 on the BIG network (or over VPN). Nothing leaves the LAN unless the AI is pointed at Anthropic.
 
-## Configuration
+## Settings and the AI toggle
 
-On first run the bundled `config.json` is copied to the app's user-data folder (**Broadwatcher > Open config
+The gear button in the top bar (or **Broadwatcher > Settings…**, Ctrl/Cmd+,) opens the Settings screen:
+
+- **AI**: a two-way switch between a **local AI server** (LM Studio, Ollama, vLLM, anything OpenAI-compatible:
+  URL, model, optional key) and **Claude** (your Anthropic API key, model Opus 5.5 / Sonnet 5.5 / Haiku 5.5,
+  effort). Each side has a *Test* button that sends one tiny request. The same Local / Claude switch sits
+  next to *Reassess now* in the readiness rail for one-click changes during a show; it only offers the
+  providers that are set up. Keys are stored in your local config file and masked in the screen (an empty
+  field keeps the saved key, *Remove* forgets it).
+- **UniFi gateway** (URL, Integrations API key, site), **SNMP** (community, interval), **Companion** (API
+  address, ATEM connection label, start with Broadwatcher), **Server** (listen on this computer only or on the
+  LAN, port; applies after a restart) and the alert **thresholds**. Gateway, SNMP and poll changes restart the
+  polling in place; AI, thresholds, Companion and the switcher mode apply immediately.
+
+## Two builds: Broadwatcher and Broadwatcher Community
+
+Every release carries two flavours built from the same code:
+
+- **Broadwatcher** (`Broadwatcher-<version>-…`): BIG's own build. `config.json` is bundled with the UniFi key,
+  the roster, the VLANs and, when the repository secret `ANTHROPIC_API_KEY` is set in GitHub (Settings >
+  Secrets and variables > Actions), the Claude key, embedded at build time by `scripts/embed-secrets.mjs`
+  (then Claude is the default AI). The key never enters git.
+- **Broadwatcher Community** (`Broadwatcher-Community-<version>-…`): the public build. `config.public.json`
+  is bundled instead: no keys, no devices, Claude selected but without a key. On first start the Settings
+  screen opens with a welcome note; enter the gateway URL and key, the SNMP community and either a local AI
+  server or an Anthropic key, then add devices with *Edit roster*. It installs beside the BIG build (its own
+  app id and user-data folder, `Broadwatcher Community`).
+
+Build one locally with `node scripts/build-flavor.mjs public --win` (or `private`, `--mac`); the script writes
+the electron-builder configuration to `dist/builder-<flavour>.json` and runs it.
+
+## Configuration file
+
+On first run the bundled config is copied to the app's user-data folder (**Broadwatcher > Open config
 file**; macOS `~/Library/Application Support/Broadwatcher/config.json`, Windows `%APPDATA%\Broadwatcher\config.json`).
-The roster is edited in the app and saved there; everything else is edited in the file, then
+The roster and the Settings screen write there; anything else can be edited in the file, then
 **Broadwatcher > Restart server**. Updates keep your edits: the bundled file carries a `config_version`, and a
 roster edited in the app always wins over the bundled list (new bundled devices are appended on standby).
 
