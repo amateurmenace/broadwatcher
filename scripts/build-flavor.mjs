@@ -29,6 +29,9 @@ if (flavor === 'public') {
 	build.dmg = { ...(build.dmg || {}), artifactName: 'Broadwatcher-Community-${version}-mac.${ext}' }
 	build.extraMetadata = { name: 'broadwatcher-community', productName: 'Broadwatcher Community', flavor: 'public', description: 'Broadwatcher Community: real-time broadcast-network monitor (UniFi + Blackmagic + your own AI)' }
 	build.directories = { ...(build.directories || {}), output: 'dist/public' }
+	// the public build publishes to the public repository when CI has a token for it (BW_PUBLIC_REPO is set
+	// together with GH_TOKEN = the PUBLIC_RELEASE_TOKEN secret); otherwise it lands in the private release
+	if (process.env.BW_PUBLIC_REPO) build.publish = { provider: 'github', owner: pkg.build.publish?.owner || 'amateurmenace', repo: process.env.BW_PUBLIC_REPO, releaseType: 'release' }
 } else {
 	build.files.push('config.json')
 	build.extraMetadata = { flavor: 'private' }

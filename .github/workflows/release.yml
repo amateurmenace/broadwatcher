@@ -8,8 +8,14 @@ on:
 permissions:
   contents: write
 
+env:
+  # the public "Broadwatcher Community" build goes to this public repository when the PUBLIC_RELEASE_TOKEN
+  # secret (a fine-grained token with Contents: write on that repository) exists; otherwise it is attached to
+  # the private release next to the BIG build
+  PUBLIC_REPO: amateurmenace/broadwatcher-community
+
 jobs:
-  # create the release first, so the builders below never race to create it (that race lost the mac dmg once)
+  # create the releases first, so the builders below never race to create them (that race lost the mac dmg once)
   prepare:
     runs-on: ubuntu-latest
     steps:
@@ -20,7 +26,17 @@ jobs:
         run: |
           TAG="${GITHUB_REF_NAME}"
           case "$TAG" in v*) ;; *) TAG="v$(node -p "require('./package.json').version")";; esac
-          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "Broadwatcher ${TAG#v}" --notes "Broadwatcher (BIG build, keys embedded) and Broadwatcher Community (public build, no keys: enter your own in Settings). Mac universal dmg / zip and Windows installer / portable. Unsigned: Mac = right-click > Open on first launch, Windows = SmartScreen > More info > Run anyway."
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "Broadwatcher ${TAG#v}" --notes "Broadwatcher (BIG build, keys embedded). Mac universal dmg / zip and Windows installer / portable. Unsigned: Mac = right-click > Open on first launch, Windows = SmartScreen > More info > Run anyway. The public Broadwatcher Community build is released separately when the public repository is configured, otherwise it is attached here too."
+      - name: Create the public release for Broadwatcher Community (when the public repository token exists)
+        if: ${{ env.HAS_PUBLIC_TOKEN == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.PUBLIC_RELEASE_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          case "$TAG" in v*) ;; *) TAG="v$(node -p "require('./package.json').version")";; esac
+          gh release view "$TAG" --repo "$PUBLIC_REPO" >/dev/null 2>&1 || gh release create "$TAG" --repo "$PUBLIC_REPO" --title "Broadwatcher Community ${TAG#v}" --notes "Mac (universal dmg / zip) and Windows (installer / portable) builds of the public flavour: no keys inside, enter your own in Settings on first start. Unsigned: Mac = right-click > Open on first launch, Windows = SmartScreen > More info > Run anyway."
+    env:
+      HAS_PUBLIC_TOKEN: ${{ secrets.PUBLIC_RELEASE_TOKEN != '' }}
 
   build:
     name: Build ${{ matrix.flavor }} (${{ matrix.os }})
@@ -31,6 +47,8 @@ jobs:
         os: [macos-latest, windows-latest]
         flavor: [private, public]
     runs-on: ${{ matrix.os }}
+    env:
+      HAS_PUBLIC_TOKEN: ${{ secrets.PUBLIC_RELEASE_TOKEN != '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -44,8 +62,22 @@ jobs:
         run: node scripts/embed-secrets.mjs
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-      - name: Build and publish to the GitHub release
-        run: node scripts/build-flavor.mjs ${{ matrix.flavor }} --publish always
+      - name: Build and publish the private build to this repository's release
+        if: matrix.flavor == 'private'
+        run: node scripts/build-flavor.mjs private --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - name: Build and publish Broadwatcher Community to the public repository
+        if: matrix.flavor == 'public' && env.HAS_PUBLIC_TOKEN == 'true'
+        run: node scripts/build-flavor.mjs public --publish always
+        env:
+          GH_TOKEN: ${{ secrets.PUBLIC_RELEASE_TOKEN }}
+          BW_PUBLIC_REPO: broadwatcher-community
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - name: Build and publish Broadwatcher Community next to the private build (no public token yet)
+        if: matrix.flavor == 'public' && env.HAS_PUBLIC_TOKEN != 'true'
+        run: node scripts/build-flavor.mjs public --publish always
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'

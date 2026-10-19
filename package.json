@@ -80,7 +80,7 @@
     "publish": {
       "provider": "github",
       "owner": "amateurmenace",
-      "repo": "big-netwatch",
+      "repo": "broadwatcher",
       "releaseType": "release"
     },
     "portable": {
@@ -92,7 +92,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/amateurmenace/big-netwatch.git"
+    "url": "https://github.com/amateurmenace/broadwatcher.git"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.135.0"
