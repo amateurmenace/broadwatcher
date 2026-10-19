@@ -29,6 +29,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const UI_DIR = path.join(__dirname, '..', 'ui')
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.woff2': 'font/woff2', '.webmanifest': 'application/manifest+json' }
 const DEEP_KEYS = ['gateway', 'poll', 'thresholds', 'ai', 'snmp', 'server', 'atem', 'companion']
+const BUNDLED_SECRETS = { ai: ['anthropic_api_key', 'api_key'], gateway: ['api_key'], snmp: ['community'] }
 
 // The bundled config is the source of truth for the equipment list, the ATEM, SNMP and AI defaults; the user's
 // copy may override any of it. When the bundled config is newer (config_version) than the user's copy, the
@@ -44,6 +45,14 @@ export function loadConfig(bundledPath, userPath) {
 		const outdated = (user.config_version || 0) < (base.config_version || 0)
 		const deepKeys = Object.fromEntries(DEEP_KEYS.map((k) => [k, deep(k)]))
 		const merged = outdated ? { ...base, ...deepKeys } : { ...base, ...user, ...deepKeys }
+		// a secret the bundle carries (the Anthropic key embedded at build time, the UniFi key, the SNMP community)
+		// fills a field the user's copy has empty: an empty field is "never set", not a choice
+		for (const [section, keys] of Object.entries(BUNDLED_SECRETS)) {
+			for (const k of keys) if (!merged[section]?.[k] && base[section]?.[k]) merged[section] = { ...(merged[section] || {}), [k]: base[section][k] }
+		}
+		// a user who never had a Claude key could only have run the local AI: when the bundle brings a key, its
+		// provider choice comes with it (the Settings toggle writes an explicit choice afterwards)
+		if (base.ai?.anthropic_api_key && !user.ai?.anthropic_api_key && user.ai?.provider_chosen === undefined && base.ai.provider) merged.ai = { ...merged.ai, provider: base.ai.provider }
 		// a roster edited in the app survives upgrades: the user's entries win, new bundled devices are appended;
 		// fields that a newer bundle adds to a known device (e.g. its Companion label) are filled in when missing
 		if (user.equipment_edited && Array.isArray(user.equipment)) {
@@ -215,6 +224,7 @@ export function startServer({ config, configPath = null, host = '127.0.0.1', por
 			if (JSON.stringify(config[section]) === before) continue
 			saved[section] = config[section]
 			if (section === 'ai') {
+				if (body.ai.provider) config.ai.provider_chosen = true // an explicit choice from now on
 				ai.configure(config.ai, config.thresholds)
 				applied.push('AI')
 			} else if (section === 'thresholds') {
