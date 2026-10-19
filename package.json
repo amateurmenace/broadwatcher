@@ -75,7 +75,7 @@
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
-      "artifactName": "BIG-NetWatch-${version}-win-setup.${ext}"
+      "artifactName": "Broadwatcher-${version}-win-setup.${ext}"
     },
     "publish": {
       "provider": "github",
@@ -84,10 +84,10 @@
       "releaseType": "release"
     },
     "portable": {
-      "artifactName": "BIG-NetWatch-${version}-win-portable.${ext}"
+      "artifactName": "Broadwatcher-${version}-win-portable.${ext}"
     },
     "dmg": {
-      "artifactName": "BIG-NetWatch-${version}-mac.${ext}"
+      "artifactName": "Broadwatcher-${version}-mac.${ext}"
     }
   },
   "repository": {
