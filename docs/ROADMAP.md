@@ -247,7 +247,7 @@ phone) so it is not open to every guest on Wi-Fi; Electron shows a QR code to op
 
 ## Prompt for the next session
 
-> Read `CLAUDE.md` and `docs/ROADMAP.md` in `A:\___ENGINEERING PROJECTS\BIG NetWatch` (the Broadwatcher
+> Read `CLAUDE.md` and `docs/ROADMAP.md` in `A:\___ENGINEERING PROJECTS\BIG NetWatch\broadwatcher` (the Broadwatcher
 > repo, github amateurmenace/broadwatcher) end to end, then the hand-over notes in
 > `C:\Users\Broadcast Pix\AppData\Roaming\Claude\side-session-notes\local_d99bd98d-7561-426c-a7b3-233b5080f0ea\netwatch.md`.
 > Then implement roadmap items in the suggested order, releasing a tagged version after each milestone and

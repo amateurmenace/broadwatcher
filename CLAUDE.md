@@ -7,7 +7,8 @@ touching anything. The roadmap for the next phase is in `docs/ROADMAP.md`.
 
 ## Where things are
 
-- Source: `A:\___ENGINEERING PROJECTS\BIG NetWatch` (folder name is historical; the app is Broadwatcher).
+- Source: `A:\___ENGINEERING PROJECTS\BIG NetWatch\broadwatcher` (the parent folder `BIG NetWatch` is Steve's engineering project folder and may hold other
+  material; only `broadwatcher\` is the git repo).
   Branch `master`. Remote: https://github.com/amateurmenace/broadwatcher (private; `gh` is logged in as
   amateurmenace in Claude's shell, not in Steve's own PowerShell).
 - Releases: bump `version` in `package.json`, commit, `git tag -a vX.Y.Z`, push the tag. `.github/workflows/release.yml`
