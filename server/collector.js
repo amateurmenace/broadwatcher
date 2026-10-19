@@ -230,6 +230,17 @@ export class Collector extends EventEmitter {
 			if (u.last_seen) this.lastSeen.set(mac, u.last_seen)
 		}
 		this.netconf = (await this.api.networks()) || []
+		// port forwards: an inbound flow is logged against the WAN address and WAN port, so a forwarded stream
+		// (e.g. WAN 1937 -> ATEM 1935) is only recognised once the forward table is known
+		try {
+			const pf = (await this.api.portForwards()) || []
+			this.portForwards = pf
+				.filter((f) => f.enabled !== false)
+				.map((f) => ({ name: f.name, proto: f.proto || 'tcp_udp', wanPorts: String(f.dst_port || ''), to: f.fwd, toPorts: String(f.fwd_port || ''), src: f.src || 'any' }))
+			this.state.portForwards = this.portForwards
+		} catch (e) {
+			this.log('[portforward] ' + e.message)
+		}
 		this.state.updated.users = Date.now()
 	}
 
@@ -341,9 +352,27 @@ export class Collector extends EventEmitter {
 	}
 
 	// ---------------------------------------------------------------- flows -> ATEM incoming + peers
+	// WAN port -> {ip, port} of the LAN target, from the UDM's port-forward table ("1937", "5200-5299" or "a,b")
+	forwardTarget(dport, proto) {
+		for (const f of this.portForwards || []) {
+			if (f.proto !== 'tcp_udp' && f.proto && proto && f.proto.toLowerCase() !== String(proto).toLowerCase()) continue
+			const wan = f.wanPorts.split(',').map((x) => x.trim())
+			const lan = f.toPorts.split(',').map((x) => x.trim())
+			for (let i = 0; i < wan.length; i++) {
+				const [a, b] = wan[i].split('-').map(Number)
+				if (dport === a || (b && dport >= a && dport <= b)) {
+					const [la] = (lan[i] || lan[0] || wan[i]).split('-').map(Number)
+					return { ip: f.to, port: b ? la + (dport - a) : la || dport, name: f.name, wanPort: dport }
+				}
+			}
+		}
+		return null
+	}
+
 	ingestFlows(recs, now) {
 		const atemIp = this.cfg.atem?.ip
 		const eqIps = new Set(this.cfg.equipment.map((e) => e.ip))
+		const wanIp = this.state.gateway?.wan?.ip || null
 		const recent = this.state.flows.recent
 		const bytesTop = []
 		let blocked = 0
@@ -379,6 +408,15 @@ export class Collector extends EventEmitter {
 				packets: num(td.packets_total),
 				risk: f.risk,
 			}
+			if (wanIp && rec.dst === wanIp && rec.dir === 'incoming') {
+				const t = this.forwardTarget(rec.dport, rec.proto)
+				if (t) {
+					rec.viaForward = { name: t.name, wanPort: t.wanPort }
+					rec.dst = t.ip
+					rec.dport = t.port
+					rec.dstName = this.cfg.equipment.find((e) => e.ip === t.ip)?.name || rec.dstName
+				}
+			}
 			bytesTop.push(rec)
 			if (eqIps.has(rec.src) || eqIps.has(rec.dst)) recent.unshift(rec)
 			if (atemIp && rec.dst === atemIp) this.noteIncoming(rec, now)
@@ -410,7 +448,7 @@ export class Collector extends EventEmitter {
 		const key = `${rec.src}>${rec.dport}/${rec.proto}`
 		let s = this.incoming.get(key)
 		if (!s) {
-			s = { key, src: rec.src, sport: rec.sport, srcName: rec.srcName, region: rec.srcRegion, zone: rec.srcZone, dport: rec.dport, proto: rec.proto, service: rec.service, app: rec.app, network: rec.network, action: rec.action, first: rec.t, last: 0, bytes: 0, packets: 0, flows: 0 }
+			s = { key, src: rec.src, sport: rec.sport, srcName: rec.srcName, region: rec.srcRegion, zone: rec.srcZone, dport: rec.dport, proto: rec.proto, service: rec.service, app: rec.app, network: rec.network, action: rec.action, viaForward: rec.viaForward || null, first: rec.t, last: 0, bytes: 0, packets: 0, flows: 0 }
 			this.incoming.set(key, s)
 			if (rec.action !== 'blocked') this.event('flow', `Flow into the ATEM from ${rec.srcName || rec.src}${rec.srcRegion ? ' (' + rec.srcRegion + ')' : ''} → ${rec.proto} port ${rec.dport}`, { entity: { type: 'atem' } })
 			else this.event('flow', `Blocked connection to the ATEM from ${rec.src}${rec.srcRegion ? ' (' + rec.srcRegion + ')' : ''} → ${rec.proto} port ${rec.dport}`, { entity: { type: 'atem' }, level: 'warn' })

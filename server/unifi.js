@@ -63,6 +63,7 @@ export class UniFi {
 	users() { return this.classic('rest/user') } // every known client incl. the names given in UniFi
 	networks() { return this.classic('rest/networkconf') }
 	portProfiles() { return this.classic('rest/portconf') }
+	portForwards() { return this.classic('rest/portforward') }
 	sysinfo() { return this.classic('stat/sysinfo') }
 
 	// v2 endpoints

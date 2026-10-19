@@ -131,6 +131,8 @@ export class AI {
 		if (ev.length) L.push('BROADWATCHER EVENTS (newest first): ' + ev.map((x) => `${new Date(x.t).toLocaleTimeString()} ${x.text}`).join(' | '))
 		const log = (state.log || []).filter((l) => l.severity !== 'info').slice(0, 12)
 		if (log.length) L.push('UNIFI EVENTS (notable, newest first): ' + log.map((l) => `${new Date(l.t).toLocaleTimeString()} ${l.title}`).join(' | '))
+		const pfs = (state.portForwards || []).filter((f) => state.equipment.some((e) => e.ip === f.to) || /atem|ndi|rtmp|srt|stream/i.test(f.name))
+		if (pfs.length) L.push('PORT FORWARDS to broadcast gear (WAN port -> LAN): ' + pfs.map((f) => `${f.name}: ${f.proto} ${f.wanPorts} -> ${f.to}:${f.toPorts}`).join('; '))
 		const top = (state.flows?.top || []).slice(0, 6)
 		if (top.length) L.push('BIGGEST FLOWS last poll: ' + top.map((f) => `${f.srcName || f.src} -> ${f.dstName || f.dst}:${f.dport} ${f.proto} ${f.service || ''} ${(f.bytes / 1e6).toFixed(1)}MB ${f.dir}`).join('; '))
 		return L.join('\n').slice(0, 14000)
