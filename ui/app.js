@@ -11,7 +11,6 @@ let selection = null // {type, id} shown in the inspector; null = readiness view
 let details = null
 let hover = null
 let mapAll = false
-let hudOpen = false
 const tips = new Map()
 const qa = [] // ask history [{q, a, ms}]
 const diagnoses = new Map()
@@ -100,8 +99,23 @@ function drawScopes() {
 		ctx.scale(dpr, dpr)
 		const n = Math.max(2, ...series.map((s) => (s.data || []).length))
 		const max = Math.max(extra.min || 1, ...series.flatMap((s) => s.data || [])) * 1.08
-		const x = (i) => 4 + (i / (n - 1)) * (w - 8)
-		const y = (v) => h - 4 - (v / max) * (h - 16)
+		const bare = !!extra.bare // tiny sparkline: no graticule, no labels, full height
+		const x = (i) => (bare ? 0 : 4) + (i / (n - 1)) * (w - (bare ? 0 : 8))
+		const y = (v) => h - (bare ? 1 : 4) - (v / max) * (h - (bare ? 2 : 16))
+		if (bare) {
+			for (const s of series) {
+				const arr = s.data || []
+				if (arr.length < 2) continue
+				const off = n - arr.length
+				ctx.beginPath()
+				arr.forEach((v, i) => (i ? ctx.lineTo(x(i + off), y(v)) : ctx.moveTo(x(i + off), y(v))))
+				ctx.strokeStyle = colors[s.color] || s.color
+				ctx.lineWidth = 1.2
+				ctx.lineJoin = 'round'
+				ctx.stroke()
+			}
+			continue
+		}
 		ctx.strokeStyle = colors.line
 		ctx.lineWidth = 1
 		for (let g = 1; g < 4; g++) {
@@ -204,32 +218,72 @@ function renderHud(s) {
 	$('consoleSub').textContent = gw ? `${gw.modelName} · ${s.clients.total} clients · up ${fmtUptime(gw.uptime)}` : '–'
 	const nets = (s.networks || []).filter((n) => n.watched).slice(0, 4)
 	$('hudVlans').innerHTML = nets
-		.map((n) => {
-			const hist = (n.history?.down || []).slice(-10)
-			const mx = Math.max(1, ...hist, ...(n.history?.up || []).slice(-10))
-			return `<div class="vl"><label>${esc(n.name.replace(/^BIG_/, ''))}</label><div class="bars">${hist.map((v) => `<i style="height:${Math.max(8, (v / mx) * 100)}%" class="${v > mx * 0.6 ? 'hot' : ''}"></i>`).join('')}</div><b>${fmtRate(n.down)}</b></div>`
-		})
+		.map((n) => `<div class="vl" title="${esc(n.name)}${n.subnet ? ' · ' + esc(n.subnet) : ''} · ${n.clients} clients"><label>${esc(vlanLabel(n.name))}<i>${n.vlan ?? ''}</i></label><div class="nums"><span class="dn">↓${fmtRate(n.down)}</span><span class="up">↑${fmtRate(n.up)}</span></div>${scope('vl:' + n.name, [{ data: (n.history?.down || []).slice(-60), color: 'in' }, { data: (n.history?.up || []).slice(-60), color: 'out' }], 'vspark', { bare: true })}<small>${n.clients} client${n.clients === 1 ? '' : 's'}</small></div>`)
 		.join('')
-	const top = s.flows.top[0]
-	$('flowTicker').innerHTML = top ? `<b>${esc(top.srcName || top.src)}</b> → <b>${esc(top.dstName || top.dst)}</b>:${esc(top.dport)} ${esc(top.proto)} ${esc(top.service && top.service !== 'OTHER' ? top.service : '')} ${fmtBytes(top.bytes)}` : 'no flows yet'
 	$('hudIssues').innerHTML = (errors ? `<span class="error">${errors} ✕</span>` : '') + (warns ? `<span class="warn">${warns} !</span>` : '') + (!errors && !warns ? '<span class="ok">0 issues</span>' : '')
 	document.title = (errors ? '✕ ' : warns ? '! ' : '') + 'Broadwatcher'
+	drawScopes()
+}
+// VLAN names as people say them: "BIG_MOBILE_DANTE" -> "Mobile Dante"
+function vlanLabel(name) {
+	const n = String(name || '').replace(/^BIG_/, '').replace(/_/g, ' ').toLowerCase()
+	return n.replace(/\b\w/g, (c) => c.toUpperCase()).replace(/\bNdi\b/, 'NDI')
 }
 
-function renderHudPanel(s) {
-	if (!hudOpen) return
-	const head = '<thead><tr><th>Source</th><th>Destination</th><th>Port</th><th class="num">Bytes</th></tr></thead>'
-	const row = (f) => `<tr><td>${esc(f.srcName || f.src)}${f.srcRegion ? `<small>${esc(f.srcRegion)}</small>` : ''}</td><td>${esc(f.dstName || f.dst)}<small>${esc([f.dstRegion, f.network].filter(Boolean).join(' · '))}</small></td><td><span class="tag">${esc(f.proto)} ${esc(f.dport)}</span><small>${f.viaForward ? `via WAN ${esc(f.viaForward.wanPort)} · ` : ''}${esc([f.service, f.app].filter((v) => v && v !== 'OTHER').join(' · '))}${f.action === 'blocked' ? ' <span class="tag blocked">blocked</span>' : ''}</small></td><td class="num">${fmtBytes(f.bytes)}<small>${esc(f.dir)}</small></td></tr>`
-	$('hpFlows').innerHTML = `<h3>Biggest flows <small>· last ${s.flows.window_s} s · ${s.flows.total} flows, ${s.flows.blocked} blocked</small></h3>${s.flows.top.length ? `<table>${head}<tbody>${s.flows.top.slice(0, 10).map(row).join('')}</tbody></table>` : '<div class="empty">waiting for flows</div>'}`
-	$('hpVlans').innerHTML = `<h3>VLANs through the gateway</h3><table><thead><tr><th>Network</th><th class="num">Clients</th><th class="num">In</th><th class="num">Out</th></tr></thead><tbody>${(s.networks || [])
-		.filter((n) => n.watched || n.clients > 0)
-		.map((n) => `<tr><td>${esc(n.name)}<small class="mono">${esc(n.subnet || '')}${n.vlan ? ' · vlan ' + n.vlan : ''}</small></td><td class="num">${n.clients}</td><td class="num dn">${fmtRate(n.down)}</td><td class="num up">${fmtRate(n.up)}</td></tr>`)
-		.join('')}</tbody></table>`
+// ------------------------------------------------------------------ gateway at a glance
+function renderGateway(s) {
 	const gw = s.gateway
-	$('hpConsole').innerHTML = gw
-		? `<h3>Console <small>· ${esc(gw.modelName)} v${esc(gw.version || '')}</small></h3><div class="kv"><span>CPU</span><b class="${lvl(gw.cpu, 70, 85)}">${pct(gw.cpu)}</b><span>Memory</span><b class="${lvl(gw.mem, 80, 90)}">${pct(gw.mem)}</b><span>Temps</span><b>${gw.temps.map((t) => `${esc(t.name)} ${t.value}°`).join(' · ')}</b><span>Storage</span><b>${gw.storage.map((x) => `${esc(x.name)} ${fmtBytes(x.used)}/${fmtBytes(x.size)}`).join(' · ')}</b><span>WAN</span><b>${esc(gw.wan.name)} ${esc(gw.wan.status)} ${esc(gw.wan.ip || '')}${gw.wan.isp ? ' · ' + esc(gw.wan.isp) : ''}</b><span>Internet up</span><b>${fmtUptime(gw.wan.uptime)}</b>${gw.speedtest ? `<span>Speedtest</span><b>↓${gw.speedtest.down} ↑${gw.speedtest.up} Mb/s · ${gw.speedtest.ping} ms · ${fmtAgo(gw.speedtest.t * 1000)} ago</b>` : ''}<span>Switches</span><b>${s.switches.filter((x) => x.online).length}/${s.switches.length} online</b><span>APs</span><b>${s.aps.filter((x) => x.online).length}/${s.aps.length} online · ${s.clients.wireless} wifi</b></div>${scope('hud-wan', [{ data: gw.wan.history.down, color: 'in' }, { data: gw.wan.history.up, color: 'out' }], 'scope')}`
-		: '<h3>Console</h3><div class="empty">gateway not found</div>'
-	$('hpAI').innerHTML = `<h3>Broadcast readiness <small>· ${aiInfo ? esc(aiInfo.model) : 'AI'}</small></h3>${aiInfo ? `<div class="verdict"><span class="lamp ${verdictClass(aiInfo.verdict)}"></span><div><b>${esc(nice(aiInfo.verdict))}</b><small>${esc(aiInfo.headline)}</small></div></div><ul>${aiInfo.reasons.map((r) => `<li>${esc(r)}</li>`).join('')}</ul>${aiInfo.actions?.length ? `<ol>${aiInfo.actions.map((r) => `<li>${esc(r)}</li>`).join('')}</ol>` : ''}<div class="ai-meta">${fmtAgo(aiInfo.t)} ago · ${Math.round(aiInfo.ms / 1000)} s</div>` : `<div class="empty">${aiStatus && !aiStatus.enabled ? 'AI not configured' : 'no assessment yet'}</div>`}`
+	$('gwNote').textContent = gw ? `${gw.modelName} · WAN ${gw.wan.status}${gw.wan.isp ? ' · ' + gw.wan.isp : ''} · ${s.flows.total} flows in the last ${s.flows.window_s} s` : 'gateway not found'
+	if (!gw) return ($('gw').innerHTML = '<div class="empty">the gateway is not in the UniFi device list</div>')
+	const wan = `<div class="gwp"><h3>WAN <small>${esc(gw.wan.ip || '')}</small></h3><div class="big"><span class="dn">↓ ${fmtRate(gw.wan.down)}<i>into the building</i></span><span class="up">↑ ${fmtRate(gw.wan.up)}<i>out to the internet</i></span></div><div class="sub">${esc(gw.wan.status)} · ${gw.wan.latency ?? '–'} ms · link ${speedTxt(gw.wan.speed)} · up ${fmtUptime(gw.wan.uptime)}${gw.speedtest ? ` · speedtest ↓${gw.speedtest.down} ↑${gw.speedtest.up} Mb/s` : ''}</div>${scope('gw-wan', [{ data: gw.wan.history.down, color: 'in' }, { data: gw.wan.history.up, color: 'out' }], 'scope')}</div>`
+	const nets = (s.networks || []).filter((n) => n.watched || n.clients > 0).slice(0, 9)
+	const vlans = `<div class="gwp"><h3>VLANs through the gateway <small>${s.clients.total} clients · ${s.clients.wired} wired</small></h3><table><thead><tr><th>Network</th><th class="num">Clients</th><th class="num">In</th><th class="num">Out</th><th>10 min</th></tr></thead><tbody>${nets
+		.map((n) => `<tr><td>${esc(vlanLabel(n.name))}<small class="mono">${n.vlan ? 'vlan ' + n.vlan : ''}${n.subnet ? ' · ' + esc(n.subnet) : ''}</small></td><td class="num">${n.clients}</td><td class="num dn">${fmtRate(n.down)}</td><td class="num up">${fmtRate(n.up)}</td><td>${scope('gw-vl:' + n.name, [{ data: n.history?.down || [], color: 'in' }, { data: n.history?.up || [], color: 'out' }], 'vspark', { bare: true })}</td></tr>`)
+		.join('')}</tbody></table></div>`
+	const g = (label, v, max, warn, err) => `<div class="gauge"><span>${label}</span><div class="bar"><i class="${lvl(v, warn, err)}" style="width:${Math.min(100, ((v ?? 0) / max) * 100)}%"></i></div><em class="${lvl(v, warn, err)}">${v ?? '–'}${label === 'Temp' ? '°' : '%'}</em></div>`
+	const online = (list) => `${list.filter((x) => x.online).length}/${list.length}`
+	const console_ = `<div class="gwp"><h3>Console <small>v${esc(gw.version || '')}</small></h3>${g('CPU', gw.cpu, 100, 70, 85)}${g('Memory', gw.mem, 100, 80, 90)}${g('Temp', gw.temp, 90, 60, 70)}<div class="kv"><span>Uptime</span><b>${fmtUptime(gw.uptime)}</b><span>Switches</span><b>${online(s.switches)} online${s.aps.length ? ` · APs ${online(s.aps)}` : ''}</b>${gw.storage?.length ? `<span>Storage</span><b>${gw.storage.map((x) => `${esc(x.name)} ${Math.round((x.used / Math.max(1, x.size)) * 100)}%`).join(' · ')}</b>` : ''}${s.snmp?.enabled ? `<span>SNMP</span><b>${Object.values(s.snmp.status || {}).filter((v) => /^ok/.test(v)).length} switches live</b>` : ''}</div></div>`
+	const top = (s.flows.top || []).slice(0, 7)
+	const flows = `<div class="gwp"><h3>Biggest flows <small>last ${s.flows.window_s} s · ${s.flows.blocked} blocked</small></h3><div class="flowlist">${top.length ? top.map((f) => `<div><div class="f"><b>${esc(f.srcName || f.src)}</b> → ${esc(f.dstName || f.dst)}:${esc(f.dport)}<small>${esc([f.proto, f.service !== 'OTHER' ? f.service : '', f.app, f.viaForward ? 'via WAN ' + f.viaForward.wanPort : '', f.srcRegion].filter(Boolean).join(' · '))}${f.action === 'blocked' ? ' · <span class="error">blocked</span>' : ''}</small></div><div class="n">${fmtBytes(f.bytes)}</div></div>`).join('') : '<div class="empty">waiting for flows</div>'}</div></div>`
+	$('gw').innerHTML = wan + vlans + console_ + flows
+}
+
+// ------------------------------------------------------------------ collapsible sections + the readiness rail
+const FOLD_KEY = 'bw-fold'
+function loadFolds() {
+	let folds = {}
+	try {
+		folds = JSON.parse(localStorage.getItem(FOLD_KEY) || '{}')
+	} catch {}
+	for (const [id, v] of Object.entries(folds)) $(id)?.classList.toggle('folded', !!v)
+	let rail = 'on'
+	try {
+		rail = localStorage.getItem('bw-rail') || 'on'
+	} catch {}
+	setRail(rail === 'on')
+}
+function toggleFold(id) {
+	const el = $(id)
+	if (!el) return
+	el.classList.toggle('folded')
+	let folds = {}
+	try {
+		folds = JSON.parse(localStorage.getItem(FOLD_KEY) || '{}')
+	} catch {}
+	folds[id] = el.classList.contains('folded')
+	try {
+		localStorage.setItem(FOLD_KEY, JSON.stringify(folds))
+	} catch {}
+	if (!folds[id] && state) render(state)
+}
+function setRail(on) {
+	$('shell').classList.toggle('rail-hidden', !on)
+	$('railToggle').classList.toggle('on', on)
+	$('railToggle').textContent = on ? '▸' : '◂'
+	try {
+		localStorage.setItem('bw-rail', on ? 'on' : 'off')
+	} catch {}
+	if (state) renderMap(state)
 }
 
 // ------------------------------------------------------------------ issues
@@ -246,8 +300,10 @@ function renderMap(s) {
 		const t = n.telemetry
 		tips.set('node:' + n.id, `<b>${esc(n.name)}</b><div class="kv">${n.model ? `<span>Model</span><b>${esc(n.model)}</b>` : ''}${n.ip ? `<span>IP</span><b>${esc(n.ip)}</b>` : ''}<span>Status</span><b>${esc(n.status)}</b>${n.rate ? `<span>In / out</span><b>${fmtRate(n.rate.in)} / ${fmtRate(n.rate.out)}</b>` : ''}${n.portsTotal ? `<span>Ports</span><b>${n.portsUp}/${n.portsTotal} up</b>` : ''}${n.cpu !== undefined && n.cpu !== null ? `<span>CPU / temp</span><b>${n.cpu}% / ${n.temp ?? '–'}°</b>` : ''}${t?.summary ? `<span>Device</span><b>${esc(t.summary)}</b>` : ''}</div><small>click for details</small>`)
 	}
-	const r = NetMap.render($('map'), topo, { showAll: mapAll, selected: selection && selection.type !== 'alert' ? nodeIdFor(selection) : null, stream: s.atem?.stream })
-	$('mapNote').textContent = `${r.count} nodes · orange = into the device, teal = out of it · thicker = more traffic`
+	if ($('mapBlock').classList.contains('folded')) return
+	const q = rackFilter
+	const r = NetMap.render($('map'), topo, { showAll: mapAll, selected: selection && selection.type !== 'alert' ? nodeIdFor(selection) : null, stream: s.atem?.stream, match: q ? (n) => (n.name + ' ' + (n.ip || '')).toLowerCase().includes(q) : null })
+	$('mapNote').textContent = `${r.count} nodes · orange into the device, teal out of it · brighter and faster = more traffic`
 }
 function nodeIdFor(sel) {
 	if (!sel) return null
@@ -311,19 +367,41 @@ function renderPaths(s) {
 // ------------------------------------------------------------------ rack
 function portTip(sw, p) {
 	const who = [...p.devices.map((d) => `${d.name} (${d.type})`), ...p.clients.map((c) => `${c.name || c.ip || c.mac}${c.ip && c.name ? ' · ' + c.ip : ''}`)]
-	return `<b>${esc(sw.name)} · port ${p.idx}${p.name && p.name !== 'Port ' + p.idx ? ' · ' + esc(p.name) : ''}</b><div class="kv"><span>Link</span><b>${p.up ? `${speedTxt(p.speed)} ${p.fullDuplex ? 'full duplex' : 'half duplex'} ${esc(p.media || '')}` : p.enabled ? 'down' : 'disabled'}</b><span>To device</span><b>${fmtRate(p.tx)}</b><span>From device</span><b>${fmtRate(p.rx)}</b><span>Use</span><b>${Math.round(p.util * 100)}%</b>${p.poe ? `<span>PoE</span><b>${p.poeW} W ${esc(p.poeMode || '')}</b>` : ''}${p.lag ? `<span>LAG</span><b>${esc(p.lag)}</b>` : ''}<span>Errors</span><b>${p.errors}${p.errorsRecent ? ' <span class="error">new</span>' : ''}</b><span>Counters</span><b>${p.live ? 'live (SNMP) · ' : ''}${p.age} s ago</b>${who.length ? `<span>Attached</span><b>${who.map(esc).join('<br>')}${p.clientCount > p.clients.length ? `<br>+${p.clientCount - p.clients.length} more` : ''}</b>` : ''}</div>`
+	return `<b>${esc(sw.name)} · port ${p.idx}${p.name && p.name !== 'Port ' + p.idx ? ' · ' + esc(p.name) : ''}</b><div class="kv">${p.label ? `<span>Label</span><b>${esc([p.label.name, p.label.ip, p.label.note].filter(Boolean).join(' · '))}</b>` : ''}<span>Link</span><b>${p.up ? `${speedTxt(p.speed)} ${p.fullDuplex ? 'full duplex' : 'half duplex'} ${esc(p.media || '')}` : p.enabled ? 'down' : 'disabled'}</b><span>To device</span><b>${fmtRate(p.tx)}</b><span>From device</span><b>${fmtRate(p.rx)}</b><span>Use</span><b>${Math.round(p.util * 100)}%</b>${p.poe ? `<span>PoE</span><b>${p.poeW} W ${esc(p.poeMode || '')}</b>` : ''}${p.lag ? `<span>LAG</span><b>${esc(p.lag)}</b>` : ''}<span>Errors</span><b>${p.errors}${p.errorsRecent ? ' <span class="error">new</span>' : ''}</b><span>Counters</span><b>${p.live ? 'live (SNMP) · ' : ''}${p.age} s ago</b>${who.length ? `<span>Attached</span><b>${who.map(esc).join('<br>')}${p.clientCount > p.clients.length ? `<br>+${p.clientCount - p.clients.length} more` : ''}</b>` : ''}</div>`
 }
+// what is on a port, as text: UniFi devices and clients on it plus the hand-written label
+function portWho(p) {
+	const names = [...(p.devices || []).map((d) => d.name), ...(p.clients || []).map((c) => c.name || c.ip || c.mac)]
+	if (p.label?.name) names.unshift(p.label.name)
+	return names.filter(Boolean)
+}
+function portIps(p) {
+	const ips = [...(p.devices || []).map((d) => d.ip), ...(p.clients || []).map((c) => c.ip)]
+	if (p.label?.ip) ips.unshift(p.label.ip)
+	return [...new Set(ips.filter(Boolean))]
+}
+function portMatches(p, q) {
+	if (!q) return false
+	return [...portWho(p), ...portIps(p), p.label?.note || '', p.name || ''].join(' ').toLowerCase().includes(q)
+}
+let rackFilter = ''
+const openPorts = new Set() // switch macs whose port list is expanded
+let labelEdit = null // "mac:idx" of the port whose label is being edited inline
 function renderRack(s) {
 	const heroPort = s.atem?.equipment?.switch
 	const online = s.switches.filter((x) => x.online)
 	const offline = s.switches.filter((x) => !x.online)
-	$('rackNote').textContent = `${online.length} online · ${offline.length} not connected · top bar = link speed, line = activity`
+	const q = rackFilter
+	let hits = 0
+	$('rack').classList.toggle('filtering', !!q)
 	const units = online.map((sw) => {
 		const rj = sw.ports.filter((p) => !p.sfp)
 		const sfp = sw.ports.filter((p) => p.sfp)
 		const port = (p) => {
 			const key = `port:${sw.mac}:${p.idx}`
-			const cls = ['port', p.up ? 'up ' + speedClass(p.speed) : '', p.uplink ? 'uplink' : '', p.poe && p.poeW > 0 ? 'poe' : '', p.errorsRecent ? 'err' : '', !p.enabled ? 'disabled' : '', heroPort && heroPort.mac === sw.mac && heroPort.port === p.idx ? 'hero' : '', selection?.type === 'port' && selection.id === p.key ? 'sel' : ''].join(' ')
+			const m = portMatches(p, q)
+			if (m) hits++
+			const cls = ['port', p.up ? 'up ' + speedClass(p.speed) : '', p.uplink ? 'uplink' : '', p.poe && p.poeW > 0 ? 'poe' : '', p.errorsRecent ? 'err' : '', !p.enabled ? 'disabled' : '', p.label ? 'labelled' : '', m ? 'match' : '', heroPort && heroPort.mac === sw.mac && heroPort.port === p.idx ? 'hero' : '', selection?.type === 'port' && selection.id === p.key ? 'sel' : ''].join(' ')
 			return `<div class="${cls}" data-sel="port:${esc(p.key)}" ${tipAttr(key, portTip(sw, p))}>${p.idx}${p.up && p.util > 0.005 ? `<i class="act" style="transform:scaleX(${Math.max(0.08, p.util).toFixed(2)})"></i>` : ''}</div>`
 		}
 		const grid = (list, label) => (list.length ? `<div class="pgrp">${label ? `<label>${label}</label>` : ''}<div class="pgrid${list.length < 3 ? ' single' : ''}">${list.map(port).join('')}</div></div>` : '')
@@ -331,6 +409,19 @@ function renderRack(s) {
 		const max = Math.max(sw.totals.down, sw.totals.up, 1)
 		const sel = selection?.type === 'switch' && selection.id === sw.mac ? ' sel' : ''
 		const live = sw.ports.some((p) => p.live)
+		const open = openPorts.has(sw.mac) || (q && sw.ports.some((p) => portMatches(p, q)))
+		const used = sw.ports.filter((p) => p.up || p.label)
+		const list = open
+			? `<div class="ru-list"><table><thead><tr><th>Port</th><th>Link</th><th>Device</th><th>IP</th><th class="num">To device</th><th class="num">From device</th><th>Note</th><th></th></tr></thead><tbody>${used
+					.map((p) => {
+						const m = portMatches(p, q)
+						const editing = labelEdit === p.key
+						const who = portWho(p)
+						const ips = portIps(p)
+						return `<tr class="${m ? 'match' : q ? 'dim' : ''}"><td class="mono">${p.idx}${p.sfp ? ' <small>SFP</small>' : ''}</td><td>${p.up ? `${speedTxt(p.speed)}${p.poe && p.poeW ? ' · ' + p.poeW + ' W' : ''}${p.uplink ? ' · uplink' : ''}` : '<span class="warn">down</span>'}</td><td>${editing ? `<div class="lbl-edit"><input class="lbl-name" value="${esc(p.label?.name || '')}" placeholder="device name"></div>` : `${who.length ? who.slice(0, 3).map(esc).join('<br>') : '<small>nothing seen</small>'}${p.clientCount > 3 ? `<br><small>+${p.clientCount - 3} more</small>` : ''}${p.label ? ' <span class="tag hand" title="hand-written label">label</span>' : ''}`}</td><td class="mono">${editing ? `<div class="lbl-edit"><input class="lbl-ip" value="${esc(p.label?.ip || '')}" placeholder="IP address"></div>` : ips.slice(0, 3).map(esc).join('<br>')}</td><td class="num dn">${fmtRate(p.tx)}</td><td class="num up">${fmtRate(p.rx)}</td><td>${editing ? `<div class="lbl-edit"><input class="lbl-note" value="${esc(p.label?.note || '')}" placeholder="note (patch panel, room…)"></div>` : esc(p.label?.note || '')}</td><td>${editing ? `<button class="btn mini primary" data-label-save="${esc(p.key)}">Save</button> <button class="btn mini quiet" data-label-cancel="1">Cancel</button>` : `<button class="btn mini quiet" data-label-edit="${esc(p.key)}" title="write what is on this port">${p.label ? 'edit' : 'label'}</button>`}</td></tr>`
+					})
+					.join('')}</tbody></table>${used.length ? '' : '<div class="empty">no port is up</div>'}</div>`
+			: ''
 		return `<div class="ru${sel}">
 			<div class="ru-id" data-sel="switch:${esc(sw.mac)}">
 				<b><span class="tally online"></span>${esc(sw.name)}</b>
@@ -341,12 +432,27 @@ function renderRack(s) {
 			<div class="ru-meter">
 				<div class="r"><span>in</span><em class="dn">${fmtRate(sw.totals.down)}</em></div><div class="bar"><i style="width:${(sw.totals.down / max) * 100}%"></i></div>
 				<div class="r"><span>out</span><em class="up">${fmtRate(sw.totals.up)}</em></div><div class="bar"><i class="up" style="width:${(sw.totals.up / max) * 100}%"></i></div>
-				<small>${sw.portsUp}/${sw.portsTotal} ports · ${live ? `live via SNMP · ${sw.age} s` : `counters ${sw.age} s old`}</small>
+				<small><span>${sw.portsUp}/${sw.portsTotal} ports · ${live ? `live · ${sw.age} s` : `${sw.age} s old`}</span><button class="btn mini quiet" data-ports="${esc(sw.mac)}">${open ? 'hide ports' : 'ports ▸'}</button></small>
 			</div>
+			${list}
 		</div>`
 	})
+	$('rackNote').textContent = q ? `${hits} port${hits === 1 ? '' : 's'} match "${q}"` : `${online.length} online · ${offline.length} not connected · top bar = link speed, line = activity, violet corner = labelled by hand`
 	const off = offline.length ? `<div class="rack-off">${offline.map((sw) => `<span class="chip${sw.lastSeen && Date.now() - sw.lastSeen < 86400000 ? ' recent' : ''}" data-sel="switch:${esc(sw.mac)}">${esc(sw.name)} · ${esc(sw.modelName)} · ${sw.lastSeen ? 'last seen ' + fmtAgo(sw.lastSeen) + ' ago' : 'never seen'}</span>`).join('')}</div>` : ''
 	$('rack').innerHTML = units.join('') + off
+}
+async function savePortLabel(key) {
+	const row = document.querySelector(`[data-label-save="${CSS.escape(key)}"]`)?.closest('tr')
+	if (!row) return
+	const body = { key, name: row.querySelector('.lbl-name')?.value || '', ip: row.querySelector('.lbl-ip')?.value || '', note: row.querySelector('.lbl-note')?.value || '' }
+	try {
+		const r = await fetch('/api/portlabel', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+		const j = await r.json()
+		if (j.error) throw new Error(j.error)
+	} catch (e) {
+		alert('could not save the label: ' + e.message)
+	}
+	labelEdit = null
 }
 
 // ------------------------------------------------------------------ patchbay
@@ -584,7 +690,8 @@ function entitySection(type, e) {
 			['Errors + drops', `${e.errors}${e.errorsRecent ? ' <span class="error">new in the last 10 min</span>' : ''}`],
 			['Counters', `${e.live ? 'live (SNMP) · ' : ''}${e.age} s old`],
 			['Attached', [...(e.devices || []).map((d) => `${esc(d.name)} (${esc(d.type)})`), ...(e.clients || []).map((c) => `${esc(c.name || c.ip || c.mac)}${c.ip && c.name ? ' · ' + esc(c.ip) : ''}`)].join('<br>') + (e.clientCount > (e.clients || []).length ? `<br>+${e.clientCount - e.clients.length} more` : '')],
-		])}`
+			e.label ? ['Label', esc([e.label.name, e.label.ip, e.label.note].filter(Boolean).join(' · '))] : null,
+		])}<h3>Label this port</h3><p>Write what is really plugged in when UniFi cannot tell (SDI gear behind a small switch, a static device, a patch-panel position). Empty fields remove the label.</p><div class="lblform" data-label-form="${esc(e.key)}"><input class="lbl-name" value="${esc(e.label?.name || '')}" placeholder="device name"><input class="lbl-ip" value="${esc(e.label?.ip || '')}" placeholder="IP address"><input class="lbl-note" value="${esc(e.label?.note || '')}" placeholder="note"></div><div class="insp-actions"><button class="btn" data-label-save-insp="${esc(e.key)}">Save label</button></div>`
 	}
 	if (type === 'switch' || type === 'ap' || type === 'gateway' || type === 'pdu') {
 		return `<h3>${esc(e.name)}</h3>${kv([
@@ -734,17 +841,19 @@ function render(s) {
 	state = s
 	lastStateAt = Date.now()
 	renderHud(s)
-	renderHudPanel(s)
 	renderIssues(s)
+	const folded = (id) => $(id).classList.contains('folded')
+	if (!folded('gwBlock')) renderGateway(s)
 	renderMap(s)
-	renderAtem(s)
-	renderPaths(s)
-	renderRack(s)
-	renderPatch(s)
-	renderTape(s)
+	if (!folded('atemBlock')) renderAtem(s)
+	if (!folded('pathBlock')) renderPaths(s)
+	if (!folded('rackBlock') && !labelEdit) renderRack(s)
+	if (!folded('patchBlock')) renderPatch(s)
+	if (!folded('tapeBlock')) renderTape(s)
 	if (!selection) renderOpenItems(s)
 	drawScopes()
 	if (hover) showTip(hover.key, hover.x, hover.y)
+	$('freshness').textContent = `updated ${fmtTime(s.ts)}${s.snmp?.enabled ? ' · counters live via SNMP' : ''}`
 }
 
 function connect() {
@@ -755,10 +864,7 @@ function connect() {
 		if (j && !j.error) aiInfo = j
 		fetch('/api/ai/status').then((r) => r.json()).then((st) => {
 			aiStatus = st
-			if (state) {
-				renderHud(state)
-				renderHudPanel(state)
-			}
+			if (state) renderHud(state)
 			if (!selection) renderInspector()
 		})
 	})
@@ -827,8 +933,42 @@ document.addEventListener('click', (e) => {
 	}
 	if (t.id === 'askBtn') return ask($('askInput').value)
 	if (t.id === 'inspClose') return closeInspector()
-	if (t.closest?.('#hudReady')) return closeInspector()
-	if (t.closest?.('#hudToggle')) return toggleHud()
+	if (t.closest?.('#hudReady')) {
+		setRail(true)
+		return closeInspector()
+	}
+	if (t.closest?.('#railToggle')) return setRail(!$('railToggle').classList.contains('on'))
+	const fold = t.closest?.('[data-fold]')
+	if (fold) return toggleFold(fold.getAttribute('data-fold'))
+	if (t.id === 'mapIn') return NetMap.zoom(1.25)
+	if (t.id === 'mapOut') return NetMap.zoom(1 / 1.25)
+	if (t.id === 'mapFit') return NetMap.fit()
+	const pl = t.closest?.('[data-ports]')
+	if (pl) {
+		const mac = pl.getAttribute('data-ports')
+		if (openPorts.has(mac)) openPorts.delete(mac)
+		else openPorts.add(mac)
+		if (state) renderRack(state)
+		return
+	}
+	if (t.closest?.('[data-label-edit]')) {
+		labelEdit = t.closest('[data-label-edit]').getAttribute('data-label-edit')
+		if (state) renderRack(state)
+		return
+	}
+	if (t.closest?.('[data-label-cancel]')) {
+		labelEdit = null
+		if (state) renderRack(state)
+		return
+	}
+	if (t.closest?.('[data-label-save]')) return savePortLabel(t.closest('[data-label-save]').getAttribute('data-label-save'))
+	if (t.closest?.('[data-label-save-insp]')) {
+		const key = t.closest('[data-label-save-insp]').getAttribute('data-label-save-insp')
+		const form = document.querySelector(`[data-label-form="${CSS.escape(key)}"]`)
+		const body = { key, name: form?.querySelector('.lbl-name')?.value || '', ip: form?.querySelector('.lbl-ip')?.value || '', note: form?.querySelector('.lbl-note')?.value || '' }
+		fetch('/api/portlabel', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }).then(() => setTimeout(refreshInspector, 400)).catch((e) => alert('could not save the label: ' + e.message))
+		return
+	}
 	if (t.closest?.('#themeToggle')) return applyTheme(document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark')
 	if (t.closest?.('#settingsBtn')) return Settings.open('', { onSaved: refreshAiStatus })
 	if (t.id === 'aiSettings') return Settings.open('ai', { onSaved: refreshAiStatus })
@@ -852,10 +992,7 @@ function refreshAiStatus() {
 	fetch('/api/ai/status').then((r) => r.json()).then((st) => {
 		aiStatus = st
 		if (st.assessment) aiInfo = st.assessment
-		if (state) {
-			renderHud(state)
-			renderHudPanel(state)
-		}
+		if (state) renderHud(state)
 		if (!selection) renderInspector()
 	}).catch(() => {})
 }
@@ -865,26 +1002,35 @@ document.addEventListener('change', (e) => {
 document.addEventListener('keydown', (e) => {
 	if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') {
 		if (e.key === 'Enter' && e.target.id === 'askInput') ask(e.target.value)
+		if (e.key === 'Enter' && e.target.closest('.lbl-edit')) savePortLabel(e.target.closest('tr')?.querySelector('[data-label-save]')?.getAttribute('data-label-save'))
+		if (e.key === 'Escape' && e.target.id === 'portFind') {
+			e.target.value = ''
+			rackFilter = ''
+			if (state) {
+				renderRack(state)
+				renderMap(state)
+			}
+		}
 		return
 	}
-	if (e.key === 'h' || e.key === 'H') toggleHud()
+	if (e.key === 'r' || e.key === 'R') setRail(!$('railToggle').classList.contains('on'))
 	if (e.key === 'Escape') {
 		if (!$('rosterOverlay').hidden) $('rosterOverlay').hidden = true
-		else if (hudOpen) toggleHud()
 		else closeInspector()
 	}
 })
-function toggleHud() {
-	hudOpen = !hudOpen
-	$('hudPanel').hidden = !hudOpen
-	$('hudToggle').classList.toggle('on', hudOpen)
-	if (state) renderHudPanel(state)
-	drawScopes()
-}
 $('mapAll').addEventListener('change', (e) => {
 	mapAll = e.target.checked
 	if (state) renderMap(state)
 })
+$('portFind').addEventListener('input', (e) => {
+	rackFilter = e.target.value.trim().toLowerCase()
+	if (state) {
+		renderRack(state)
+		renderMap(state)
+	}
+})
+loadFolds()
 setInterval(() => {
 	$('clock').textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
 	if (lastStateAt && Date.now() - lastStateAt > 30000) {

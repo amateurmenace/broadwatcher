@@ -94,6 +94,7 @@ export class Collector extends EventEmitter {
 			streamPaths: [],
 			companion: null,
 		}
+		this.portLabels = config.port_labels || {} // "switchmac:port" -> {name, ip, note}: what is really on a port when UniFi cannot tell
 		this.companion = new Companion(config.companion || {}, log)
 		this.companionState = new Map() // atem ip -> {lastOk, okSince} for the companion/auto hysteresis
 		this.forwardHits = new Map() // port-forward name -> [{t, src, srcName, region, bytes, action, wanPort}] last hour
@@ -123,9 +124,11 @@ export class Collector extends EventEmitter {
 
 	// ---------------------------------------------------------------- scheduling
 	start() {
+		const holdOff = new Map() // poll name -> time before which it is not retried (the controller said 5xx / timed out)
 		const every = (name, s, fn) => {
 			const run = async () => {
 				if (this.busy.has(name)) return
+				if (Date.now() < (holdOff.get(name) || 0)) return
 				this.busy.add(name)
 				try {
 					await fn()
@@ -133,6 +136,8 @@ export class Collector extends EventEmitter {
 				} catch (e) {
 					this.state.errors[name] = `${new Date().toLocaleTimeString()} ${e.message}`
 					this.log(`[${name}] ${e.message}`)
+					// a controller that answers 5xx or times out is overloaded: leave it alone for a minute
+					if (/HTTP 5\d\d|timeout/i.test(e.message)) holdOff.set(name, Date.now() + 60000)
 				} finally {
 					this.busy.delete(name)
 				}
@@ -368,6 +373,21 @@ export class Collector extends EventEmitter {
 		return { ...viaCompanion, mode, session }
 	}
 
+	// a hand-written label for a switch port (device name, IP, note) for what UniFi cannot see: SDI gear behind a
+	// dumb switch, static devices on isolated VLANs, patch-panel notes; empty fields remove the label
+	setPortLabel(key, label) {
+		if (!/^([0-9a-f]{2}:){5}[0-9a-f]{2}:\d{1,3}$/i.test(String(key || ''))) return { error: 'bad port key' }
+		const clean = { name: String(label?.name || '').trim().slice(0, 60), ip: String(label?.ip || '').trim().slice(0, 45), note: String(label?.note || '').trim().slice(0, 120) }
+		if (!clean.name && !clean.ip && !clean.note) delete this.portLabels[key]
+		else this.portLabels[key] = clean
+		this.cfg.port_labels = this.portLabels
+		if (this.rawDevices.length) {
+			this.rebuild()
+			this.emit('state', this.state)
+		}
+		return { ok: true, labels: this.portLabels }
+	}
+
 	// manual control of our own switcher session (inspector buttons)
 	atemSession(ip, action) {
 		const e = this.cfg.equipment.find((x) => x.ip === ip)
@@ -457,8 +477,9 @@ export class Collector extends EventEmitter {
 				if (oldest && oldest < this.flowCursor) break
 			}
 		}
-		await fetchDir('incoming', 4)
-		await fetchDir('local', 3)
+		// the flow query is the heaviest call the controller gets from us: keep the paging modest
+		await fetchDir('incoming', 3)
+		await fetchDir('local', 2)
 		await fetchDir('outgoing', 1)
 		this.flowCursor = end
 		const fresh = all.filter((f) => f?.id && !this.flowIds.has(f.id))
@@ -710,6 +731,7 @@ export class Collector extends EventEmitter {
 					clients: cl.slice(0, 6).map((x) => ({ name: x._name, ip: x.ip, mac: x.mac })),
 					clientCount: cl.length,
 					devices: dd.map((x) => ({ name: x.name, ip: x.ip, type: x.type, mac: lower(x.mac) })),
+					label: this.portLabels[key] || null,
 				})
 			}
 			ports.sort((a, b) => a.idx - b.idx)

@@ -16,7 +16,7 @@
   "poll": {
     "devices_s": 5,
     "clients_s": 10,
-    "flows_s": 10,
+    "flows_s": 15,
     "log_s": 30,
     "probe_s": 15,
     "history_points": 120,

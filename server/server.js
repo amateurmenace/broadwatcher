@@ -274,6 +274,19 @@ export function startServer({ config, configPath = null, host = '127.0.0.1', por
 				}
 				return sendJson(res, { equipment: clean, saved, configPath })
 			}
+			if (p === '/api/portlabel' && req.method === 'POST') {
+				const body = await readBody(req)
+				const r = collector.setPortLabel(String(body.key || ''), body)
+				if (r.error) return sendJson(res, r, 400)
+				config.port_labels = collector.portLabels
+				let saved = false
+				try {
+					saved = saveUserConfig(configPath, { port_labels: config.port_labels, config_version: config.config_version || 0 })
+				} catch (e) {
+					log('[config] could not save: ' + e.message)
+				}
+				return sendJson(res, { ...r, saved })
+			}
 			if (p === '/api/settings' && req.method === 'GET') return sendJson(res, settingsView(config, ai, configPath))
 			if (p === '/api/settings' && req.method === 'POST') return sendJson(res, applySettings(await readBody(req)))
 			if (p === '/api/settings/test' && req.method === 'POST') {

@@ -7,19 +7,26 @@ broadcast readiness and explain problems.
 
 ## What is on screen
 
-- **HUD** (always on top): the AI readiness lamp and headline, the **ATEM intake** meter (traffic arriving
-  at the switcher, with its quiet level marked), WAN in/out and latency, console CPU/temperature, the four
-  broadcast VLANs as mini bar graphs, the biggest flow of the moment, the open-issue count, the clock, a
-  light/dark switch and **Details** (or the `H` key): a panel with the biggest flows, the VLAN table,
-  console vitals and the full AI assessment.
+- **HUD** (always on top): the readiness lamp and headline, the **ATEM intake** meter (traffic arriving at
+  the switcher, with its quiet level marked), WAN in/out and latency, console CPU/temperature, one cell per
+  broadcast VLAN (name, VLAN number, in/out and a 10-minute sparkline, client count), the open-issue count,
+  the clock, Settings, the light/dark switch and the readiness-rail toggle (or the `R` key). Cells drop off
+  one by one on narrow windows instead of being cut.
+- **Section bar**: Gateway · Signal map · Streams · Stream paths · Switches · Equipment · Events, each a
+  jump link; every section has a ▾ to collapse it (remembered), so the map can take the room.
 - **Issues strip**: every open alert as a chip. Click one and the inspector explains what it means, shows
   the device/port it is about, the related UniFi events, flows and Broadwatcher events, and offers
   **Diagnose with AI**.
-- **Signal map**: a schematic of the live network, internet → console → switches → equipment. Every link
-  carries two animated strands, orange flowing towards the device (traffic into it) and teal flowing back
-  (out of it); width follows the rate, every node shows its live in/out numbers and trunk links are
-  labelled. A stream arriving at the ATEM turns its link blue. Click anything for details; "every switch"
-  also shows switches that carry no broadcast gear.
+- **Gateway at a glance**: WAN in/out with a 10-minute graph, the VLAN table (clients, in, out, sparkline),
+  the console's CPU/memory/temperature gauges with uptime, switch and AP counts, storage and SNMP coverage,
+  and the biggest flows of the last poll.
+- **Signal map**: a schematic of the live network, internet → console → switches → equipment. Links are
+  hairlines with two thin flowing strands, orange towards the device (traffic into it) and teal back out
+  of it; brighter and faster means more traffic, every node shows its live in/out numbers and trunk links
+  are labelled. A stream arriving at the ATEM turns its link cyan. The map pans with the wheel or by
+  dragging, zooms with ctrl/⌘ + wheel or the −/+ buttons, fits with *fit* or a double-click, and its
+  height is dragged at the bottom-right corner; the view is remembered. Click anything for details;
+  "every switch" also shows switches that carry no broadcast gear.
 - **Streams into the switcher**: the intake readout with a 10-minute scope, the stream state (quiet /
   arriving since…), and *where it comes from* with a confidence for each candidate source:
   **confirmed** (a flow through the gateway aimed at the ATEM, or an ATEM Mini whose stream URL points at
@@ -34,8 +41,14 @@ broadcast readiness and explain problems.
   classic case: a sender using the HD8's default port 1935 lands on the field Mini) or the firewall blocked
   it. Port scanners knocking on open ports are listed as probes and ignored. Click a row for the senders.
 - **Switches**: one row per switch with its ports (top bar = link speed, line = activity, dot = PoE,
-  outline = uplink, red = new errors), uptime, CPU, temperature, PoE budget, uplink and totals; "live via
-  SNMP" means the counters are read straight from the switch every 3 s.
+  outline = uplink, red = new errors, violet corner = labelled by hand), uptime, CPU, temperature, PoE
+  budget, uplink and totals; "live" means the counters are read straight from the switch over SNMP every
+  3 s. **ports ▸** opens the port list of a switch: every port that is up with the device UniFi sees on it
+  (name and IP, from the client and device tables), its traffic both ways, and a hand-written **label**
+  (device name, IP, note) for what UniFi cannot see: SDI gear behind a small switch, static devices,
+  patch-panel positions. Labels are also edited in the port's inspector and are saved in the config file.
+  The **find** box above the switches highlights every port (and map node) whose device, IP or label
+  matches, and opens the lists that contain a match.
 - **Broadcast equipment**: the roster, grouped by location, with a tally lamp, link, the device's own
   status (Web Presenter *Streaming 5.8 Mb/s*, HyperDeck *Record*, ATEM *program Camera 2*), traffic and
   probe round trip. **Edit roster** opens the table where devices are ticked in or out of *this

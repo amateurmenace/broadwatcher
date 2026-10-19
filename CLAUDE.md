@@ -39,7 +39,18 @@ touching anything. The roadmap for the next phase is in `docs/ROADMAP.md`.
   merge by IP when `equipment_edited`; `atem` and `companion` blocks deep-merged).
 - Collector extras since 0.4.0: `atemTelemetry` (Companion/auto/own/none with hysteresis), `streamPaths`
   (port forward → target → intake, data threshold 50 kB so port scanners do not count), `knownControllers`
-  (slot census: Companion API + process list via PowerShell/ps once a minute), `forwardHits` (last hour).
+  (slot census: Companion API + process list via PowerShell/ps once a minute), `forwardHits` (last hour),
+  `setPortLabel` (hand-written port labels, `port_labels` in the user config, `/api/portlabel`), a 60 s hold
+  per poll after the controller answers 5xx or times out, flows every 15 s with 3/2/1 pages.
+- UI since 0.6.0: `ui/map.js` has the zoom/pan viewport (`NetMap.zoom/fit`, view remembered in
+  localStorage `bw-map-view`, fit = fit width with a 0.72 floor); `app.js` renders the gateway strip
+  (`renderGateway`), collapsible blocks (`toggleFold`, `bw-fold`), the rail toggle (`setRail`, `bw-rail`),
+  the switch port lists with find and labels (`renderRack`, `openPorts`, `rackFilter`, `labelEdit`).
+  The Details HUD panel and the `H` key are gone; the gateway strip replaced them.
+- A development server beside the installed app doubles the controller load: `config.local.json`
+  (git-ignored) carries lighter poll intervals for it; stop it when not looking at the UI. On 2026-10-19
+  08:30 the controller returned HTTP 500 while switches flapped and MACs moved between ports (a loop or
+  re-patching, not the polling), so the collector now backs off after 5xx.
 - `scripts/atem-capture.mjs` one-shot remote-source capture to JSON (quiet hours only).
 - `ui/index.html`, `ui/styles.css` (light "paper" theme default, `data-theme="dark"`), `ui/app.js`, `ui/map.js` (SVG signal map),
   `ui/settings.js` (Settings screen: AI local/Claude toggle + keys, gateway, SNMP, Companion, server, thresholds;

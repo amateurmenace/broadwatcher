@@ -15,88 +15,84 @@
 		<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M2 15h4l3-9 4 14 3-8 2 3h4" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/></svg>
 		<span>Broad<b>watcher</b></span>
 	</div>
-	<button class="hud-ready" id="hudReady" title="Broadcast readiness (AI) — click for the reasoning">
+	<button class="hud-ready" id="hudReady" title="Broadcast readiness — click for the reasoning">
 		<span class="lamp" id="readyLamp"></span>
 		<span class="ready-text"><b id="readyVerdict">Standby</b><small id="readyHeadline">waiting for the first assessment</small></span>
 	</button>
-	<div class="hud-cell intake" id="hudIntake" title="Traffic arriving at the ATEM (switch port counters)">
-		<label>ATEM intake</label>
-		<div class="meter"><i id="intakeBar"></i><em id="intakeBase"></em></div>
-		<b id="intakeVal">–</b>
-		<small id="intakeSrc">no stream</small>
-	</div>
-	<div class="hud-cell" id="hudWan" title="Internet link on the UDM">
-		<label>WAN</label>
-		<b><span class="dn" id="wanDown">–</span> <span class="up" id="wanUp">–</span></b>
-		<small id="wanSub">–</small>
-	</div>
-	<div class="hud-cell" id="hudConsole" title="UDM Pro Max">
-		<label>Console</label>
-		<b id="consoleVal">–</b>
-		<small id="consoleSub">–</small>
-	</div>
-	<div class="hud-cell vlans" id="hudVlans" title="VLAN traffic through the gateway"></div>
-	<div class="hud-cell flows" id="hudFlows" title="Biggest flow in the last poll">
-		<label>Top flow</label>
-		<div class="ticker" id="flowTicker">–</div>
+	<div class="hud-cells">
+		<div class="cell intake" id="hudIntake" title="Traffic arriving at the switcher (its switch port, live via SNMP)">
+			<label>ATEM intake</label>
+			<div class="meter"><i id="intakeBar"></i><em id="intakeBase"></em></div>
+			<b id="intakeVal">–</b>
+			<small id="intakeSrc">no stream</small>
+		</div>
+		<div class="cell" id="hudWan" title="Internet link on the gateway">
+			<label>WAN</label>
+			<b><span class="dn" id="wanDown">–</span> <span class="up" id="wanUp">–</span></b>
+			<small id="wanSub">–</small>
+		</div>
+		<div class="cell" id="hudConsole" title="The gateway itself">
+			<label>Console</label>
+			<b id="consoleVal">–</b>
+			<small id="consoleSub">–</small>
+		</div>
+		<div class="cell vlans" id="hudVlans" title="Traffic through the gateway per broadcast VLAN (orange into the VLAN, teal out), last 10 minutes"></div>
 	</div>
 	<div class="hud-right">
 		<div class="hud-issues" id="hudIssues"></div>
 		<div class="clock" id="clock">00:00:00</div>
-		<button class="theme-toggle" id="settingsBtn" title="Settings (AI, gateway, SNMP, Companion, server)">⚙</button>
-		<button class="theme-toggle" id="themeToggle" title="Light / dark">◐</button>
-		<button class="hud-toggle" id="hudToggle" title="Expand the HUD (H)">Details <i>▾</i></button>
+		<button class="icon-btn" id="settingsBtn" title="Settings (AI, gateway, SNMP, Companion, server)">⚙</button>
+		<button class="icon-btn" id="themeToggle" title="Light / dark">◐</button>
+		<button class="icon-btn on" id="railToggle" title="Show or hide the readiness rail (R)">▸</button>
 	</div>
 </header>
-<section class="hud-panel" id="hudPanel" hidden>
-	<div class="hud-panel-grid">
-		<div class="hp" id="hpFlows"></div>
-		<div class="hp" id="hpVlans"></div>
-		<div class="hp" id="hpConsole"></div>
-		<div class="hp" id="hpAI"></div>
-	</div>
-</section>
 
-<div class="shell">
+<div class="shell" id="shell">
 	<main class="main" id="main">
+		<nav class="secnav" id="secnav">
+			<a href="#gwBlock">Gateway</a><a href="#mapBlock">Signal map</a><a href="#atemBlock">Streams</a><a href="#pathBlock">Stream paths</a><a href="#rackBlock">Switches</a><a href="#patchBlock">Equipment</a><a href="#tapeBlock">Events</a>
+			<span class="spacer"></span><small id="freshness"></small>
+		</nav>
 		<section class="issues" id="issues"></section>
 
+		<section class="block" id="gwBlock">
+			<header class="bh"><h2>Gateway at a glance</h2><span class="bh-note" id="gwNote"></span><button class="fold" data-fold="gwBlock" title="collapse / expand"></button></header>
+			<div class="bb"><div class="gw" id="gw"></div></div>
+		</section>
+
 		<section class="block" id="mapBlock">
-			<header class="bh"><h2>Signal map</h2><div class="bh-tools"><label class="chk"><input type="checkbox" id="mapAll"> every switch</label><span class="bh-note" id="mapNote"></span></div></header>
-			<div class="map-wrap" id="mapWrap"><svg id="map" xmlns="http://www.w3.org/2000/svg"></svg></div>
+			<header class="bh"><h2>Signal map</h2><div class="bh-tools"><span class="zoom"><button id="mapOut" title="zoom out">−</button><span id="mapZoom">100%</span><button id="mapIn" title="zoom in">+</button><button id="mapFit" title="fit the whole map">fit</button></span><label class="chk"><input type="checkbox" id="mapAll"> every switch</label><span class="bh-note" id="mapNote"></span></div><button class="fold" data-fold="mapBlock" title="collapse / expand"></button></header>
+			<div class="bb"><div class="map-wrap" id="mapWrap"><svg id="map" xmlns="http://www.w3.org/2000/svg"></svg></div></div>
 		</section>
 
 		<section class="block" id="atemBlock">
-			<header class="bh"><h2>Streams into the switcher</h2><span class="bh-note" id="atemNote"></span></header>
-			<div id="atemPanel"></div>
+			<header class="bh"><h2>Streams into the switcher</h2><span class="bh-note" id="atemNote"></span><button class="fold" data-fold="atemBlock" title="collapse / expand"></button></header>
+			<div class="bb"><div id="atemPanel"></div></div>
 		</section>
 
 		<section class="block" id="pathBlock">
-			<header class="bh"><h2>Stream path check</h2><span class="bh-note" id="pathNote"></span></header>
-			<div id="pathPanel"></div>
+			<header class="bh"><h2>Stream path check</h2><span class="bh-note" id="pathNote"></span><button class="fold" data-fold="pathBlock" title="collapse / expand"></button></header>
+			<div class="bb"><div id="pathPanel"></div></div>
 		</section>
 
 		<section class="block" id="rackBlock">
-			<header class="bh"><h2>Switches</h2><span class="bh-note" id="rackNote"></span></header>
-			<div class="rack" id="rack"></div>
+			<header class="bh"><h2>Switches</h2><div class="bh-tools"><input class="find" id="portFind" placeholder="find a device, IP or label on a port…" autocomplete="off"><span class="bh-note" id="rackNote"></span></div><button class="fold" data-fold="rackBlock" title="collapse / expand"></button></header>
+			<div class="bb"><div class="rack" id="rack"></div></div>
 		</section>
 
 		<section class="block" id="patchBlock">
-			<header class="bh"><h2>Broadcast equipment</h2><div class="bh-tools"><button class="btn" id="editRoster">Edit roster</button><span class="bh-note" id="patchNote"></span></div></header>
-			<div id="patch"></div>
+			<header class="bh"><h2>Broadcast equipment</h2><div class="bh-tools"><button class="btn" id="editRoster">Edit roster</button><span class="bh-note" id="patchNote"></span></div><button class="fold" data-fold="patchBlock" title="collapse / expand"></button></header>
+			<div class="bb"><div id="patch"></div></div>
 		</section>
 
 		<section class="block two" id="tapeBlock">
-			<div>
-				<header class="bh"><h2>What changed</h2><span class="bh-note">Broadwatcher event tape</span></header>
-				<div class="tape" id="tape"></div>
-			</div>
-			<div>
-				<header class="bh"><h2>UniFi events</h2><span class="bh-note" id="logNote"></span></header>
-				<div class="tape" id="unifiLog"></div>
+			<header class="bh"><h2>Events</h2><span class="bh-note" id="logNote"></span><button class="fold" data-fold="tapeBlock" title="collapse / expand"></button></header>
+			<div class="bb">
+				<div><div class="lbl" style="margin-bottom:6px">What changed · Broadwatcher event tape</div><div class="tape" id="tape"></div></div>
+				<div><div class="lbl" style="margin-bottom:6px">UniFi events</div><div class="tape" id="unifiLog"></div></div>
 			</div>
 		</section>
-		<footer class="foot">Broadwatcher · Brookline Interactive Group · UniFi Network API and SNMP · Blackmagic REST and ATEM protocol · local AI</footer>
+		<footer class="foot">Broadwatcher · Brookline Interactive Group · UniFi Network API and SNMP · Blackmagic REST and ATEM protocol · Companion · local or Claude AI</footer>
 	</main>
 
 	<aside class="inspector" id="inspector">
@@ -111,7 +107,6 @@
 <div class="overlay" id="rosterOverlay" hidden>
 	<div class="editor" id="rosterEditor"></div>
 </div>
-
 <div class="overlay" id="settingsOverlay" hidden>
 	<div class="editor" id="settingsEditor"></div>
 </div>
