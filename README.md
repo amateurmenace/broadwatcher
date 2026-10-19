@@ -48,8 +48,8 @@ the first NetWatch looked static and why a stream took a while to appear. NetWat
 2. reads the encoders directly every 10 s: the field ATEM Mini's stream state, bitrate and destination URL
    over the ATEM protocol, and the Web Presenters' status/bitrate over their REST API, so a stream from
    known gear is reported within seconds even while the switch counters lag;
-3. can read the port counters **straight from the switches over SNMP every 3 s** (true real time) once SNMP
-   is enabled in UniFi (see below);
+3. reads the port counters **straight from the switches over SNMP every 3 s** (true real time; SNMP is on
+   since 2026-10-18);
 4. lists gateway flows aimed at the ATEM with their source and destination port.
 
 A stream from a device on the **same VLAN** as the ATEM never passes the gateway, so it has no flow record;
@@ -93,9 +93,10 @@ Without Electron (Node 22+): `node server/server.js [config.json]`, then open `h
 
 ## Things to set up in UniFi
 
-1. **Enable SNMP** (UniFi Network > Settings > System > SNMP: version 2c, a community string such as
-   `netwatch`) and put the community in `snmp.community`. This is the single biggest upgrade: port rates then
-   update every 3 s instead of whenever a switch informs the controller.
+1. **SNMP is enabled** (UniFi Network > Settings > System > Advanced > SNMP, version 1 & 2c, community
+   `netwatch`, done 2026-10-18) and the community is in `snmp.community`, so every up port on every switch is
+   read every 3 s ("live via SNMP" in the rack). If the community string ever changes in UniFi, change it in
+   the config too. UniFi switches name their interfaces `0/<port>`, the UDM `eth<n>` (eth0 = port 1).
 2. **Name every broadcast device** in UniFi and give the important ones **fixed IPs**; the config is keyed by
    IP. Unnamed Blackmagic devices today: 192.168.20.176 (Fiber Agg port 20, 10 G), 192.168.20.237
    "BIGs-Air-2" (Video Rack port 32), 192.168.5.78 (Audio Rack port 7).

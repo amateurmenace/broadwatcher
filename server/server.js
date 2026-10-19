@@ -18,13 +18,28 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const UI_DIR = path.join(__dirname, '..', 'ui')
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.woff2': 'font/woff2' }
 
+// The bundled config is the source of truth for the equipment list, the ATEM, SNMP and AI defaults; the user's
+// copy may override any of it. When the bundled config is newer (config_version) than the user's copy, the
+// device lists come from the bundle again (the user's gateway/poll/threshold/ai/snmp edits are kept) and the
+// merged result is written back so the file on disk shows the current schema.
 export function loadConfig(bundledPath, userPath) {
 	const read = (p) => JSON.parse(fs.readFileSync(p, 'utf8'))
 	const base = read(bundledPath)
 	if (!userPath || !fs.existsSync(userPath)) return base
 	try {
 		const user = read(userPath)
-		return { ...base, ...user, gateway: { ...base.gateway, ...(user.gateway || {}) }, poll: { ...base.poll, ...(user.poll || {}) }, thresholds: { ...base.thresholds, ...(user.thresholds || {}) }, ai: { ...base.ai, ...(user.ai || {}) } }
+		const deep = (k) => ({ ...(base[k] || {}), ...(user[k] || {}) })
+		const outdated = (user.config_version || 0) < (base.config_version || 0)
+		const merged = outdated
+			? { ...base, gateway: deep('gateway'), poll: deep('poll'), thresholds: deep('thresholds'), ai: deep('ai'), snmp: deep('snmp'), server: deep('server') }
+			: { ...base, ...user, gateway: deep('gateway'), poll: deep('poll'), thresholds: deep('thresholds'), ai: deep('ai'), snmp: deep('snmp'), server: deep('server') }
+		if (outdated) {
+			try {
+				fs.writeFileSync(userPath, JSON.stringify(merged, null, 2) + '\n')
+				console.log(`config ${userPath} upgraded to version ${base.config_version}`)
+			} catch {}
+		}
+		return merged
 	} catch (e) {
 		console.error(`config ${userPath} ignored: ${e.message}`)
 		return base

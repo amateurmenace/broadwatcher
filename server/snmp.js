@@ -197,11 +197,14 @@ export class SnmpSwitch {
 		const map = new Map()
 		for (const vb of names) {
 			const ifIndex = Number(vb.oid.split('.').pop())
-			const m = /(?:port|eth|ge|xe|swp)[^\d]*(\d+)/i.exec(String(vb.value))
-			if (!m) continue
-			let n = Number(m[1])
-			if (/^eth/i.test(String(vb.value))) n += 1 // eth0 = port 1 on UniFi switches
-			if (!map.has(n)) map.set(n, ifIndex)
+			const name = String(vb.value)
+			let n = null
+			let m
+			if ((m = /^(\d+)\/(\d+)$/.exec(name))) n = Number(m[2]) // UniFi switches: "0/15" = port 15
+			else if ((m = /^eth(\d+)$/i.exec(name))) n = Number(m[1]) + 1 // UDM / gateways: eth0 = port 1
+			else if ((m = /^(?:port|ge|xe|swp)[^\d]*(\d+)$/i.exec(name))) n = Number(m[1])
+			if (n === null || map.has(n)) continue
+			map.set(n, ifIndex)
 		}
 		this.ifIndexByPort = map
 		return map

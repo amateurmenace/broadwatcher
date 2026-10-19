@@ -1,5 +1,6 @@
 {
   "_comment": "BIG NetWatch configuration. The app copies this file to its user-data folder on first run (Help > Open config file) and reads that copy from then on; keys you leave out fall back to the bundled defaults.",
+  "config_version": 2,
   "gateway": {
     "name": "BIG WAN (UDM Pro Max)",
     "url": "https://192.168.20.1",
@@ -275,7 +276,7 @@
   },
   "snmp": {
     "_comment": "Real-time port counters straight from the switches. Enable SNMP v2c in UniFi Network > Settings > System > SNMP, put the community string here and restart; empty = off (counters then come from the controller, which refreshes them only when a switch informs it, every 30-90 s).",
-    "community": "",
+    "community": "netwatch",
     "every_s": 3
   }
 }

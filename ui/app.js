@@ -323,7 +323,7 @@ function renderRack(s) {
 			<div class="ru-meter">
 				<div class="r"><span>in</span><em class="dn">${fmtRate(sw.totals.down)}</em></div><div class="bar"><i style="width:${(sw.totals.down / max) * 100}%"></i></div>
 				<div class="r"><span>out</span><em class="up">${fmtRate(sw.totals.up)}</em></div><div class="bar"><i class="up" style="width:${(sw.totals.up / max) * 100}%"></i></div>
-				<small>${sw.portsUp}/${sw.portsTotal} ports · counters ${sw.age} s ago</small>
+				<small>${sw.portsUp}/${sw.portsTotal} ports · ${sw.ports.some((p) => p.live) ? `live via SNMP · ${sw.age} s` : `counters ${sw.age} s old`}</small>
 			</div>
 			<div class="ear"><i></i><i></i></div>
 		</div>`

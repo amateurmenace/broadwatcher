@@ -1,7 +1,7 @@
 {
   "name": "big-netwatch",
   "productName": "BIG NetWatch",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Real-time network and broadcast-equipment monitor for Brookline Interactive Group (UniFi + Blackmagic)",
   "author": "Brookline Interactive Group",
   "license": "UNLICENSED",
