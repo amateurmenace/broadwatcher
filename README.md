@@ -94,8 +94,14 @@ Without Electron (Node 22+): `node server/server.js [config.json]`, then open `h
 3. **Give remote encoders their own VLAN** (or let them arrive from the internet) so their streams cross
    the gateway and show up as *confirmed* flows with source and destination port.
 4. Keep **Traffic Identification / Flows** on.
-5. ATEM switchers have a handful of control-connection slots (ATEM Software Control, Companion, panels);
-   Broadwatcher holds one per switcher and warns when a switcher reports "too many clients".
+5. ATEM switchers have a handful of control-connection slots (ATEM Software Control, Companion, panels) and
+   the HD8 keeps a dead or half-open session for about two minutes before freeing its slot. Broadwatcher
+   therefore holds exactly one session per switcher for as long as it runs, keeps it across *Restart server*,
+   never sends bare hellos, and never opens more than one session per two minutes per switcher even if the
+   link flaps or the switcher refuses. A second running copy (for example on the Mac) is a second slot; set
+   the switcher's telemetry to *none* in that copy's roster if slots are tight. If a switcher ever reports
+   "too many clients" with only the expected controllers connected, something else is opening sessions in a
+   loop; the only way to clear phantom sessions quickly is a power-cycle of the switcher.
 
 ## Development
 

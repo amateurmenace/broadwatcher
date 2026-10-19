@@ -137,6 +137,11 @@ export class AtemClient extends EventEmitter {
 		this.timer = null
 		this.retryAt = 0
 		this.closed = false
+		this.attempts = [] // timestamps of hellos we sent; never more than one per SLOT_HOLD_MS
+	}
+
+	static get SLOT_HOLD_MS() {
+		return 120000 // measured on the HD8: a dead or half-open session is kept for up to ~2 minutes
 	}
 
 	// (re)connect when idle/disconnected and the backoff has passed; cheap to call every poll
@@ -148,18 +153,27 @@ export class AtemClient extends EventEmitter {
 	}
 
 	connect() {
+		// one hello per two minutes, whatever happens: a flapping link can then hold at most two slots (one live,
+		// one expiring) instead of filling the switcher
+		const now = Date.now()
+		this.attempts = this.attempts.filter((t) => now - t < AtemClient.SLOT_HOLD_MS)
+		if (this.attempts.length) {
+			this.retryAt = this.attempts[0] + AtemClient.SLOT_HOLD_MS + 1000
+			return
+		}
+		this.attempts.push(now)
 		this.teardown()
 		this.state = 'connecting'
 		this.error = null
 		this.commands = 0
 		const sock = (this.sock = dgram.createSocket('udp4'))
-		sock.on('error', (e) => this.fail(e.code || e.message, 15000))
+		sock.on('error', (e) => this.fail(e.code || e.message, AtemClient.SLOT_HOLD_MS))
 		sock.on('message', (msg) => this.onPacket(msg))
-		sock.send(HELLO, this.port, this.ip, (e) => e && this.fail(e.code || e.message, 15000))
+		sock.send(HELLO, this.port, this.ip, (e) => e && this.fail(e.code || e.message, AtemClient.SLOT_HOLD_MS))
 		this.lastPacket = Date.now()
 		this.timer = setInterval(() => {
 			// the switcher sends a packet about every second; silence means the session is gone
-			if (Date.now() - this.lastPacket > 8000) this.fail(this.state === 'connecting' ? 'timeout' : 'lost', 30000)
+			if (Date.now() - this.lastPacket > 8000) this.fail(this.state === 'connecting' ? 'timeout' : 'lost', AtemClient.SLOT_HOLD_MS)
 		}, 2000)
 	}
 
@@ -172,8 +186,8 @@ export class AtemClient extends EventEmitter {
 		const pid = msg.readUInt16BE(10)
 		if (flags & FLAG_HELLO) {
 			const code = msg[12]
-			if (code === 3) return this.fail('too many clients', 60000, 'refused')
-			if (code !== 2) return this.fail(`hello reply ${code}`, 30000, 'refused')
+			if (code === 3) return this.fail('too many clients', AtemClient.SLOT_HOLD_MS, 'refused')
+			if (code !== 2) return this.fail(`hello reply ${code}`, AtemClient.SLOT_HOLD_MS, 'refused')
 			this.state = 'syncing'
 			this.ack(sid, 0)
 			return
@@ -295,6 +309,7 @@ export class AtemClient extends EventEmitter {
 			connectedAt: this.connectedAt,
 			lastPacket: this.lastPacket,
 			commands: this.commands,
+			retryAt: this.state === 'connected' ? null : this.retryAt,
 		}
 	}
 }

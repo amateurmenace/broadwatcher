@@ -43,6 +43,9 @@ const MODEL_NAMES = {
 	U7PRO: 'U7 Pro',
 }
 const modelName = (d) => MODEL_NAMES[d.model] || d.model_display || d.shortname || d.model
+// ATEM sessions live as long as the process: a server restart (menu > Restart server) keeps them instead of
+// leaving a dead session on the switcher for two minutes and opening a second one
+const ATEM_POOL = new Map() // ip -> AtemClient
 const isPdu = (d) => /^USPPDU|PDU/i.test(d.model || '') || d.type === 'usp'
 const mbps = (bytesPerS) => Math.round((num(bytesPerS) * 8) / 1e5) / 10 // Mb/s with one decimal
 const lower = (s) => String(s || '').toLowerCase()
@@ -104,7 +107,7 @@ export class Collector extends EventEmitter {
 		this.prev = { ports: new Map(), eq: new Map(), wan: null, switches: new Map() } // for change events
 		this.stream = { state: 'idle', baseline: 0, rate: 0, since: 0, until: 0, samples: [], peak: 0 }
 		this.snmp = { cfg: { community: '', every_s: 3, ...(config.snmp || {}) }, switches: new Map(), rates: new Map(), status: {} } // mac -> SnmpSwitch; "mac:port" -> {rx, tx, t}
-		this.atems = new Map() // ip -> AtemClient (one persistent session per switcher)
+		this.atems = ATEM_POOL // ip -> AtemClient (one persistent session per switcher, shared process-wide)
 		this.timers = []
 		this.busy = new Set()
 	}
@@ -174,8 +177,7 @@ export class Collector extends EventEmitter {
 	stop() {
 		for (const t of this.timers) clearInterval(t)
 		this.timers = []
-		for (const c of this.atems.values()) c.close()
-		this.atems.clear()
+		for (const c of this.atems.values()) c.removeAllListeners() // the sessions themselves stay open (see ATEM_POOL)
 	}
 
 	history(key) {
@@ -265,9 +267,11 @@ export class Collector extends EventEmitter {
 						let c = this.atems.get(e.ip)
 						if (!c) {
 							c = new AtemClient(e.ip, { log: this.log })
-							c.on('connected', () => this.event('device', `${e.name}: connected to the switcher (${c.data.product || 'ATEM'})`, { entity: { type: 'equipment', id: e.ip } }))
-							c.on('disconnected', (err) => this.event('device', `${e.name}: switcher session lost (${err})`, { entity: { type: 'equipment', id: e.ip }, level: 'warn' }))
 							this.atems.set(e.ip, c)
+						}
+						if (!c.listenerCount('connected')) {
+							c.on('connected', () => this.event('device', `${e.name}: connected to the switcher (${c.data.product || 'ATEM'})`, { entity: { type: 'equipment', id: e.ip } }))
+							c.on('disconnected', (err) => this.event('device', `${e.name}: switcher session lost (${err}); next attempt in 2 min`, { entity: { type: 'equipment', id: e.ip }, level: 'warn' }))
 						}
 						c.ensure()
 						t = c.snapshot()
