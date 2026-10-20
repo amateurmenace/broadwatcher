@@ -86,6 +86,7 @@
     "atem_label": "atem",
     "autostart": false
   },
+  "hud_modules": ["intake", "wan", "console", "vlans"],
   "capture": {
     "interface": "",
     "tshark": "",

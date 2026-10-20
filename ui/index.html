@@ -19,25 +19,7 @@
 		<span class="lamp" id="readyLamp"></span>
 		<span class="ready-text"><b id="readyVerdict">Standby</b><small id="readyHeadline">waiting for the first assessment</small></span>
 	</button>
-	<div class="hud-cells">
-		<div class="cell intake" id="hudIntake" title="Traffic arriving at the switcher (its switch port, live via SNMP)">
-			<label>ATEM intake</label>
-			<div class="meter"><i id="intakeBar"></i><em id="intakeBase"></em></div>
-			<b id="intakeVal">–</b>
-			<small id="intakeSrc">no stream</small>
-		</div>
-		<div class="cell" id="hudWan" title="Internet link on the gateway">
-			<label>WAN</label>
-			<b><span class="dn" id="wanDown">–</span> <span class="up" id="wanUp">–</span></b>
-			<small id="wanSub">–</small>
-		</div>
-		<div class="cell" id="hudConsole" title="The gateway itself">
-			<label>Console</label>
-			<b id="consoleVal">–</b>
-			<small id="consoleSub">–</small>
-		</div>
-		<div class="cell vlans" id="hudVlans" title="Traffic through the gateway per broadcast VLAN (orange into the VLAN, teal out), last 10 minutes"></div>
-	</div>
+	<div class="hud-cells" id="hudCells"></div>
 	<div class="hud-right">
 		<div class="hud-issues" id="hudIssues"></div>
 		<div class="clock" id="clock">00:00:00</div>
@@ -92,7 +74,17 @@
 
 		<section class="block" id="forBlock">
 			<header class="bh"><h2>Stream forensics</h2><div class="bh-tools"><button class="btn mini" id="forToggle" hidden>Start capture</button><span class="bh-note" id="forNote"></span></div><button class="fold" data-fold="forBlock" title="collapse / expand"></button></header>
-			<div class="bb"><div class="for" id="forPanel"></div></div>
+			<div class="bb">
+				<div class="forbar" id="forBar">
+					<select id="forWindow" title="recent = the last 30 minutes of flows and 60 events; whole session = everything the capture holds (24 h)"><option value="recent">recent</option><option value="all">whole session</option></select>
+					<select id="forKind" title="what to list"><option value="">everything</option><option value="sessions">control sessions</option><option value="flows">flows</option><option value="events">events</option></select>
+					<input class="find" id="forFind" placeholder="find in the capture… (an IP, a name, RTMP, SRT, rejected, held)">
+					<select id="forState" title="state"><option value="">any state</option><option value="held">held</option><option value="refused">refused</option><option value="streaming">streaming</option><option value="rejected">rejected</option><option value="reset">reset</option><option value="closed">closed</option></select>
+					<span class="logbar-right"><a class="btn mini" id="forJson" href="/api/forensics/export" download title="everything listed, as JSON">JSON</a><a class="btn mini" id="forCsv" href="/api/forensics/export?format=csv" download title="everything listed, as CSV">CSV</a><button class="btn mini" id="forRaw" title="record the raw packets to pcapng files (a ring of five 100 MB files) for Wireshark">Raw packets</button><button class="btn mini diagnose" data-for-ai="anthropic" title="have Claude read the capture">✦ Explain (Claude)</button><button class="btn mini diagnose local" data-for-ai="openai" title="have the local model read the capture">✦ Explain (local)</button></span>
+				</div>
+				<div class="for" id="forPanel"></div>
+				<div id="forFiles" class="forfiles" hidden></div>
+			</div>
 		</section>
 
 		<section class="block" id="rackBlock">

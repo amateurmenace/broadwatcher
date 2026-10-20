@@ -110,6 +110,21 @@ touching anything. The roadmap for the next phase is in `docs/ROADMAP.md`.
   double-click a node; USER_KEYS keeps them. The AI diagnosis buttons pick Claude or the local model per
   call (`/api/ai/diagnose?provider=`, `ai.chat({provider})`); `ui/localai.js` is the local AI guide (LM
   Studio / Ollama). Roles gained `playback` (Tightrope Flex 4).
+- 0.12.0: `server/discover.js` (mDNS queries for `_ndi._tcp` and `_netaudio-arc._udp` on every interface
+  every 30 s; PTP v1 listener on UDP 319 joining 224.0.1.129-132: leaders = Sync senders, followers =
+  Delay_Req senders, domains told apart by subnet) → `state.discovery = {ndi, dante, clocks}`;
+  `server/host.js` (this PC: cpu/ram/gpu via nvidia-smi/disks; telemetry kind `host` for the first roster
+  entry with one of this machine's addresses); `server/videohub.js` (TCP 9990 read-only dump: labels,
+  routing, locks; telemetry kind `videohub` for probe tcp:9990); `rest.js` reads the HyperDeck working set
+  (remaining record time, free space, clips), formats, codec, playback and the Web Presenter cache. Tiles:
+  `switcher` (stream in + out + record + sessions), `encoders`, `recorders`, `audio`, `mics`, `dante`, `ndi`,
+  `network`; each opens a panel drawn client-side (`LOCAL_TYPES`, `localPanel`). `hud_modules` (config,
+  Settings > Top bar) drives the top-bar cells (`hudCell`). Forensics keeps the whole session (4000 flows,
+  1000 sockets, 4000 events, 24 h): `full()` / `/api/forensics/all` (q, kind, since, state), `/api/forensics/
+  export` (json|csv), raw packets `startRaw/stopRaw` = a third tshark `-w` into `<config dir>/captures/`
+  (ring 5 × 100 MB, `/api/forensics/pcap[/name]`), `ai.explainForensics` + `/api/ai/forensics` (focus peer,
+  question, provider). The Fairlight decoder was fixed (see the facts below). PDUs carry `outletList`,
+  `acPower`, `acBudget`.
 - Phone page: `ui/m.html` + `m.js` + `m.css` + `manifest.webmanifest` + `icon-512.png`, served at `/m`;
   non-loopback requests need `server.token` (`?key=` once, then the `bw_key` cookie; manifest and icons are
   public); `/api/phone` lists the LAN links; Electron menu "Open on a phone…" (switches `server.host` to
@@ -208,6 +223,13 @@ touching anything. The roadmap for the next phase is in `docs/ROADMAP.md`.
   from this PC: Companion + the NDI Machine bridge), so its capacity is at least four. Since the forward
   moved to WAN 1935, internet scanners (91.230.168.233, 54.236.100.41 …) open RTMP connections to the HD8
   directly; the mirror shows them as RTMP flows that close within a second.
+- HD8 Fairlight levels on the wire (protocol 2.32, read passively off the mirror 2026-10-20, fixed in 0.12.0;
+  0.9.0 had the two names swapped): once SFLN asks, the switcher sends one **FMLv per audio input** per tick
+  (40 bytes: source id int64 at 0 = -65280 for an input's default source, input index u16 at 8, then int16
+  hundredths of dB from 10: in L/R pre-fader, in peaks, compressor, limiter, expander, out L/R after
+  dynamics, out peaks, mix L/R = what reaches the program (-100 when the input is off), mix peaks) and one
+  **FDLv = master** (28 bytes: in L/R, in peaks, compressor, limiter, out L/R, out peaks, mix L/R, mix peaks).
+  -10000 = nothing / no held peak. The installed app saw 29 inputs and ~900 FMLv/s.
 - HD8 control slots (2026-10-19 07:43): after Steve's power-cycle Companion reconnected at 07:43:23, the NDI
   Machine bridge restarted the same second, ATEM Software Control reconnected, and Broadwatch's hello was
   refused at 07:43:30. The switcher is full with those three; its exact capacity is still unmeasured. The NDI

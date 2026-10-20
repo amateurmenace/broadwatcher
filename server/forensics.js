@@ -11,8 +11,15 @@
 // than once per 30 s, and give up after five failures in a row.
 import { spawn } from 'node:child_process'
 import fs from 'node:fs'
+import path from 'node:path'
 import readline from 'node:readline'
 import { EventEmitter } from 'node:events'
+
+// the whole session is kept, within these bounds (the oldest go first)
+const MAX_FLOWS = 4000
+const MAX_SESSIONS = 1000
+const MAX_EVENTS = 4000
+const KEEP_MS = 24 * 3600000
 
 const FIELDS = ['frame.time_epoch', 'frame.len', 'ip.src', 'ip.dst', 'ip.proto', 'tcp.srcport', 'tcp.dstport', 'udp.srcport', 'udp.dstport', 'tcp.flags.syn', 'tcp.flags.reset', 'tcp.flags.fin', 'tcp.len', '_ws.col.Protocol', '_ws.col.Info', 'amf.string', 'srt.iscontrol', 'srt.type', 'srt.hs.reqtype', 'srt.hs.version', 'srt.hs.agent_latency', 'srt.hs.sid', 'srt.hs.failtype']
 const HELLO_FIELDS = ['frame.time_epoch', 'ip.src', 'ip.dst', 'udp.srcport', 'udp.dstport', 'data.data']
@@ -38,12 +45,62 @@ export class Forensics extends EventEmitter {
 		this.nameFor = nameFor
 		this.flows = new Map() // "peer|proto|targetPort|peerPort" -> flow
 		this.sessions = new Map() // peer ip -> ATEM control session record
-		this.events = [] // newest first, 150 kept
+		this.events = [] // newest first, the whole session (MAX_EVENTS)
 		this.stats = { running: false, since: 0, packets: 0, pps: 0, lastPacket: 0, restarts: 0, failures: 0, error: null }
 		this.procs = {}
 		this.timers = []
 		this.secondBucket = { t: 0, n: 0 }
 		this.stopped = false
+		this.rawWanted = false // a third tshark writing raw packets to a ring of pcapng files (Wireshark opens them)
+		this.rawDir = this.cfg.raw_dir || null
+		this.rawSince = 0
+		this.seq = 0
+	}
+
+	// ------------------------------------------------------------------ raw packets to disk (pcapng ring)
+	startRaw(dir) {
+		if (dir) this.rawDir = dir
+		if (!this.available || !this.rawDir) return { error: !this.rawDir ? 'no capture folder' : 'capture not available' }
+		try {
+			fs.mkdirSync(this.rawDir, { recursive: true })
+		} catch (e) {
+			return { error: e.message }
+		}
+		this.rawWanted = true
+		this.rawSince = this.rawSince || Date.now()
+		const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
+		this.spawn('raw', ['-i', this.cfg.interface, '-n', '-f', `host ${this.targetIp}`, '-w', path.join(this.rawDir, `switcher-${stamp}.pcapng`), '-b', 'filesize:102400', '-b', 'files:5'], () => {})
+		this.event('capture', `raw packet recording started (${this.rawDir}, a ring of five 100 MB files)`, { level: 'info' })
+		return { ok: true }
+	}
+	stopRaw() {
+		this.rawWanted = false
+		this.rawSince = 0
+		const p = this.procs.raw
+		if (p) {
+			try {
+				p.kill()
+			} catch {}
+			this.procs.raw = null
+			this.event('capture', 'raw packet recording stopped', { level: 'info' })
+		}
+		return { ok: true }
+	}
+	rawFiles() {
+		if (!this.rawDir) return []
+		try {
+			return fs
+				.readdirSync(this.rawDir)
+				.filter((f) => /\.pcapng?$/.test(f))
+				.map((f) => {
+					const st = fs.statSync(path.join(this.rawDir, f))
+					return { name: f, size: st.size, mtime: st.mtimeMs }
+				})
+				.sort((a, b) => b.mtime - a.mtime)
+				.slice(0, 40)
+		} catch {
+			return []
+		}
 	}
 
 	get available() {
@@ -102,7 +159,7 @@ export class Forensics extends EventEmitter {
 		child.on('exit', (code) => {
 			this.procs[name] = null
 			if (name === 'main') this.stats.running = false
-			if (this.stopped) return
+			if (this.stopped || (name === 'raw' && !this.rawWanted)) return
 			this.stats.failures = Date.now() - (this.lastStart || 0) < 20000 ? this.stats.failures + 1 : 0
 			this.stats.error = this.stats.error || `tshark (${name}) exited with code ${code}`
 			if (this.stats.failures >= 5) {
@@ -132,9 +189,9 @@ export class Forensics extends EventEmitter {
 	}
 
 	event(kind, text, extra = {}) {
-		const ev = { t: Date.now(), kind, text, ...extra }
+		const ev = { id: ++this.seq, t: Date.now(), kind, text, ...extra }
 		this.events.unshift(ev)
-		if (this.events.length > 150) this.events.length = 150
+		if (this.events.length > MAX_EVENTS) this.events.length = MAX_EVENTS
 		this.emit('event', ev)
 	}
 
@@ -171,7 +228,7 @@ export class Forensics extends EventEmitter {
 			const outbound = out && (peerPort < 1024 || peerPort === 1935 || peerPort === 9710 || targetPort >= 1024)
 			fl = { key, peer, name: this.nameFor(peer) || null, proto, targetPort, peerPort, outbound, app: appName(protocol, targetPort, peerPort, proto), first: now, last: now, pktsIn: 0, pktsOut: 0, bytesIn: 0, bytesOut: 0, win: [], state: proto === 'TCP' ? 'opening' : 'active', rtmp: null, srt: null, detail: '' }
 			this.flows.set(key, fl)
-			if (this.flows.size > 400) this.flows.delete(this.flows.keys().next().value)
+			if (this.flows.size > MAX_FLOWS) this.flows.delete(this.flows.keys().next().value)
 			if (!outbound && (proto === 'TCP' ? syn === '1' || syn === 'True' : true)) this.event('flow', `${proto} ${fl.app} from ${fl.name || peer} to the switcher's port ${targetPort}`, { peer, key })
 		}
 		fl.last = now
@@ -342,7 +399,9 @@ export class Forensics extends EventEmitter {
 	// ------------------------------------------------------------------ housekeeping + snapshot
 	tick() {
 		const now = Date.now()
-		for (const [k, fl] of this.flows) if (now - fl.last > 1800000) this.flows.delete(k)
+		for (const [k, fl] of this.flows) if (now - fl.last > KEEP_MS) this.flows.delete(k)
+		for (const [k, s] of this.sessions) if (now - s.last > KEEP_MS) this.sessions.delete(k)
+		if (this.sessions.size > MAX_SESSIONS) for (const k of [...this.sessions.keys()].slice(0, this.sessions.size - MAX_SESSIONS)) this.sessions.delete(k)
 		for (const [, s] of this.sessions) {
 			const held = now - s.lastHeld < 4000 && rate(s, now).out >= 0.5
 			const prev = s.state
@@ -367,24 +426,44 @@ export class Forensics extends EventEmitter {
 		}
 	}
 
+	sessionView(s, now) {
+		const r = rate(s, now)
+		return { id: s.id, ip: s.ip, port: s.port, name: s.name, state: s.state, since: s.heldSince || s.first, first: s.first, last: s.last, pps: Math.round((r.in + r.out) * 10) / 10, pktsIn: s.pktsIn, pktsOut: s.pktsOut, hello: s.hello, refusals: s.refusals || 0, hellos: s.hellos || 0, acceptedAt: s.acceptedAt || null, refusedAt: s.refusedAt || null }
+	}
+	flowView(fl, now) {
+		const r = rate(fl, now)
+		return { key: fl.key, peer: fl.peer, name: fl.name, proto: fl.proto, app: fl.app, outbound: !!fl.outbound, targetPort: fl.targetPort, peerPort: fl.peerPort, first: fl.first, last: fl.last, endedAt: fl.endedAt || null, state: fl.state, bytesIn: fl.bytesIn, bytesOut: fl.bytesOut, pktsIn: fl.pktsIn, pktsOut: fl.pktsOut, inMbps: Math.round((r.bin * 8) / 1e5) / 10, outMbps: Math.round((r.bout * 8) / 1e5) / 10, detail: fl.detail, rtmp: fl.rtmp ? { app: fl.rtmp.app, publish: maskKey(fl.rtmp.publish), status: fl.rtmp.status || fl.rtmp.connectResult, tcUrl: fl.rtmp.tcUrl, encoder: fl.rtmp.encoder, connectAt: fl.rtmp.connectAt || null, publishAt: fl.rtmp.publishAt || null } : null, srt: fl.srt ? { version: fl.srt.version, latency: fl.srt.latency, streamId: maskKey(fl.srt.streamId), reqtype: fl.srt.reqtype, fail: fl.srt.fail } : null, live: now - fl.last < 10000 && !/reset|closed|rejected|no answer/.test(fl.state) }
+	}
+	header() {
+		return { enabled: this.enabled, available: this.available, running: this.stats.running, interface: this.cfg.interface, tshark: this.tshark, since: this.stats.since, pps: this.stats.pps, packets: this.stats.packets, lastPacket: this.stats.lastPacket, error: this.stats.error, restarts: this.stats.restarts, target: this.targetIp, raw: { running: !!this.procs.raw, wanted: this.rawWanted, since: this.rawSince, dir: this.rawDir, files: this.rawFiles() }, totals: { sessions: this.sessions.size, flows: this.flows.size, events: this.events.length } }
+	}
+
+	// the light view for the state (recent sessions, the most telling flows, the latest events)
 	snapshot({ flows: nFlows = 40, events: nEvents = 60 } = {}) {
 		const now = Date.now()
 		const sessions = [...this.sessions.values()]
 			.filter((s) => now - s.last < 3600000)
-			.map((s) => {
-				const r = rate(s, now)
-				return { id: s.id, ip: s.ip, port: s.port, name: s.name, state: s.state, since: s.heldSince || s.first, last: s.last, pps: Math.round((r.in + r.out) * 10) / 10, hello: s.hello, refusals: s.refusals || 0, hellos: s.hellos || 0 }
-			})
+			.map((s) => this.sessionView(s, now))
 			.sort((a, b) => (a.state === 'held' ? 0 : 1) - (b.state === 'held' ? 0 : 1) || a.ip.localeCompare(b.ip) || b.last - a.last)
 		const flows = [...this.flows.values()]
 			.filter((fl) => now - fl.last < 1800000)
 			.sort((a, b) => Number(!!b.rtmp || !!b.srt) - Number(!!a.rtmp || !!a.srt) || b.last - a.last)
 			.slice(0, nFlows)
-			.map((fl) => {
-				const r = rate(fl, now)
-				return { key: fl.key, peer: fl.peer, name: fl.name, proto: fl.proto, app: fl.app, outbound: !!fl.outbound, targetPort: fl.targetPort, peerPort: fl.peerPort, first: fl.first, last: fl.last, state: fl.state, bytesIn: fl.bytesIn, bytesOut: fl.bytesOut, pktsIn: fl.pktsIn, pktsOut: fl.pktsOut, inMbps: Math.round((r.bin * 8) / 1e5) / 10, outMbps: Math.round((r.bout * 8) / 1e5) / 10, detail: fl.detail, rtmp: fl.rtmp ? { app: fl.rtmp.app, publish: maskKey(fl.rtmp.publish), status: fl.rtmp.status || fl.rtmp.connectResult, tcUrl: fl.rtmp.tcUrl, encoder: fl.rtmp.encoder } : null, srt: fl.srt ? { version: fl.srt.version, latency: fl.srt.latency, streamId: maskKey(fl.srt.streamId), reqtype: fl.srt.reqtype, fail: fl.srt.fail } : null, live: now - fl.last < 10000 && !/reset|closed|rejected|no answer/.test(fl.state) }
-			})
-		return { enabled: this.enabled, available: this.available, running: this.stats.running, interface: this.cfg.interface, tshark: this.tshark, since: this.stats.since, pps: this.stats.pps, packets: this.stats.packets, lastPacket: this.stats.lastPacket, error: this.stats.error, restarts: this.stats.restarts, target: this.targetIp, sessions, held: sessions.filter((s) => s.state === 'held').length, flows, events: this.events.slice(0, nEvents) }
+			.map((fl) => this.flowView(fl, now))
+		return { ...this.header(), sessions, held: sessions.filter((s) => s.state === 'held').length, flows, events: this.events.slice(0, nEvents) }
+	}
+
+	// everything the session holds, newest first, optionally narrowed: q = text in any field, kind = sessions|flows|events,
+	// since = ms, state = part of a flow/session state ("rejected", "held", "streaming"…)
+	full({ q = '', kind = null, since = 0, state = '' } = {}) {
+		const now = Date.now()
+		const needle = String(q || '').trim().toLowerCase()
+		const hit = (o) => !needle || JSON.stringify(o).toLowerCase().includes(needle)
+		const st = String(state || '').toLowerCase()
+		const sessions = !kind || kind === 'sessions' ? [...this.sessions.values()].filter((s) => s.last >= since).map((s) => this.sessionView(s, now)).filter((s) => hit(s) && (!st || String(s.state).includes(st))).sort((a, b) => b.last - a.last) : []
+		const flows = !kind || kind === 'flows' ? [...this.flows.values()].filter((f) => f.last >= since).map((f) => this.flowView(f, now)).filter((f) => hit(f) && (!st || String(f.state).includes(st))).sort((a, b) => b.last - a.last) : []
+		const events = !kind || kind === 'events' ? this.events.filter((e) => e.t >= since && hit(e) && (!st || String(e.kind).includes(st) || String(e.level || '').includes(st))) : []
+		return { ...this.header(), sessions, flows, events, filtered: { q: needle, kind, since, state: st } }
 	}
 }
 

@@ -34,7 +34,7 @@ window.Settings = (function () {
 		const pv = ai.providers || {}
 		const prov = ai.provider === 'anthropic' ? 'anthropic' : 'local'
 		const welcome = msg === 'welcome'
-		$('settingsEditor').innerHTML = `<header><h2>Settings</h2><small>${d.flavor === 'public' ? 'Broadwatch Community' : 'Broadwatch'} · saved to ${esc(d.configPath || 'the user config')}</small><nav class="jump">${['ai', 'gateway', 'atem', 'snmp', 'companion', 'capture', 'server', 'thresholds'].map((s) => `<a href="#set-${s}" data-jump="${s}">${{ ai: 'AI', gateway: 'UniFi gateway', atem: 'Switcher', snmp: 'SNMP', companion: 'Companion', capture: 'Capture', server: 'Server', thresholds: 'Thresholds' }[s]}</a>`).join('')}</nav></header>
+		$('settingsEditor').innerHTML = `<header><h2>Settings</h2><small>${d.flavor === 'public' ? 'Broadwatch Community' : 'Broadwatch'} · saved to ${esc(d.configPath || 'the user config')}</small><nav class="jump">${['ai', 'gateway', 'hud', 'atem', 'snmp', 'companion', 'capture', 'server', 'thresholds'].map((s) => `<a href="#set-${s}" data-jump="${s}">${{ ai: 'AI', gateway: 'UniFi gateway', hud: 'Top bar', atem: 'Switcher', snmp: 'SNMP', companion: 'Companion', capture: 'Capture', server: 'Server', thresholds: 'Thresholds' }[s]}</a>`).join('')}</nav></header>
 		<div class="body settings">
 			${welcome ? `<div class="welcome"><h3>Welcome</h3><p>Broadwatch needs three things to start watching a network: the address and an Integrations API key of your UniFi gateway, the SNMP community if you want live port counters, and an AI provider for the readiness verdict (a local OpenAI-compatible server such as LM Studio, or Claude with your own Anthropic key). Everything else can wait.</p></div>` : ''}
 			<section id="set-ai"><h3>AI</h3>
@@ -63,6 +63,10 @@ window.Settings = (function () {
 				${field('Dashboard link', `<input id="gw_ui_url" value="${esc(d.gateway.ui_url)}" placeholder="https://192.168.1.1/network/default/dashboard">`)}
 				${field('VLANs in the top bar', `<input id="gw_networks" value="${esc((d.networks || []).join(', '))}" placeholder="Default, BIG_NDI, BIG_MOBILE_DANTE">`, `network names as UniFi spells them, in the order shown; known: ${esc((d.knownNetworks || []).map((n) => n.name + (n.vlan ? ' (' + n.vlan + ')' : '')).join(', ') || 'none yet')}. Three or four fit; the bar sheds them on narrow windows.`)}
 				<div class="row"><button class="btn" type="button" data-test="gateway">Test gateway</button><span class="msg" id="test-gateway"></span></div>
+			</section>
+			<section id="set-hud"><h3>Top bar</h3>
+				<p class="hint">The cells between the readiness lamp and the clock, in order. Each is one word; the bar sheds cells from the right on narrow windows.</p>
+				${field('Modules, in order', `<input id="hud_modules" value="${esc((d.hud_modules || ['intake', 'wan', 'console', 'vlans']).join(', '))}" placeholder="intake, wan, console, vlans">`, '<b>intake</b> traffic into the switcher · <b>wan</b> internet in/out · <b>console</b> gateway CPU and clients · <b>vlans</b> the VLAN cells above · <b>encoder</b> Web Presenter status, bitrate and cache · <b>switcher</b> program and stream state from Companion · <b>record</b> the switcher\'s ISO record · <b>deck</b> the first HyperDeck (state, time left) · <b>pc</b> this computer\'s CPU, RAM, GPU · <b>mics</b> mics on air and the lowest battery · <b>x32</b> the main console level · <b>ndi</b> NDI sources on the air · <b>dante</b> the Dante clock · <b>power</b> PDU consumption')}
 			</section>
 			<section id="set-atem"><h3>Switcher</h3>
 				${field('Name', `<input id="atem_name" value="${esc(d.atem?.name || '')}" placeholder="ATEM Television Studio HD8 ISO">`)}
@@ -117,6 +121,7 @@ window.Settings = (function () {
 			ai: { enabled: $('ai_enabled').checked, provider: prov === 'anthropic' ? 'anthropic' : 'openai', base_url: val('ai_base_url').trim(), model: val('ai_model').trim(), api_key: secretVal('ai_api_key'), anthropic_api_key: secretVal('ai_anthropic_api_key'), anthropic_workspace_id: val('ai_anthropic_workspace_id').trim(), anthropic_model: val('ai_anthropic_model'), anthropic_effort: val('ai_anthropic_effort'), assess_every_s: Number(val('ai_assess_every_s')) || 180 },
 			gateway: { name: val('gw_name').trim(), url: val('gw_url').trim(), api_key: secretVal('gw_api_key'), site: val('gw_site').trim() || 'default', ui_url: val('gw_ui_url').trim() },
 			networks: val('gw_networks').split(',').map((s) => s.trim()).filter(Boolean),
+			hud_modules: val('hud_modules').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean),
 			atem: { name: val('atem_name').trim(), ip: val('atem_ip').trim(), session: val('atem_session') },
 			snmp: { community: secretVal('snmp_community'), every_s: Number(val('snmp_every_s')) || 3 },
 			companion: { url: val('cmp_url').trim(), atem_label: val('cmp_atem_label').trim() || 'atem', autostart: $('cmp_autostart').checked },

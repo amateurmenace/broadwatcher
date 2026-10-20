@@ -16,6 +16,9 @@ import { Companion } from './companion.js'
 import { X32Meters } from './x32.js'
 import { SscMonitor } from './ssc.js'
 import { computeHealth, tiles, PROFILE_DEFAULTS, isMic } from './health.js'
+import { Discover } from './discover.js'
+import { HostStats } from './host.js'
+import { readVideohub } from './videohub.js'
 import { execFile } from 'node:child_process'
 
 const num = (x) => {
@@ -118,6 +121,8 @@ export class Collector extends EventEmitter {
 		this.state.profiles = { list: this.profiles.map((p) => ({ id: p.id, name: p.name, expect: p.expect, roster: p.roster || null })), active: this.activeProfile }
 		this.companion = new Companion(config.companion || {}, log)
 		this.companionState = new Map() // atem ip -> {lastOk, okSince} for the companion/auto hysteresis
+		this.discover = new Discover({ log, nameFor: (ip) => this.nameFor(ip), subnetName: (subnet) => this.netconf.find((n) => n.ip_subnet && n.ip_subnet.split('.').slice(0, 3).join('.') === subnet.split('.').slice(0, 3).join('.'))?.name || null }) // NDI sources, Dante devices and clocks, passively
+		this.host = new HostStats({ log }) // this computer's own load, for the roster entry that is this machine
 		this.x32 = new X32Meters({ log }) // live meters from the X32 consoles (roster probe "x32")
 		this.ssc = new SscMonitor({ log }) // Sennheiser EW-DX receivers over SSC (roster role "audio" with a mic-like name or vendor)
 		this.metersSent = { x32: -1, ssc: -1, atem: 0 } // what the last "meters" event carried
@@ -153,6 +158,7 @@ export class Collector extends EventEmitter {
 
 	// ---------------------------------------------------------------- scheduling
 	start() {
+		this.discover.start()
 		const holdOff = new Map() // poll name -> time before which it is not retried (the controller said 5xx / timed out)
 		const streak = new Map() // poll name -> consecutive failures
 		const every = (name, s, fn) => {
@@ -256,6 +262,7 @@ export class Collector extends EventEmitter {
 	}
 
 	stop() {
+		this.discover.stop()
 		for (const t of this.timers) clearInterval(t)
 		this.timers = []
 		this.x32.stop()
@@ -351,7 +358,18 @@ export class Collector extends EventEmitter {
 
 	async pollTelemetry() {
 		const now = Date.now()
-		const items = this.cfg.equipment.filter((e) => e.active !== false && e.ip && (e.telemetry || String(e.probe || '').startsWith('atem'))).map((e) => (e.telemetry || !String(e.probe || '').startsWith('atem') ? e : { ...e, telemetry: 'atem' }))
+		// what is read from each device: the telemetry the roster names, else an ATEM probe = the switcher protocol,
+		// a Videohub probe (tcp:9990) = the router's routing table, and this machine's own addresses = host load
+		const hostIps = new Set(this.host.addresses)
+		let hostTaken = false
+		const kindFor = (e) => {
+			if (e.telemetry) return e.telemetry
+			if (String(e.probe || '').startsWith('atem')) return 'atem'
+			if (/^tcp:9990$/.test(String(e.probe || ''))) return 'videohub'
+			if (hostIps.has(e.ip) && !hostTaken) return (hostTaken = true) && 'host'
+			return null
+		}
+		const items = this.cfg.equipment.filter((e) => e.active !== false && e.ip).map((e) => ({ ...e, telemetry: kindFor(e) })).filter((e) => e.telemetry)
 		const companionStatus = await this.companion.status()
 		this.state.companion = { ...companionStatus, lastOk: this.companion.lastOk, connections: companionStatus.connections.filter((c) => /^bmd-|behringer|sennheiser|ndi|unifi|obs/i.test(c.module) || c.module === 'generic-http') }
 		await Promise.all(
@@ -359,6 +377,8 @@ export class Collector extends EventEmitter {
 				try {
 					let t = null
 					if (e.telemetry === 'atem') t = await this.atemTelemetry(e, now)
+					else if (e.telemetry === 'videohub') t = await readVideohub(e.ip)
+					else if (e.telemetry === 'host') t = await this.host.snapshot()
 					else t = await restTelemetry(e.telemetry, e.ip)
 					if (t) this.telemetry.set(e.ip, { ...t, t: Date.now() })
 					else this.telemetry.delete(e.ip)
@@ -878,7 +898,7 @@ export class Collector extends EventEmitter {
 			this.prev.switches.set(mac, online)
 			if (isPdu(d)) {
 				const outlets = d.outlet_table || []
-				others.push({ ...entry, kind: 'pdu', ports: [], outlets: outlets.length, outletsOn: outlets.filter((o) => o.relay_state).length, powerW: Math.round(outlets.reduce((s, o) => s + num(o.outlet_power), 0) * 10) / 10, voltage: outlets.find((o) => num(o.outlet_voltage))?.outlet_voltage ?? null })
+				others.push({ ...entry, kind: 'pdu', ports: [], outlets: outlets.length, outletsOn: outlets.filter((o) => o.relay_state).length, powerW: Math.round(outlets.reduce((s, o) => s + num(o.outlet_power), 0) * 10) / 10, voltage: outlets.find((o) => num(o.outlet_voltage))?.outlet_voltage ?? null, acPower: num(d.outlet_ac_power_consumption) || null, acBudget: num(d.outlet_ac_power_budget) || null, outletList: outlets.map((o) => ({ index: o.index, name: o.name || `Outlet ${o.index}`, on: !!o.relay_state, power: num(o.outlet_power) || null, type: o.outlet_type ?? null })) })
 				continue
 			}
 			if (d.type === 'udm' || d.type === 'uxg' || d.type === 'ugw') {
@@ -1015,6 +1035,8 @@ export class Collector extends EventEmitter {
 		}
 		this.state.equipment = equipment
 		this.state.rosterSwitches = this.rosterSwitches
+		this.state.hudModules = Array.isArray(this.cfg.hud_modules) ? this.cfg.hud_modules : null
+		this.state.discovery = this.discover.snapshot() // NDI sources, Dante devices, PTP clock domains
 
 		// the mirror-port view of the switcher's traffic (when tshark runs on this machine)
 		this.state.forensics = this.forensics ? this.forensics.snapshot({ flows: 30, events: 40 }) : null

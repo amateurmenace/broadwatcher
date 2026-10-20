@@ -37,6 +37,28 @@ broadcast readiness and explain problems.
   yours every time; a local model that is not set up yet opens a four-step guide (LM Studio or Ollama).
 - **Names on the map**: double-click any node of the signal map, or open it in the inspector, and write a
   name of your own; it replaces the UniFi name on the map (violet corner), and it stays after a restart.
+- **The tiles open live panels**: the ATEM tile (stream in, the switcher's own stream out, ISO record,
+  program and preview, who holds its control connections, the Fairlight master), Stream out (the Web
+  Presenters and the paths in), Recorders (every HyperDeck's transport, timecode, format, codec, the active
+  disk with its recording time left and free space), Audio (the consoles' meters, channel by channel, and the
+  switcher's Fairlight inputs), Mics (battery, RF and audio per receiver channel, live), Dante (the clock
+  domains heard on this computer: leader, sync rate, followers; the Dante devices; the VLANs), NDI (the
+  sources announced over mDNS, the devices on the NDI VLAN, the traffic) and Network (internet, gateway,
+  every switch, VLANs, the biggest flows, ports with new errors, the open network items).
+- **Equipment widgets**: under each roster row a line of what the device itself reports: a HyperDeck's
+  transport, timecode, format and codec, its disk with time left; a Web Presenter's stream status, bitrate,
+  cache and format; the switcher's program, preview, stream and ISO record; a Videohub's model, size and
+  route count (the full routing table in the inspector); this computer's CPU, RAM, GPU and disks; the PDUs
+  with what they draw, their budget and every outlet.
+- **Top bar modules**: Settings › Top bar lists the cells between the lamp and the clock, in order: intake,
+  wan, console, vlans, encoder, switcher, record, deck, pc, mics, x32, ndi, dante, power.
+- **Forensics, the whole session**: the mirror-port capture keeps every control socket, flow and event for
+  24 hours (not only the recent ones). The toolbar switches between *recent* and *whole session*, narrows to
+  sessions, flows or events, searches any text (an address, a name, RTMP, a stream key's tail) and filters by
+  state; JSON and CSV export what is listed; *Raw packets* records the packets themselves into a ring of
+  pcapng files beside the config (five of 100 MB), each downloadable for Wireshark; and *Explain* has
+  Claude or the local model read the capture, or one peer from its inspector, with a question box for
+  follow-ups.
 - **Gateway at a glance**: WAN in/out with a 10-minute graph, the VLAN table (clients, in, out, sparkline),
   the console's CPU/memory/temperature gauges with uptime, switch and AP counts, storage and SNMP coverage,
   and the biggest flows of the last poll.
@@ -239,6 +261,9 @@ roster edited in the app always wins over the bundled list (new bundled devices 
   levels incl. `stream_min_mbps`.
 - `retired_equipment[]`: IPs of devices that left the building; a config upgrade removes them even from a
   roster edited in the app.
+- `roster_switches[]`: switches (UniFi names or MACs) whose wired clients are in the broadcast without a
+  roster row. `map_labels`: your names on the signal map. `hud_modules[]`: the top bar's cells, in order.
+  All three survive upgrades.
 - `ai.anthropic_workspace_id`: only for an Anthropic key that is not scoped to a workspace (the API then
   answers 400 "must include the anthropic-workspace-id header"); the id is under console.anthropic.com >
   Settings > Workspaces. The private build takes it from the `ANTHROPIC_WORKSPACE_ID` repository secret.

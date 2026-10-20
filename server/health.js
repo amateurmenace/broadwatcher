@@ -223,14 +223,32 @@ export function tiles(state, health) {
 		const n = Math.max(0, ...arrs.map((a) => a.length))
 		return Array.from({ length: n }, (_, i) => arrs.reduce((s, a) => s + num(a[a.length - n + i]), 0))
 	}
+	// the switcher tile joins the stream in, the switcher's own stream out and its record state; every tile opens
+	// its own side panel (type = the tile id, rendered by the page from the live state)
+	const worst = (ids) => (ids.map(lvl).includes('bad') ? 'bad' : ids.map(lvl).includes('warn') ? 'warn' : ids.every((i) => lvl(i) === 'na') ? 'na' : 'ok')
+	const tl = hero?.telemetry || null
+	const st = state.atem?.stream || null
+	const held = (state.forensics?.sessions || []).filter((s) => s.state === 'held').length
+	const switcherLine = hero
+		? [
+				st?.state === 'arriving' ? `stream in ${rate(st.rate)}` : 'no stream in',
+				tl?.streaming?.state === 'streaming' ? `streaming out${tl.streaming.bitrate ? ' ' + rate(tl.streaming.bitrate / 1e6) : ''}` : null,
+				tl?.recording?.active ? `ISO recording ${tl.recording.duration || ''}` : null,
+				tl?.programName ? `program ${tl.programName}` : null,
+				held ? `${held} control session${held === 1 ? '' : 's'}` : null,
+			]
+				.filter(Boolean)
+				.join(' · ')
+		: 'no switcher in the roster'
+	const switcherName = (state.atem?.name || 'Switcher').replace(/^ATEM Television Studio\s*/i, 'ATEM ').replace(/\s*ISO$/i, '')
 	return [
-		{ id: 'stream_out', label: 'Stream out', level: lvl('stream_out'), value: live.length ? rate(outRate) : enc ? enc.telemetry.status || 'idle' : '–', line: f.stream_out?.reason || '', series: enc ? enc.history?.up || [] : [], target: f.stream_out?.target || (enc ? { type: 'equipment', id: enc.ip } : null) },
-		{ id: 'stream_in', label: 'Stream in', level: lvl('stream_in'), value: hero ? rate(hero.down) : '–', line: f.stream_in?.reason || '', series: hero ? hero.history?.down || [] : [], target: f.stream_in?.target || { type: 'atem' } },
-		{ id: 'audio', label: 'Audio', level: lvl('audio'), value: consoles.length ? `${consolesLive.length}/${consoles.length}` : '–', line: f.audio?.reason || '', series: [], target: f.audio?.target || null, unit: consoles.length ? 'consoles live' : '', strip: 'x32' },
-		{ id: 'dante', label: 'Dante', level: lvl('dante'), value: dante.length ? `${dante.reduce((n, v) => n + num(v.clients), 0)}` : '–', line: f.dante?.reason || '', series: sum(dante.map((n) => n.history?.down || [])), target: f.dante?.target || null, unit: 'devices' },
-		{ id: 'ndi', label: 'NDI', level: lvl('ndi'), value: ndi.length ? rate(ndi.reduce((n, v) => n + num(v.down) + num(v.up), 0)) : '–', line: f.ndi?.reason || '', series: sum(ndi.map((n) => n.history?.down || [])), target: f.ndi?.target || null },
-		{ id: 'mics', label: 'Mics', level: lvl('mics'), value: !mics.length ? '–' : micChans.length ? `${micChans.filter((c) => c.link).length}/${micChans.length}` : `${mics.filter((e) => e.online).length}/${mics.length}`, unit: !mics.length ? '' : micChans.length ? 'on air' : 'receivers', line: f.mics?.reason || '', series: [], target: f.mics?.target || null, strip: 'mics' },
-		{ id: 'network', label: 'Network', level: ['wan', 'switches', 'errors', 'links', 'util', 'gateway'].map(lvl).includes('bad') ? 'bad' : ['wan', 'switches', 'errors', 'links', 'util', 'gateway'].map(lvl).includes('warn') ? 'warn' : 'ok', value: gw ? `${sw.filter((s) => s.online).length}/${sw.length}` : '–', line: [f.wan, f.switches, f.errors, f.links, f.util].filter((x) => x && x.value !== null && x.value < 1).map((x) => x.reason)[0] || `${f.wan?.reason || ''}`, series: gw ? gw.wan.history?.down || [] : [], target: { type: 'section', id: 'rackBlock' }, unit: 'switches' },
-		{ id: 'recorders', label: 'Recorders', level: lvl('recorders'), value: decks.length || hero?.telemetry?.recording ? `${rolling.length + (hero?.telemetry?.recording?.active ? 1 : 0)}/${decks.length + (hero?.telemetry?.recording ? 1 : 0)}` : '–', line: f.recorders?.reason || '', series: [], target: f.recorders?.target || null, unit: 'rolling' },
+		{ id: 'switcher', label: switcherName, level: hero ? worst(['switcher', 'stream_in']) : 'na', value: hero ? (hero.status !== 'online' ? hero.status : st?.state === 'arriving' ? rate(hero.down) : tl?.programName ? tl.programName : 'up') : '–', unit: hero && hero.status === 'online' && st?.state === 'arriving' ? 'in' : hero && tl?.programName ? 'on program' : '', line: switcherLine, series: hero ? hero.history?.down || [] : [], target: { type: 'switcher' } },
+		{ id: 'encoders', label: 'Stream out', level: lvl('stream_out'), value: live.length ? rate(outRate) : enc ? enc.telemetry.status || 'idle' : '–', line: f.stream_out?.reason || '', series: enc ? enc.history?.up || [] : [], target: { type: 'encoders' } },
+		{ id: 'recorders', label: 'Recorders', level: lvl('recorders'), value: decks.length || hero?.telemetry?.recording ? `${rolling.length + (hero?.telemetry?.recording?.active ? 1 : 0)}/${decks.length + (hero?.telemetry?.recording ? 1 : 0)}` : '–', line: f.recorders?.reason || '', series: [], target: { type: 'recorders' }, unit: 'rolling' },
+		{ id: 'audio', label: 'Audio', level: lvl('audio'), value: consoles.length ? `${consolesLive.length}/${consoles.length}` : '–', line: f.audio?.reason || '', series: [], target: { type: 'audio' }, unit: consoles.length ? 'consoles live' : '', strip: 'x32' },
+		{ id: 'mics', label: 'Mics', level: lvl('mics'), value: !mics.length ? '–' : micChans.length ? `${micChans.filter((c) => c.link).length}/${micChans.length}` : `${mics.filter((e) => e.online).length}/${mics.length}`, unit: !mics.length ? '' : micChans.length ? 'on air' : 'receivers', line: f.mics?.reason || '', series: [], target: { type: 'mics' }, strip: 'mics' },
+		{ id: 'dante', label: 'Dante', level: lvl('dante'), value: dante.length ? `${dante.reduce((n, v) => n + num(v.clients), 0)}` : '–', line: f.dante?.reason || '', series: sum(dante.map((n) => n.history?.down || [])), target: { type: 'dante' }, unit: 'devices' },
+		{ id: 'ndi', label: 'NDI', level: lvl('ndi'), value: ndi.length ? rate(ndi.reduce((n, v) => n + num(v.down) + num(v.up), 0)) : '–', line: f.ndi?.reason || '', series: sum(ndi.map((n) => n.history?.down || [])), target: { type: 'ndi' } },
+		{ id: 'network', label: 'Network', level: worst(['wan', 'switches', 'errors', 'links', 'util', 'gateway']), value: gw ? `${sw.filter((s) => s.online).length}/${sw.length}` : '–', line: [f.wan, f.switches, f.errors, f.links, f.util].filter((x) => x && x.value !== null && x.value < 1).map((x) => x.reason)[0] || `${f.wan?.reason || ''}`, series: gw ? gw.wan.history?.down || [] : [], target: { type: 'network' }, unit: 'switches' },
 	]
 }

@@ -274,8 +274,8 @@ Explain in plain language, as 3 short sections with these exact headings: "What 
 		return d
 	}
 
-	async ask(state, question, history = []) {
-		if (!this.enabled) return null
+	async ask(state, question, history = [], { provider = null } = {}) {
+		if (!this.enabled && !provider) return null
 		const messages = [
 			{ role: 'system', content: SYSTEM },
 			{ role: 'user', content: `Network state right now:\n\n${this.digest(state)}` },
@@ -283,8 +283,42 @@ Explain in plain language, as 3 short sections with these exact headings: "What 
 			...history.slice(-6),
 			{ role: 'user', content: question },
 		]
-		const { text, ms } = await this.chat(messages, { maxTokens: 700, temperature: 0.3 })
-		return { text, model: this.modelName, t: Date.now(), ms }
+		const { text, ms } = await this.chat(messages, { maxTokens: 700, temperature: 0.3, provider })
+		return { text, model: this.modelFor(provider), provider: provider || this.provider, t: Date.now(), ms }
+	}
+
+	// the mirror-port capture read like a Wireshark session: control sessions, flows with their RTMP/SRT detail,
+	// the event tape; optionally one peer in focus, and a free question about it
+	async explainForensics(state, fx, { focus = null, question = '', provider = null } = {}) {
+		if (!this.enabled && !provider) return null
+		const time = (t) => (t ? new Date(t).toLocaleTimeString() : '?')
+		const mb = (b) => (b / 1e6).toFixed(1) + 'MB'
+		const sessions = (fx.sessions || [])
+			.filter((s) => !focus || s.ip === focus)
+			.slice(0, 40)
+			.map((s) => `${s.name || s.ip}:${s.port} ${s.state}${s.hello ? ' · last hello ' + s.hello.text + ' at ' + time(s.hello.t) : ''}${s.refusals ? ' · refused ' + s.refusals + 'x' : ''} · since ${time(s.since)} last ${time(s.last)} · ${s.pps} pkt/s · in ${s.pktsIn} out ${s.pktsOut} packets`)
+		const flows = (fx.flows || [])
+			.filter((f) => !focus || f.peer === focus)
+			.slice(0, 70)
+			.map((f) => `${time(f.first)}→${time(f.endedAt || f.last)} ${f.app} ${f.outbound ? 'switcher → ' : ''}${f.name || f.peer}:${f.peerPort}${f.outbound ? '' : ' → switcher port ' + f.targetPort} · ${f.state}${f.detail ? ' · ' + f.detail : ''} · in ${mb(f.bytesIn)}/${f.pktsIn} pk, out ${mb(f.bytesOut)}/${f.pktsOut} pk${f.live ? ' · LIVE ' + f.inMbps + ' Mb/s' : ''}${f.rtmp ? ' · rtmp ' + JSON.stringify(f.rtmp) : ''}${f.srt ? ' · srt ' + JSON.stringify(f.srt) : ''}`)
+		const events = (fx.events || [])
+			.filter((e) => !focus || e.peer === focus)
+			.slice(0, 90)
+			.map((e) => `${time(e.t)} [${e.kind}${e.level === 'warn' ? '!' : ''}] ${e.text}`)
+		const prompt = `A packet capture summary from a mirror of the ATEM switcher's switch port (tshark, read by Broadwatch). The switcher is ${fx.target}. Capture ${fx.running ? 'running' : 'stopped'} since ${time(fx.since)}, ${fx.packets} packets so far, ${fx.pps} packets/s now; the session holds ${fx.totals?.sessions ?? '?'} control sockets, ${fx.totals?.flows ?? '?'} flows, ${fx.totals?.events ?? '?'} events in all.
+
+CONTROL SESSIONS (UDP 9910; "held" = the switcher sends its once-a-second keepalive to that socket; the HD8 has only a handful of slots):
+${sessions.join('\n') || 'none'}
+
+FLOWS (newest first; a stream is RTMP to port 1935 or SRT; the switcher itself talks to Blackmagic's cloud on 443):
+${flows.join('\n') || 'none'}
+
+EVENTS (newest first):
+${events.join('\n') || 'none'}
+
+${focus ? `Focus on ${focus}. ` : ''}${question ? `The engineer asks: ${question}\n\n` : ''}Answer as a broadcast network engineer reading a Wireshark session, in at most 230 words, with these exact headings: "What the capture shows", "Anything wrong" (rejected or reset streams, refused control connections, odd rates or retries; say how you know, with times), "Who is talking to the switcher", "What to do next" (numbered, concrete). Stream keys stay masked.`
+		const { text, ms } = await this.chat([{ role: 'system', content: SYSTEM }, { role: 'user', content: prompt }], { maxTokens: 800, temperature: 0.2, provider })
+		return { text, model: this.modelFor(provider), provider: provider || this.provider, t: Date.now(), ms, focus, question: question || null }
 	}
 }
 

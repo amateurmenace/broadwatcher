@@ -323,6 +323,8 @@
     "community": "netwatch",
     "every_s": 3
   },
+  "hud_modules": ["intake", "wan", "console", "vlans"],
+  "_hud_modules_comment": "The cells of the top bar, in order (Settings > Top bar): intake, wan, console, vlans, encoder, switcher, record, deck, pc, mics, x32, ndi, dante, power.",
   "capture": {
     "_comment": "Stream forensics (roadmap section 1): the capture NIC on the LIGHTHOUSE mirror of the HD8's port, read with tshark. Set up 2026-10-19: port 13 mirrors port 15. Not used by the app yet.",
     "interface": "Port 15 MIRROR",

@@ -218,7 +218,7 @@ export class AtemClient extends EventEmitter {
 		this.capture = capture instanceof RegExp ? (n) => capture.test(n) : Array.isArray(capture) ? (n) => capture.includes(n) : () => false
 		this.raw = new Map() // command name -> [{t, body(Buffer), n}] the last distinct bodies (n = repeats of the same body)
 		this.seen = new Map() // command name -> {n, last, len}
-		// Fairlight levels: the switcher streams FDLv (per input) and FMLv (master) at ~10 Hz once asked with SFLN.
+		// Fairlight levels: the switcher streams FMLv (one per input) and FDLv (master) at ~10 Hz once asked with SFLN.
 		// Off by default: only an own session can ask, and only atem.session = "own" turns it on (never Companion).
 		this.wantsLevels = false
 		this.levelsSentAt = 0
@@ -265,14 +265,23 @@ export class AtemClient extends EventEmitter {
 			L.inputs.set(body.readUInt16BE(0), { type: body[2], port: body.readUInt16BE(6) })
 			return
 		}
-		if (name === 'FMLv' && body.length >= 28) {
-			L.master = { t: now, left: lvlDb(body, 20), right: lvlDb(body, 22), peakL: lvlDb(body, 24), peakR: lvlDb(body, 26), inL: lvlDb(body, 0), inR: lvlDb(body, 2), compressor: lvlDb(body, 8), limiter: lvlDb(body, 10) }
+		// Read off the mirror port on the HD8 (protocol 2.32, 2026-10-20): FDLv is the MASTER, once per tick, 28 bytes;
+		// FMLv is one message PER INPUT per tick, 40 bytes. Values are hundredths of dB, -10000 = nothing / no held peak.
+		if (name === 'FDLv' && body.length >= 28) {
+			// in L/R (the mix bus), in peaks, compressor, limiter, out L/R (after dynamics), out peaks, mix L/R (to program), mix peaks
+			L.master = { t: now, inL: lvlDb(body, 0), inR: lvlDb(body, 2), peakL: lvlDb(body, 4), peakR: lvlDb(body, 6), compressor: lvlDb(body, 8), limiter: lvlDb(body, 10), outL: lvlDb(body, 12), outR: lvlDb(body, 14), outPeakL: lvlDb(body, 16), outPeakR: lvlDb(body, 18), left: lvlDb(body, 20), right: lvlDb(body, 22), mixPeakL: lvlDb(body, 24), mixPeakR: lvlDb(body, 26) }
 			L.t = now
 			return
 		}
-		if (name === 'FDLv' && body.length >= 46) {
-			const id = body.readUInt16BE(0)
-			L.sources.set(id, { t: now, id, inL: lvlDb(body, 16), inR: lvlDb(body, 18), left: lvlDb(body, 38), right: lvlDb(body, 40), peakL: lvlDb(body, 42), peakR: lvlDb(body, 44), compressor: lvlDb(body, 24), limiter: lvlDb(body, 26), expander: lvlDb(body, 28) })
+		if (name === 'FMLv' && body.length >= 40) {
+			// 40 bytes: source id int64 at 0 (-65280 = the input's default source), input index u16 at 8, then from 10:
+			// in L/R (pre-fader: what the input carries), in peaks, compressor, limiter, expander, out L/R (after dynamics),
+			// out peaks, mix L/R (what reaches the program: -100 when the input is off), mix peaks.
+			// The 46-byte layout of newer protocol versions keeps the index at 0 and starts the levels at 16.
+			const wide = body.length >= 46
+			const id = wide ? body.readUInt16BE(0) : body.readUInt16BE(8)
+			const o = wide ? 16 : 10
+			L.sources.set(id, { t: now, id, inL: lvlDb(body, o), inR: lvlDb(body, o + 2), peakL: lvlDb(body, o + 4), peakR: lvlDb(body, o + 6), compressor: lvlDb(body, o + 8), limiter: lvlDb(body, o + 10), expander: lvlDb(body, o + 12), outL: lvlDb(body, o + 14), outR: lvlDb(body, o + 16), outPeakL: lvlDb(body, o + 18), outPeakR: lvlDb(body, o + 20), left: lvlDb(body, o + 22), right: lvlDb(body, o + 24), mixPeakL: lvlDb(body, o + 26), mixPeakR: lvlDb(body, o + 28) })
 			L.t = now
 		}
 	}
@@ -283,7 +292,9 @@ export class AtemClient extends EventEmitter {
 		const now = Date.now()
 		if (!this.wantsLevels || !L.t || now - L.t > LEVELS_STALE_MS) return null
 		const label = (id) => this.data.inputs[id]?.long || AUDIO_INPUT_NAMES[id] || (id >= 1 && id < 1000 ? `Input ${id}` : `Audio input ${id}`)
-		const pack = (s) => ({ level: Math.max(s.left ?? -100, s.right ?? -100), peak: Math.max(s.peakL ?? -100, s.peakR ?? -100), left: s.left, right: s.right, input: Math.max(s.inL ?? -100, s.inR ?? -100), compressor: s.compressor, limiter: s.limiter })
+		// the bar shows what the input carries (pre-fader), the held peak is the input's; "mix" is what reaches the
+		// program (-100 when the input is off or the fader is down), "out" the level after the dynamics
+		const pack = (s) => ({ level: Math.max(s.inL ?? -100, s.inR ?? -100), peak: Math.max(s.peakL ?? -100, s.peakR ?? -100), left: s.inL, right: s.inR, mix: Math.max(s.left ?? -100, s.right ?? -100), out: Math.max(s.outL ?? -100, s.outR ?? -100), compressor: s.compressor, limiter: s.limiter })
 		const sources = [...L.sources.values()].filter((s) => now - s.t <= LEVELS_STALE_MS).sort((a, b) => a.id - b.id).map((s) => ({ id: s.id, label: label(s.id), type: L.inputs.get(s.id)?.type ?? null, ...pack(s) }))
 		return { t: L.t, master: L.master && now - L.master.t <= LEVELS_STALE_MS ? pack(L.master) : null, sources }
 	}

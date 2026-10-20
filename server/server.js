@@ -36,7 +36,7 @@ const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; cha
 const DEEP_KEYS = ['gateway', 'poll', 'thresholds', 'ai', 'snmp', 'server', 'atem', 'companion', 'capture']
 // what the user made in the app and a newer bundle must never take away: port labels, show profiles, the
 // VLAN list once it was edited in Settings (networks_edited), the roster (handled below)
-const USER_KEYS = ['port_labels', 'profiles', 'active_profile', 'networks_edited', 'equipment_edited', 'map_labels', 'roster_switches_edited']
+const USER_KEYS = ['port_labels', 'profiles', 'active_profile', 'networks_edited', 'equipment_edited', 'map_labels', 'roster_switches_edited', 'hud_modules']
 const BUNDLED_SECRETS = { ai: ['anthropic_api_key', 'anthropic_workspace_id', 'api_key'], gateway: ['api_key'], snmp: ['community'] }
 
 // The bundled config is the source of truth for the equipment list, the ATEM, SNMP and AI defaults; the user's
@@ -138,6 +138,7 @@ function settingsView(config, ai, configPath, forensics = null, collectorNetwork
 		gateway: { name: g.name || '', url: g.url || '', site: g.site || 'default', ui_url: g.ui_url || '', key: mask(g.api_key) },
 		networks: Array.isArray(config.networks) ? config.networks : [],
 		knownNetworks: (collectorNetworks || []).map((n) => ({ name: n.name, vlan: n.vlan, clients: n.clients })),
+		hud_modules: Array.isArray(config.hud_modules) ? config.hud_modules : null,
 		snmp: { community: config.snmp?.community || '', every_s: config.snmp?.every_s || 3 },
 		companion: { url: config.companion?.url || 'http://127.0.0.1:8000', atem_label: config.companion?.atem_label || 'atem', autostart: config.companion?.autostart !== false },
 		server: { host: config.server?.host || '127.0.0.1', port: config.server?.port || 8766 },
@@ -230,6 +231,7 @@ export function startServer({ config, configPath = null, host = '127.0.0.1', por
 
 	// stream forensics: tshark on the mirror of the switcher's port (config.capture), when set up on this machine
 	const forensics = new Forensics(config.capture || {}, { targetIp: config.atem?.ip || null, log, nameFor: (ip) => collector.nameFor(ip) })
+	forensics.rawDir = forensics.rawDir || path.join(configPath ? path.dirname(configPath) : path.join(__dirname, '..'), 'captures') // raw pcapng ring, beside the config
 	forensics.on('event', (ev) => {
 		broadcast('event', { ...ev, kind: 'forensics', text: 'Mirror: ' + ev.text })
 		journal.record({ ...ev, kind: 'forensics', text: 'Mirror: ' + ev.text })
@@ -275,6 +277,20 @@ export function startServer({ config, configPath = null, host = '127.0.0.1', por
 		const applied = []
 		const restart = []
 		const saved = {}
+		// the modules of the top bar, in order (Settings > Top bar)
+		if (Array.isArray(body.hud_modules)) {
+			const list = body.hud_modules.map((n) => String(n).trim()).filter((n) => /^[a-z0-9_]{1,24}$/.test(n)).slice(0, 12)
+			if (JSON.stringify(list) !== JSON.stringify(config.hud_modules || [])) {
+				config.hud_modules = list
+				collector.cfg.hud_modules = list
+				saved.hud_modules = list
+				applied.push('top bar')
+				if (collector.rawDevices.length) {
+					collector.rebuild()
+					broadcast('state', collector.state)
+				}
+			}
+		}
 		// the VLANs shown in the top bar: a list of network names
 		if (Array.isArray(body.networks)) {
 			const list = body.networks.map((n) => String(n).trim()).filter(Boolean).slice(0, 12)
@@ -532,6 +548,8 @@ export function startServer({ config, configPath = null, host = '127.0.0.1', por
 					saveUserConfig(configPath, { capture: config.capture, config_version: config.config_version || 0 })
 					return sendJson(res, { ok, error: forensics.stats.error })
 				}
+				if (body.action === 'raw-start') return sendJson(res, forensics.startRaw())
+				if (body.action === 'raw-stop') return sendJson(res, forensics.stopRaw())
 				if (body.action === 'stop') {
 					forensics.stop()
 					config.capture = { ...(config.capture || {}), enabled: false }
@@ -603,10 +621,60 @@ export function startServer({ config, configPath = null, host = '127.0.0.1', por
 				}
 			}
 			if (p === '/api/ai/ask' && req.method === 'POST') {
-				if (!ai.enabled) return sendJson(res, { error: 'AI is not configured' }, 503)
 				const body = await readBody(req)
+				const provider = ['anthropic', 'openai'].includes(body.provider) ? body.provider : null
+				if (!ai.enabled && !provider) return sendJson(res, { error: 'AI is not configured' }, 503)
 				if (!body.question) return sendJson(res, { error: 'question missing' }, 400)
-				return sendJson(res, await ai.ask(collector.state, String(body.question).slice(0, 2000), Array.isArray(body.history) ? body.history : []))
+				try {
+					return sendJson(res, await ai.ask(collector.state, String(body.question).slice(0, 2000), Array.isArray(body.history) ? body.history : [], { provider }))
+				} catch (e) {
+					return sendJson(res, { error: e.message }, 502)
+				}
+			}
+			if (p === '/api/ai/forensics' && req.method === 'POST') {
+				// the mirror-port capture read by the AI: the whole session, or one peer, with an optional question
+				const body = await readBody(req)
+				const provider = ['anthropic', 'openai'].includes(body.provider) ? body.provider : null
+				if (!ai.enabled && !provider) return sendJson(res, { error: 'AI is not configured' }, 503)
+				try {
+					const fx = forensics.full({ since: Date.now() - 6 * 3600000 })
+					return sendJson(res, await ai.explainForensics(collector.state, fx, { focus: body.peer ? String(body.peer).slice(0, 60) : null, question: String(body.question || '').slice(0, 1000), provider }))
+				} catch (e) {
+					return sendJson(res, { error: e.message }, 502)
+				}
+			}
+			if (p === '/api/forensics/all') {
+				// the whole capture session, newest first, filtered: q, kind (sessions|flows|events), since (ms), state
+				return sendJson(res, forensics.full({ q: q.get('q') || '', kind: q.get('kind') || null, since: q.get('since') ? Number(q.get('since')) : 0, state: q.get('state') || '' }))
+			}
+			if (p === '/api/forensics/export') {
+				const fx = forensics.full({ q: q.get('q') || '', kind: q.get('kind') || null, since: q.get('since') ? Number(q.get('since')) : 0, state: q.get('state') || '' })
+				const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')
+				if (q.get('format') === 'csv') {
+					const cell = (v) => {
+						const s = v === null || v === undefined ? '' : typeof v === 'object' ? JSON.stringify(v) : String(v)
+						return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
+					}
+					const iso = (t) => (t ? new Date(t).toISOString() : '')
+					const rows = ['kind,time,peer,name,what,state,detail,port,bytes_in,bytes_out,packets_in,packets_out,level']
+					for (const s of fx.sessions) rows.push(['session', iso(s.last), s.ip, s.name, `control socket :${s.port}`, s.state, s.hello ? s.hello.text : '', s.port, '', '', s.pktsIn, s.pktsOut, s.refusals ? 'warn' : ''].map(cell).join(','))
+					for (const f of fx.flows) rows.push(['flow', iso(f.last), f.peer, f.name, `${f.app}${f.outbound ? ' from the switcher' : ' to switcher port ' + f.targetPort}`, f.state, f.detail, f.outbound ? f.peerPort : f.targetPort, f.bytesIn, f.bytesOut, f.pktsIn, f.pktsOut, /reject|reset|no answer/.test(f.state) ? 'warn' : ''].map(cell).join(','))
+					for (const e of fx.events) rows.push(['event', iso(e.t), e.peer || '', '', e.text, e.kind, '', '', '', '', '', '', e.level || 'info'].map(cell).join(','))
+					res.writeHead(200, { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': `attachment; filename="broadwatch-forensics-${stamp}.csv"` })
+					return res.end('﻿' + rows.join('\n') + '\n')
+				}
+				res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Content-Disposition': `attachment; filename="broadwatch-forensics-${stamp}.json"` })
+				return res.end(JSON.stringify({ exported: new Date().toISOString(), switcher: fx.target, interface: fx.interface, since: fx.since, totals: fx.totals, filter: fx.filtered, sessions: fx.sessions, flows: fx.flows, events: fx.events }, null, 1))
+			}
+			if (p === '/api/forensics/pcap') return sendJson(res, { dir: forensics.rawDir, running: !!forensics.procs.raw, files: forensics.rawFiles() })
+			if (p.startsWith('/api/forensics/pcap/')) {
+				// one raw capture file for Wireshark
+				const name = path.posix.basename(decodeURIComponent(p.slice('/api/forensics/pcap/'.length)))
+				if (!/^[\w.-]+\.pcapng?$/.test(name) || !forensics.rawDir) return sendJson(res, { error: 'no such file' }, 404)
+				const file = path.join(forensics.rawDir, name)
+				if (!fs.existsSync(file)) return sendJson(res, { error: 'no such file' }, 404)
+				res.writeHead(200, { 'Content-Type': 'application/vnd.tcpdump.pcap', 'Content-Length': fs.statSync(file).size, 'Content-Disposition': `attachment; filename="${name}"` })
+				return fs.createReadStream(file).pipe(res)
 			}
 			if (p === '/api/events') {
 				res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' })

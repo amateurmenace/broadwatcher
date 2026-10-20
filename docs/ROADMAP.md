@@ -85,6 +85,10 @@ a sender the switcher turns away raises an alert. Verified with an ffmpeg publis
 
 ## 2. Dante network monitor (default BIG_MOBILE_DANTE, selectable)
 
+*Partly done in 0.12.0:* the Dante tile's panel shows the PTP clock domains heard on this computer (leader,
+sync rate, followers, two-leaders/no-leader status), the Dante devices announced over mDNS and the roster's
+Dante devices with their traffic. Routing and subscriptions stay with Dante Controller / Director.
+
 **Sources of truth**
 - Discovery: Dante devices advertise over mDNS/DNS-SD on their VLAN: `_netaudio-arc._udp`,
   `_netaudio-chan._udp`, `_netaudio-cmc._udp`, `_netaudio-dbc._udp` (device names, channel names).
@@ -124,6 +128,10 @@ Size: 4–6 days (mDNS + ARC port, PTP listener, UI), plus the VLAN setup.
 ---
 
 ## 3. NDI monitor (BIG_NDI)
+
+*Partly done in 0.12.0:* the NDI tile's panel lists the sources announced over mDNS (name, host, address,
+group), the devices on the NDI VLAN with their rates and the VLAN's traffic; the top bar can show the source
+count. Which receiver decodes which source is not announced on the network.
 
 **Sources of truth**
 - Discovery: NDI sources advertise `_ndi._tcp.local` over mDNS on the NDI VLAN (name "MACHINE (source)",

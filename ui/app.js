@@ -209,25 +209,9 @@ function renderHud(s) {
 		$('readyVerdict').textContent = aiInfo ? nice(aiInfo.verdict) : errors ? 'Problems' : warns ? 'Warnings' : 'Nominal'
 		$('readyHeadline').textContent = aiInfo ? aiInfo.headline : `${s.alerts.length} open item${s.alerts.length === 1 ? '' : 's'}`
 	}
-	const intake = eq ? eq.down : 0
-	const full = Math.max(20, (st?.peak || 0) * 1.2, intake * 1.2)
-	const bar = $('intakeBar')
-	bar.style.width = Math.min(100, (intake / full) * 100) + '%'
-	bar.className = st?.state === 'arriving' ? 'stream' : ''
-	$('intakeBase').style.left = Math.min(100, ((st?.baseline || 0) / full) * 100) + '%'
-	$('intakeVal').textContent = eq ? fmtRate(intake) : 'ATEM not seen'
-	$('intakeVal').className = st?.state === 'arriving' ? 'cyan' : ''
-	$('intakeSrc').textContent = st?.state === 'arriving' ? `stream ${fmtRate(st.rate)} · ${st.sources[0] ? st.sources[0].name : 'source unknown'} · ${fmtAgo(st.since)}` : eq?.switch ? `quiet · ${eq.switch.name} port ${eq.switch.port} · ${speedTxt(eq.switch.speed)}` : 'no stream'
-	$('wanDown').textContent = gw ? fmtRate(gw.wan.down) : '–'
-	$('wanUp').textContent = gw ? fmtRate(gw.wan.up) : '–'
-	$('wanSub').textContent = gw ? `${gw.wan.status} · ${gw.wan.latency ?? '–'} ms · ${speedTxt(gw.wan.speed)}` : 'gateway?'
-	$('wanSub').className = gw && gw.wan.status !== 'ok' ? 'error' : ''
-	$('consoleVal').textContent = gw ? `${pct(gw.cpu)} · ${gw.temp ?? '–'}°` : '–'
-	$('consoleSub').textContent = gw ? `${gw.modelName} · ${s.clients.total} clients · up ${fmtUptime(gw.uptime)}` : '–'
-	const nets = (s.networks || []).filter((n) => n.watched).slice(0, 4)
-	$('hudVlans').innerHTML = nets
-		.map((n) => `<div class="vl" title="${esc(n.name)}${n.vlan ? ' · VLAN ' + n.vlan : ''}${n.subnet ? ' · ' + esc(n.subnet) : ''} · ${n.clients} clients · orange = into the VLAN, teal = out of it, last 10 minutes"><label>${esc(vlanLabel(n.name))}${n.vlan ? `<i>vlan ${n.vlan}</i>` : ''}</label><div class="nums"><span class="dn">↓${fmtRate(n.down)}</span><span class="up">↑${fmtRate(n.up)}</span></div>${scope('vl:' + n.name, [{ data: (n.history?.down || []).slice(-60), color: 'in' }, { data: (n.history?.up || []).slice(-60), color: 'out' }], 'vspark', { bare: true })}<small>${n.clients} client${n.clients === 1 ? '' : 's'}</small></div>`)
-		.join('')
+	// the cells between the lamp and the clock: the modules the config lists (Settings > Top bar), in order
+	const mods = Array.isArray(s.hudModules) && s.hudModules.length ? s.hudModules : HUD_DEFAULT
+	$('hudCells').innerHTML = mods.map((m) => hudCell(m, s)).join('')
 	$('hudIssues').innerHTML = (errors ? `<span class="error" title="open problems (error-level alerts)">${errors} <i>error${errors === 1 ? '' : 's'}</i></span>` : '') + (warns ? `<span class="warn" title="open warnings">${warns} <i>warning${warns === 1 ? '' : 's'}</i></span>` : '') + (!errors && !warns ? '<span class="ok" title="no open alerts">all clear</span>' : '')
 	document.title = (errors ? '✕ ' : warns ? '! ' : '') + 'Broadwatch'
 	drawScopes()
@@ -326,10 +310,10 @@ function switcherPanel(sw) {
 	const head = `<h4 class="click" data-sel="equipment:${esc(sw.ip)}"><span class="tally ${sw.levels ? 'online' : sw.mode === 'own' && sw.held ? 'unresponsive' : ''}"></span>${esc(sw.name)} · Fairlight <small>${sw.mode === 'own' ? (sw.held ? (sw.levels ? `levels live · ${sw.levels.sources.length} inputs` : 'own session held · waiting for the first levels') : 'own session not held right now') : `read through ${esc(sw.mode)}`}</small></h4>`
 	if (!sw.levels) return `<div class="x32p">${head}<div class="empty">${esc(sw.note || 'no levels yet')}</div></div>`
 	const L = sw.levels
-	const rows = L.sources.map((x) => meterRow(`atem:${x.id}`, x.id < 1000 ? x.id : '', x.label, { level: x.level, peak: x.peak }, { hint: `${x.label} · input ${fmtDb(x.input)} dBFS` }))
-	const master = L.master ? [meterRow('atem:master', 'Σ', 'Master', { level: L.master.level, peak: L.master.peak }, { hint: 'master out' })] : []
+	const rows = L.sources.map((x) => meterRow(`atem:${x.id}`, x.id < 1000 ? x.id : '', x.label, { level: x.level, peak: x.peak }, { muted: x.mix !== null && x.mix !== undefined && x.mix <= -99 && x.level > -60, hint: `${x.label} · carries ${fmtDb(x.level)} dBFS · into the program ${x.mix <= -99 ? 'nothing (off or fader down)' : fmtDb(x.mix) + ' dBFS'}` }))
+	const master = L.master ? [meterRow('atem:master', 'Σ', 'Master', { level: L.master.level, peak: L.master.peak }, { hint: `mix bus ${fmtDb(L.master.level)} dBFS · to program ${fmtDb(L.master.mix)} dBFS` })] : []
 	const half = Math.ceil(rows.length / 2)
-	return `<div class="x32p">${head}<div class="mcols">${[rows.slice(0, half), rows.slice(half), master].filter((r) => r.length).map((r, i) => `<div class="mcol"><div class="mhead">${i === 2 || (i === 1 && !rows.slice(half).length) ? 'Master' : 'Inputs'}</div>${SCALE}${r.join('')}</div>`).join('')}</div><p class="mnote">Levels are decoded from the switcher's FDLv / FMLv commands as the official SDK lays them out; they have not been checked against a live switcher yet (an own session is needed and the HD8's slots are taken on show days).</p></div>`
+	return `<div class="x32p">${head}<div class="mcols">${[rows.slice(0, half), rows.slice(half), master].filter((r) => r.length).map((r, i) => `<div class="mcol"><div class="mhead">${i === 2 || (i === 1 && !rows.slice(half).length) ? 'Master' : 'Inputs'}</div>${SCALE}${r.join('')}</div>`).join('')}</div><p class="mnote">The bar is what each input carries (pre-fader), with its held peak; an input that carries signal but sends nothing to the program (off, or fader down) is shown struck through. Decoded from the switcher's FMLv / FDLv messages as the HD8 sends them, checked against the mirror port.</p></div>`
 }
 function renderAudio(s) {
 	const au = s.audio
@@ -559,32 +543,76 @@ function renderPaths(s) {
 
 // ------------------------------------------------------------------ stream forensics (the mirror port)
 const SESSION_LAMP = { held: 'online', refused: 'offline', connecting: 'unresponsive', new: 'unresponsive', gone: '' }
+// the forensics view: the state's light snapshot (recent), or the whole session fetched with the filters
+const forView = { window: 'recent', kind: '', q: '', state: '', data: null, timer: null, loading: false, ai: null, aiBusy: false }
+const forFiltering = () => forView.window === 'all' || !!forView.q || !!forView.kind || !!forView.state
+function forParams() {
+	const p = new URLSearchParams()
+	if (forView.q) p.set('q', forView.q)
+	if (forView.kind) p.set('kind', forView.kind)
+	if (forView.state) p.set('state', forView.state)
+	if (forView.window !== 'all') p.set('since', String(Date.now() - 1800000))
+	return p
+}
+async function loadForensicsAll() {
+	if (forView.loading) return
+	forView.loading = true
+	try {
+		forView.data = await (await fetch('/api/forensics/all?' + forParams())).json()
+	} catch (e) {
+		forView.data = { error: e.message }
+	}
+	forView.loading = false
+	if (state) renderForensics(state)
+}
+function scheduleForensics(ms = 400) {
+	clearTimeout(forView.timer)
+	forView.timer = setTimeout(loadForensicsAll, ms)
+}
 function renderForensics(s) {
-	const fx = s.forensics
+	const live = s.forensics
 	const note = $('forNote')
 	const btn = $('forToggle')
-	if (!fx) {
+	if (!live) {
 		btn.hidden = true
+		$('forBar').hidden = true
 		note.textContent = 'no mirror capture on this machine'
 		return ($('forPanel').innerHTML = '<div class="empty">a mirror of the switcher\'s switch port, read with tshark, shows every stream and every control session as the switcher sees them: set the capture interface in Settings &gt; Capture</div>')
 	}
-	btn.hidden = !fx.available
-	btn.textContent = fx.running ? 'Stop capture' : 'Start capture'
-	btn.setAttribute('data-for-action', fx.running ? 'stop' : 'start')
-	note.textContent = fx.running ? `tshark on "${fx.interface}" · ${fx.pps} packets/s · since ${fmtTime(fx.since)}${fx.restarts ? ` · ${fx.restarts} restarts` : ''}` : fx.available ? `stopped${fx.error ? ' · ' + fx.error : ''}` : `not available · ${fx.error || 'tshark or the interface is missing'}`
+	$('forBar').hidden = false
+	const filtering = forFiltering()
+	const fx = filtering && forView.data && !forView.data.error ? forView.data : live
+	btn.hidden = !live.available
+	btn.textContent = live.running ? 'Stop capture' : 'Start capture'
+	btn.setAttribute('data-for-action', live.running ? 'stop' : 'start')
+	const tot = live.totals || {}
+	note.textContent = live.running ? `tshark on "${live.interface}" · ${live.pps} packets/s · since ${fmtTime(live.since)} · ${tot.sessions ?? '?'} sockets, ${tot.flows ?? '?'} flows, ${tot.events ?? '?'} events kept${live.restarts ? ` · ${live.restarts} restarts` : ''}` : live.available ? `stopped${live.error ? ' · ' + live.error : ''}` : `not available · ${live.error || 'tshark or the interface is missing'}`
+	const raw = $('forRaw')
+	raw.textContent = live.raw?.running ? 'Stop raw packets' : 'Raw packets'
+	raw.classList.toggle('primary', !!live.raw?.running)
+	raw.setAttribute('data-for-action', live.raw?.running ? 'raw-stop' : 'raw-start')
+	$('forJson').href = '/api/forensics/export?' + forParams()
+	$('forCsv').href = '/api/forensics/export?format=csv&' + forParams()
+	const files = live.raw?.files || []
+	$('forFiles').hidden = !files.length && !live.raw?.running
+	$('forFiles').innerHTML = `<b>Raw packet files</b> <small>${live.raw?.running ? `recording since ${fmtTime(live.raw.since)} · ` : ''}${files.length ? 'open them in Wireshark: ' : 'none yet'}</small><br>${files.map((f) => `<a href="/api/forensics/pcap/${encodeURIComponent(f.name)}" download>${esc(f.name)} · ${fmtBytes(f.size)}</a>`).join('')}`
 	const held = fx.sessions.filter((x) => x.state === 'held')
 	const perHost = new Map()
 	for (const x of fx.sessions) perHost.set(x.ip, (perHost.get(x.ip) || 0) + (x.state === 'held' ? 1 : 0))
-	const sess = fx.sessions
-		.map((x) => `<tr class="click" data-sel="forensics:${esc(x.ip)}"><td><span class="tally ${SESSION_LAMP[x.state] || ''}"></span></td><td>${esc(x.name || x.ip)}<small class="mono">${esc(x.ip)}:${x.port}${perHost.get(x.ip) > 1 ? ` · ${perHost.get(x.ip)} sessions from this host` : ''}</small></td><td>${x.state === 'held' ? `<span class="ok">holds a session</span><small>since ${fmtTime(x.since)} · ${x.pps} pkt/s</small>` : x.state === 'refused' ? `<span class="error">refused</span><small>too many clients · ${x.refusals}× · last ${fmtAgo(x.hello?.t)} ago</small>` : x.state === 'gone' ? `gone<small>last ${fmtAgo(x.last)} ago</small>` : `${esc(x.state)}<small>${x.hello ? esc(x.hello.text) + ' · ' : ''}last ${fmtAgo(x.last)} ago</small>`}</td></tr>`)
-		.join('')
-	const flows = fx.flows
-		.map((f) => `<tr class="click ${f.live ? 'live' : ''}" data-sel="forensics:${esc(f.peer)}"><td><span class="tally ${f.live ? 'online' : /reset|rejected|no answer/.test(f.state) ? 'offline' : ''}"></span></td><td>${esc(f.name || f.peer)}${f.name ? `<small class="mono">${esc(f.peer)}</small>` : ''}</td><td><span class="tag">${esc(f.app)}</span><small>${f.outbound ? `from the switcher → ${esc(f.peer)}:${f.peerPort}` : `${esc(f.proto)} → switcher port ${f.targetPort}`}</small></td><td class="${/reset|rejected|no answer/.test(f.state) ? 'error' : f.state === 'streaming' || f.state === 'publishing' ? 'cyan' : ''}">${esc(f.state)}<small>${esc(f.detail || '')}</small></td><td class="num"><span class="dn">${fmtRate(f.inMbps)}</span><small class="up">${fmtRate(f.outMbps)} back</small></td><td class="num">${fmtTime(f.first)}<small>${f.live ? 'live' : 'last ' + fmtAgo(f.last) + ' ago'}</small></td></tr>`)
-		.join('')
-	const evs = fx.events.map((e) => `<div class="tl ${e.level === 'warn' ? 'warn' : 'info'}"><span class="t">${fmtTime(e.t)}</span><span class="m">${esc(e.text)}</span></div>`).join('')
-	$('forPanel').innerHTML = `<div><h4>Control sessions on the switcher <small>· ${held.length} held${fx.target ? ' · ' + esc(fx.target) : ''}</small></h4>${sess ? `<table><thead><tr><th></th><th>Program / host</th><th>State</th></tr></thead><tbody>${sess}</tbody></table>` : '<div class="empty">no ATEM protocol traffic seen yet</div>'}</div>
-	<div><h4>Flows at the switcher's port <small>· ${fx.flows.filter((f) => f.live).length} live · last 30 min</small></h4>${flows ? `<table><thead><tr><th></th><th>Peer</th><th>What</th><th>State</th><th class="num">In</th><th class="num">Since</th></tr></thead><tbody>${flows}</tbody></table>` : '<div class="empty">no unicast flow with the switcher yet</div>'}</div>
-	<div class="tape">${evs || '<div class="empty" style="padding:12px">nothing happened yet</div>'}</div>`
+	const sessRow = (x) => `<tr class="click" data-sel="forensics:${esc(x.ip)}"><td><span class="tally ${SESSION_LAMP[x.state] || ''}"></span></td><td>${esc(x.name || x.ip)}<small class="mono">${esc(x.ip)}:${x.port}${perHost.get(x.ip) > 1 ? ` · ${perHost.get(x.ip)} sessions from this host` : ''}</small></td><td>${x.state === 'held' ? `<span class="ok">holds a session</span><small>since ${fmtTime(x.since)} · ${x.pps} pkt/s</small>` : x.state === 'refused' ? `<span class="error">refused</span><small>too many clients · ${x.refusals}× · last ${fmtAgo(x.hello?.t)} ago</small>` : x.state === 'gone' ? `gone<small>${fmtDateTime(x.first)} → ${fmtDateTime(x.last)}</small>` : `${esc(x.state)}<small>${x.hello ? esc(x.hello.text) + ' · ' : ''}last ${fmtAgo(x.last)} ago</small>`}</td></tr>`
+	const flowRow = (f) => `<tr class="click ${f.live ? 'live' : ''}" data-sel="forensics:${esc(f.peer)}"><td><span class="tally ${f.live ? 'online' : /reset|rejected|no answer/.test(f.state) ? 'offline' : ''}"></span></td><td>${esc(f.name || f.peer)}${f.name ? `<small class="mono">${esc(f.peer)}</small>` : ''}</td><td><span class="tag">${esc(f.app)}</span><small>${f.outbound ? `from the switcher → ${esc(f.peer)}:${f.peerPort}` : `${esc(f.proto)} → switcher port ${f.targetPort}`}</small></td><td class="${/reset|rejected|no answer/.test(f.state) ? 'error' : f.state === 'streaming' || f.state === 'publishing' ? 'cyan' : ''}">${esc(f.state)}<small>${esc(f.detail || '')}</small></td><td class="num"><span class="dn">${f.live ? fmtRate(f.inMbps) : fmtBytes(f.bytesIn)}</span><small class="up">${f.live ? fmtRate(f.outMbps) + ' back' : fmtBytes(f.bytesOut) + ' back'}</small></td><td class="num">${filtering ? fmtDateTime(f.first) : fmtTime(f.first)}<small>${f.live ? 'live' : (f.endedAt ? 'ended ' : 'last ') + fmtAgo(f.endedAt || f.last) + ' ago'}</small></td></tr>`
+	const sess = fx.sessions.map(sessRow).join('')
+	const flows = fx.flows.map(flowRow).join('')
+	const evs = fx.events.map((e) => `<div class="tl ${e.level === 'warn' ? 'warn' : 'info'}${e.peer ? ' click' : ''}" ${e.peer ? `data-sel="forensics:${esc(e.peer)}"` : ''}><span class="t">${filtering ? fmtDateTime(e.t) : fmtTime(e.t)}</span><span class="m">${esc(e.text)}</span></div>`).join('')
+	const ai = forView.ai
+	const reading = forView.aiBusy ? '<div class="ai-reading"><h4>Reading the capture…</h4><p class="ai-meta">the model is going through the sessions, flows and events</p></div>' : ai ? `<div class="ai-reading"><h4>What the AI makes of the capture <small>· ${esc(ai.model)} · ${ai.provider === 'anthropic' ? 'Claude' : 'local model'} · ${Math.round(ai.ms / 1000)} s · ${fmtAgo(ai.t)} ago${ai.focus ? ' · about ' + esc(ai.focus) : ''}</small></h4>${ai.error ? `<p class="error">${esc(ai.error)}</p>` : `<div class="ai-text">${mdLite(ai.text)}</div>`}<div class="ask" style="margin-top:8px"><input id="forAsk" placeholder="ask about the capture… (why was 10.0.0.5 refused? what is the SRT latency?)"><button class="btn mini" data-for-ai="${esc(ai.provider || 'anthropic')}" data-for-ask="1">Ask</button></div></div>` : ''
+	const scopeNote = filtering ? `<small>${forView.window === 'all' ? 'whole session' : 'last 30 min'}${forView.q ? ` · "${esc(forView.q)}"` : ''}${forView.state ? ' · ' + esc(forView.state) : ''}${forView.data?.error ? ' · <span class="error">' + esc(forView.data.error) + '</span>' : ''}</small>` : ''
+	const showS = !forView.kind || forView.kind === 'sessions'
+	const showF = !forView.kind || forView.kind === 'flows'
+	const showE = !forView.kind || forView.kind === 'events'
+	$('forPanel').innerHTML = `${reading}${showS ? `<div class="${filtering ? 'whole' : ''}"><h4>Control sessions on the switcher <small>· ${held.length} held · ${fx.sessions.length} socket${fx.sessions.length === 1 ? '' : 's'}${fx.target ? ' · ' + esc(fx.target) : ''}</small> ${scopeNote}</h4>${sess ? `<table><thead><tr><th></th><th>Program / host</th><th>State</th></tr></thead><tbody>${sess}</tbody></table>` : '<div class="empty">no ATEM protocol traffic matches</div>'}</div>` : ''}
+	${showF ? `<div class="${filtering ? 'whole' : ''}"><h4>Flows at the switcher's port <small>· ${fx.flows.filter((f) => f.live).length} live · ${fx.flows.length} listed${filtering ? '' : ' · last 30 min'}</small></h4>${flows ? `<table><thead><tr><th></th><th>Peer</th><th>What</th><th>State</th><th class="num">In</th><th class="num">Since</th></tr></thead><tbody>${flows}</tbody></table>` : '<div class="empty">no flow matches</div>'}</div>` : ''}
+	${showE ? `<div class="tape ${filtering ? 'whole' : ''}">${evs || '<div class="empty" style="padding:12px">no event matches</div>'}</div>` : ''}`
 }
 async function forensicsAction(action) {
 	try {
@@ -594,6 +622,33 @@ async function forensicsAction(action) {
 	} catch (e) {
 		alert('could not change the capture: ' + e.message)
 	}
+}
+// the AI reads the capture (the whole session, or one peer in the inspector), with Claude or the local model
+async function explainForensics(provider, { peer = null, question = '' } = {}) {
+	const pv = aiStatus?.providers || {}
+	if (provider === 'anthropic' && !pv.anthropic) return Settings.open('ai', { onSaved: refreshAiStatus })
+	if (provider === 'openai' && !pv.local) return LocalAI.open({ onDone: () => setTimeout(refreshAiStatus, 300) })
+	forView.aiBusy = true
+	if (peer) diagnoses.set('fx:' + peer, { busy: true })
+	if (state) renderForensics(state)
+	if (peer) renderInspector()
+	let out
+	try {
+		const r = await fetch('/api/ai/forensics', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ provider, peer, question }) })
+		out = await r.json()
+		if (!out || out.error || !out.text) out = { error: out?.error || 'no answer from the model', provider, t: Date.now(), ms: 0, model: '' }
+	} catch (e) {
+		out = { error: e.message, provider, t: Date.now(), ms: 0, model: '' }
+	}
+	forView.aiBusy = false
+	if (peer) diagnoses.set('fx:' + peer, out)
+	else forView.ai = out
+	if (state) renderForensics(state)
+	if (peer) renderInspector()
+}
+function fxAiSection(peer) {
+	const d = peer ? diagnoses.get('fx:' + peer) : null
+	return `<h3>Ask the AI about this peer</h3>${d?.busy ? '<p class="ai-meta">reading the capture…</p>' : d ? d.error ? `<p class="error">${esc(d.error)}</p>` : `<div class="ai-text">${mdLite(d.text)}</div><div class="ai-meta">${esc(d.model)} · ${d.provider === 'anthropic' ? 'Claude' : 'local model'} · ${Math.round(d.ms / 1000)} s · ${fmtAgo(d.t)} ago</div>` : '<p>The model reads every session, flow and event the mirror holds for this peer and says what happened and what to check.</p>'}<div class="insp-actions"><button class="btn diagnose" data-for-ai="anthropic" data-for-peer="${esc(peer || '')}">✦ Explain with Claude</button><button class="btn diagnose local" data-for-ai="openai" data-for-peer="${esc(peer || '')}">✦ Explain with local AI</button></div>`
 }
 
 // ------------------------------------------------------------------ rack
@@ -725,7 +780,10 @@ function renderPatch(s) {
 	$('patchNote').textContent = `${ok} of ${active.length} in this broadcast online · ${standby.length} on standby · click a row for details`
 	const head = `<div class="pb-head"><span></span><span>Device</span><span>IP</span><span>Link</span><span>Device status</span><span>In</span><span>Out</span><span>Probe</span></div>`
 	const html = []
-	for (const [g, list] of groups) html.push(`<div class="pb-group"><h4>${esc(g)} <small>${list.filter((e) => e.status === 'online').length}/${list.length} online</small></h4>${head}${list.map(pbRow).join('')}</div>`)
+	for (const [g, list] of groups) html.push(`<div class="pb-group"><h4>${esc(g)} <small>${list.filter((e) => e.status === 'online').length}/${list.length} online</small></h4>${head}${list.map((e) => pbRow(e) + pbWidget(e)).join('')}</div>`)
+	// power: the PDUs UniFi knows, with what they draw and which outlets are on
+	const pdus = (s.others || []).filter((o) => o.kind === 'pdu')
+	if (pdus.length) html.push(`<div class="pb-group"><h4>Power <small>${pdus.filter((p) => p.online).length}/${pdus.length} PDUs online · ${Math.round(pdus.reduce((n, p) => n + (p.acPower || p.powerW || 0), 0))} W drawn</small></h4>${pdus.map((p) => `<div class="pb ${p.online ? 'online' : 'offline'}" data-sel="pdu:${esc(p.mac)}"><span class="tally ${p.online ? 'online' : 'offline'}"></span><div class="name">${esc(p.name)}<small>${esc(p.modelName || '')}</small></div><div class="ip">${esc(p.ip || '')}</div><div class="link">${p.uplink?.device ? `${esc(p.uplink.device)} · p${p.uplink.port}` : ''}</div><div class="tele">${p.online ? `${p.acPower ?? p.powerW ?? '?'} W${p.acBudget ? ' of ' + Math.round(p.acBudget) + ' W budget' : ''}${p.voltage ? ' · ' + p.voltage + ' V' : ''}` : 'offline'}</div><div class="m"><div class="r"><span>load</span><em>${p.acBudget && p.acPower ? Math.round((p.acPower / p.acBudget) * 100) + '%' : '–'}</em></div><div class="bar"><i class="${p.acBudget && p.acPower / p.acBudget > 0.8 ? 'warn' : ''}" style="width:${p.acBudget && p.acPower ? Math.min(100, (p.acPower / p.acBudget) * 100) : 0}%"></i></div></div><div class="m"><div class="r"><span>outlets</span><em>${p.outletsOn}/${p.outlets} on</em></div><div class="bar"><i class="up" style="width:${p.outlets ? (p.outletsOn / p.outlets) * 100 : 0}%"></i></div></div><span class="probe"></span></div><div class="pbw">${(p.outletList || []).map((o) => `<span class="w"><span class="tally ${o.on ? 'online' : ''}"></span>${esc(o.name)}${o.power ? ` <b>${o.power} W</b>` : ''}</span>`).join('')}</div>`).join('')}</div>`)
 	if (standby.length) html.push(`<details class="standby"><summary>On standby, not part of this broadcast <small>· ${standby.length} device${standby.length === 1 ? '' : 's'} · no alerts, no probes · enable them in Edit roster</small></summary>${standby.map(pbRow).join('')}</details>`)
 	$('patch').innerHTML = html.join('') || '<div class="empty">no equipment in the roster — click Edit roster</div>'
 }
@@ -853,6 +911,11 @@ function closeInspector() {
 }
 async function refreshInspector() {
 	if (!selection) return renderInspector()
+	if (LOCAL_TYPES.has(selection.type)) {
+		// the health tiles' panels are drawn from the live state; nothing to fetch
+		details = { type: selection.type, local: true }
+		return renderInspector()
+	}
 	try {
 		const r = await fetch(`/api/details?type=${encodeURIComponent(selection.type)}&id=${encodeURIComponent(selection.id)}`)
 		details = await r.json()
@@ -878,6 +941,14 @@ function renderInspector() {
 		$('inspKind').textContent = selection.type
 		$('inspTitle').textContent = selection.id
 		body.innerHTML = `<div class="empty">${esc(d?.error || 'loading…')}</div>`
+		return
+	}
+	if (d.local) {
+		$('inspKind').textContent = 'live · ' + PANEL_KIND[d.type]
+		$('inspTitle').textContent = PANEL_TITLE[d.type](state)
+		body.innerHTML = state ? localPanel(d.type, state) : '<div class="empty">waiting for the first poll</div>'
+		indexMeters()
+		drawScopes()
 		return
 	}
 	const a = d.alert
@@ -924,7 +995,7 @@ function entitySection(type, e) {
 			['Probe', e.probe ? (e.probe.ok ? `${esc(e.probeSpec)} answers · ${e.probe.ms.toFixed(0)} ms${e.probe.info?.state ? ' · ' + esc(e.probe.info.state) : ''}${e.probe.info?.name ? ' · ' + esc(e.probe.info.name) + ' ' + esc(e.probe.info.model || '') + ' fw ' + esc(e.probe.info.firmware || '') : ''}` : `${esc(e.probeSpec)}: ${esc(e.probe.error || 'no answer')}`) : e.probeSpec && e.active ? 'not yet' : ''],
 			t && !t.error ? ['Device', t.kind === 'webpresenter' ? `${esc(t.product || '')} ${esc(t.deviceName || '')} v${esc(t.version || '')} · stream ${esc(t.status)}${t.bitrate ? ' · ' + (t.bitrate / 1e6).toFixed(1) + ' Mb/s' : ''}${t.format ? ' · ' + esc(t.format) : ''}` : t.kind === 'hyperdeck' ? `${esc(t.product || '')} ${esc(t.deviceName || '')} v${esc(t.version || '')} · ${esc(t.summary)}` : t.kind === 'atem' ? `${t.via === 'companion' ? 'read through Companion' : `${esc(t.product || 'ATEM')}${t.version ? ' v' + esc(t.version) : ''}`}${t.programName ? ' · program ' + esc(t.programName) + ' · preview ' + esc(t.previewName || '') : ''}${t.streaming ? ` · stream ${esc(t.streaming.state)}${t.streaming.service ? ' (' + esc(t.streaming.service) + ')' : ''}${t.streaming.url ? ' → ' + esc(t.streaming.url) : ''}${t.streaming.bitrate ? ' ' + (t.streaming.bitrate / 1e6).toFixed(1) + ' Mb/s' : ''}` : ''}${t.recording?.active ? ' · RECORDING ' + esc(t.recording.duration || '') : ''}` : ''] : t?.error ? ['Device', esc(t.error), 'bad'] : null,
 			['Talks to', (e.peers || []).map((p) => `${p.dir === 'in' ? '←' : '→'} ${esc(p.name || p.ip)}${p.service && p.service !== 'OTHER' ? ' ' + esc(p.service) : ''} · ${fmtBytes(p.bytes)}`).join('<br>')],
-		])}`
+		])}${equipmentExtra(e)}`
 	}
 	if (type === 'port') {
 		const er = e.err || {}
@@ -993,7 +1064,7 @@ function entitySection(type, e) {
 			['Capture', e.running ? `tshark on "${esc(e.interface)}" · ${e.pps} packets/s` : 'not running'],
 			ses ? ['Control session', ses.state === 'held' ? `held since ${fmtTime(ses.since)} · ${ses.pps} pkt/s` : `${esc(ses.state)}${ses.hello ? ' · last hello ' + esc(ses.hello.text) + ' at ' + fmtTime(ses.hello.t) : ''}${ses.refusals ? ' · refused ' + ses.refusals + '×' : ''}`, ses.state === 'held' ? 'ok' : ses.state === 'refused' ? 'bad' : ''] : null,
 			['Flows', (e.flows || []).slice(0, 12).map((f) => `${esc(f.app)} → port ${f.targetPort} · ${esc(f.state)}${f.detail ? ' · ' + esc(f.detail) : ''} · ${fmtBytes(f.bytesIn)} in · ${fmtTime(f.first)}${f.live ? ' · live' : ''}`).join('<br>') || 'none'],
-		])}<h3>What the mirror saw</h3>${tapeRows((e.events || []).slice(0, 40), (ev) => `<div class="tl ${ev.level === 'warn' ? 'warn' : 'info'}"><span class="t">${fmtTime(ev.t)}</span><span class="m">${esc(ev.text)}</span></div>`)}`
+		])}${fxAiSection(e.peer || null)}<h3>What the mirror saw</h3>${tapeRows((e.events || []).slice(0, 40), (ev) => `<div class="tl ${ev.level === 'warn' ? 'warn' : 'info'}"><span class="t">${fmtTime(ev.t)}</span><span class="m">${esc(ev.text)}</span></div>`)}`
 	}
 	if (type === 'vlan') {
 		return `<h3>${esc(vlanLabel(e.name))}${e.vlan ? ` · VLAN ${e.vlan}` : ''}</h3>${kv([
@@ -1291,7 +1362,15 @@ document.addEventListener('click', (e) => {
 	const fold = t.closest?.('[data-fold]')
 	if (fold) return toggleFold(fold.getAttribute('data-fold'))
 	if (t.id === 'prepareBtn') return Prepare.open()
-	if (t.id === 'forToggle') return forensicsAction(t.getAttribute('data-for-action'))
+	if (t.id === 'forToggle' || t.id === 'forRaw') return forensicsAction(t.getAttribute('data-for-action'))
+	const fxAi = t.closest?.('[data-for-ai]')
+	if (fxAi) {
+		const peer = fxAi.getAttribute('data-for-peer') || null
+		const question = fxAi.hasAttribute('data-for-ask') ? $('forAsk')?.value || '' : ''
+		return explainForensics(fxAi.getAttribute('data-for-ai'), { peer, question })
+	}
+	const goto = t.closest?.('[data-goto]')
+	if (goto) return $(goto.getAttribute('data-goto'))?.scrollIntoView({ block: 'start', behavior: 'smooth' })
 	const tile = t.closest?.('[data-tile]')
 	if (tile) return tileClick(tile.getAttribute('data-tile'))
 	if (t.id === 'mapIn') return NetMap.zoom(1.25)
@@ -1405,6 +1484,24 @@ $('portFind').addEventListener('input', (e) => {
 		renderMap(state)
 	}
 })
+// the forensics toolbar: window, kind, text and state filters refetch the whole session when they narrow it
+$('forFind').addEventListener('input', (e) => {
+	forView.q = e.target.value.trim()
+	forFiltering() ? scheduleForensics(300) : state && renderForensics(state)
+})
+document.addEventListener('change', (e) => {
+	if (e.target.id === 'forWindow') forView.window = e.target.value
+	else if (e.target.id === 'forKind') forView.kind = e.target.value
+	else if (e.target.id === 'forState') forView.state = e.target.value
+	else return
+	forFiltering() ? scheduleForensics(0) : state && renderForensics(state)
+})
+document.addEventListener('keydown', (e) => {
+	if (e.key === 'Enter' && e.target.id === 'forAsk') explainForensics(forView.ai?.provider || aiStatus?.provider || 'anthropic', { question: e.target.value })
+})
+setInterval(() => {
+	if (forFiltering() && !$('forBlock').classList.contains('folded')) scheduleForensics(0)
+}, 15000)
 loadFolds()
 setInterval(() => {
 	$('clock').textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
@@ -1579,6 +1676,285 @@ function initLog() {
 	$('logCopy').addEventListener('click', logCopy)
 	setInterval(() => scheduleLog(0), 60000) // the window slides and "still open" ages
 	loadLog()
+}
+
+// ------------------------------------------------------------------ the top bar's modules
+const HUD_DEFAULT = ['intake', 'wan', 'console', 'vlans']
+const HUD_TITLES = { intake: 'Traffic arriving at the switcher (its switch port, live via SNMP)', wan: 'Internet link on the gateway', console: 'The gateway itself', encoder: 'The Web Presenter: stream status, bitrate and cache', switcher: 'The switcher as Companion sees it', record: "The switcher's ISO record", deck: 'The first HyperDeck in the roster', pc: "This computer's load", mics: 'Wireless mics on air and the lowest battery', x32: 'The main console', ndi: 'NDI sources announced on the network', dante: 'The Dante clock', power: 'Power drawn through the PDUs' }
+function vlanCells(s) {
+	return (s.networks || [])
+		.filter((n) => n.watched)
+		.slice(0, 4)
+		.map((n) => `<div class="vl" title="${esc(n.name)}${n.vlan ? ' · VLAN ' + n.vlan : ''}${n.subnet ? ' · ' + esc(n.subnet) : ''} · ${n.clients} clients · orange = into the VLAN, teal = out of it, last 10 minutes"><label>${esc(vlanLabel(n.name))}${n.vlan ? `<i>vlan ${n.vlan}</i>` : ''}</label><div class="nums"><span class="dn">↓${fmtRate(n.down)}</span><span class="up">↑${fmtRate(n.up)}</span></div>${scope('vl:' + n.name, [{ data: (n.history?.down || []).slice(-60), color: 'in' }, { data: (n.history?.up || []).slice(-60), color: 'out' }], 'vspark', { bare: true })}<small>${n.clients} client${n.clients === 1 ? '' : 's'}</small></div>`)
+		.join('')
+}
+function hudCell(id, s) {
+	const gw = s.gateway
+	const at = s.atem
+	const eq = at?.equipment
+	const st = at?.stream
+	const cell = (label, big, small, extra = '') => `<div class="cell m-${esc(id)}" title="${esc(HUD_TITLES[id] || '')}"><label>${label}</label>${extra}<b>${big}</b><small>${small}</small></div>`
+	const bar = (v, max, cls = '') => `<div class="bar"><i class="${cls}" style="width:${Math.min(100, ((Number(v) || 0) / Math.max(1e-9, max)) * 100).toFixed(0)}%"></i></div>`
+	switch (id) {
+		case 'intake': {
+			const intake = eq ? eq.down : 0
+			const full = Math.max(20, (st?.peak || 0) * 1.2, intake * 1.2)
+			return `<div class="cell intake m-intake" title="${esc(HUD_TITLES.intake)}"><label>ATEM intake</label><div class="meter"><i class="${st?.state === 'arriving' ? 'stream' : ''}" style="width:${Math.min(100, (intake / full) * 100)}%"></i><em style="left:${Math.min(100, ((st?.baseline || 0) / full) * 100)}%"></em></div><b class="${st?.state === 'arriving' ? 'cyan' : ''}">${eq ? fmtRate(intake) : 'ATEM not seen'}</b><small>${st?.state === 'arriving' ? `stream ${fmtRate(st.rate)} · ${st.sources[0] ? esc(st.sources[0].name) : 'source unknown'} · ${fmtAgo(st.since)}` : eq?.switch ? `quiet · ${esc(eq.switch.name)} port ${eq.switch.port} · ${speedTxt(eq.switch.speed)}` : 'no stream'}</small></div>`
+		}
+		case 'wan':
+			return cell('WAN', gw ? `<span class="dn">${fmtRate(gw.wan.down)}</span> <span class="up">${fmtRate(gw.wan.up)}</span>` : '–', gw ? `<span class="${gw.wan.status !== 'ok' ? 'error' : ''}">${esc(gw.wan.status)} · ${gw.wan.latency ?? '–'} ms · ${speedTxt(gw.wan.speed)}</span>` : 'gateway?')
+		case 'console':
+			return cell('Console', gw ? `${pct(gw.cpu)} · ${gw.temp ?? '–'}°` : '–', gw ? `${esc(gw.modelName)} · ${s.clients.total} clients · up ${fmtUptime(gw.uptime)}` : '–')
+		case 'vlans':
+			return `<div class="cell vlans" id="hudVlans">${vlanCells(s)}</div>`
+		case 'encoder': {
+			const e = (s.equipment || []).find((x) => x.active && x.telemetry?.kind === 'webpresenter' && !x.telemetry.error)
+			const t = e?.telemetry
+			return cell('Stream out', t ? `${t.streaming ? '<span class="tag stream">live</span>' : ''}${esc(t.status)}` : '–', t ? `${esc(e.name)}${t.bitrate ? ' · ' + (t.bitrate / 1e6).toFixed(1) + ' Mb/s' : ''}${t.cache !== null && t.cache !== undefined ? ' · cache ' + t.cache : ''}${t.format ? ' · ' + esc(t.format) : ''}` : 'no Web Presenter answering', t?.streaming ? bar(e.up, Math.max(1, (t.bitrate || 0) / 1e6), 'up') : '')
+		}
+		case 'switcher': {
+			const t = eq?.telemetry
+			const name = (at?.name || 'Switcher').replace(/^ATEM Television Studio\s*/i, 'ATEM ').replace(/\s*ISO$/i, '')
+			return cell(esc(name), t && !t.error ? (t.programName ? `PGM ${esc(t.programName)}` : esc(t.product || 'up')) : eq ? esc(eq.status) : '–', t && !t.error ? `${t.previewName ? 'PVW ' + esc(t.previewName) + ' · ' : ''}stream ${esc(t.streaming?.state || '?')}${t.streaming?.bitrate ? ' ' + (t.streaming.bitrate / 1e6).toFixed(1) + ' Mb/s' : ''}${t.streaming?.cache ? ' · cache ' + t.streaming.cache + ' %' : ''}` : t?.error ? esc(t.error) : 'no switcher telemetry')
+		}
+		case 'record': {
+			const r = eq?.telemetry?.recording
+			return cell('ISO record', r ? (r.active ? `<span class="tag rec">REC</span>${esc(r.duration || '')}` : 'idle') : '–', r ? `${r.remaining ? esc(r.remaining) + ' left' : ''}${r.disk ? ' · ' + esc(r.disk) : ''}${r.filename ? ' · ' + esc(r.filename) : ''}` || 'ready' : 'no record state from the switcher')
+		}
+		case 'deck': {
+			const d = (s.equipment || []).find((x) => x.active && x.telemetry?.kind === 'hyperdeck' && !x.telemetry.error)
+			const t = d?.telemetry
+			return cell(d ? esc(d.name) : 'HyperDeck', t ? `${t.recording ? '<span class="tag rec">REC</span>' : ''}${esc(t.recording ? t.timecode || 'recording' : t.mode)}` : '–', t ? `${t.remainingS !== null && t.remainingS !== undefined ? fmtMinutes(Math.round(t.remainingS / 60)) + ' left' : ''}${t.activeDisk ? ' on ' + esc(t.activeDisk.name) : ''}${t.format ? ' · ' + esc(t.format) : ''}` : 'no HyperDeck answering')
+		}
+		case 'pc': {
+			const h = (s.equipment || []).find((x) => x.telemetry?.kind === 'host' && !x.telemetry.error)
+			const t = h?.telemetry
+			return cell('This PC', t ? `${t.cpu ?? '–'}% <small>cpu</small> ${t.mem?.pct ?? '–'}% <small>ram</small>${t.gpu ? ` ${t.gpu.util}% <small>gpu</small>` : ''}` : '–', t ? `${esc(t.hostname)}${t.gpu ? ' · ' + esc(String(t.gpu.name).replace('NVIDIA GeForce ', '')) + ' ' + t.gpu.temp + '°' : ''}` : 'this computer is not in the roster')
+		}
+		case 'mics': {
+			const ch = (s.audio?.mics || []).filter((m) => m.ok).flatMap((m) => m.channels)
+			const on = ch.filter((c) => c.link)
+			const low = on.filter((c) => c.battery !== null && c.battery !== undefined).sort((a, b) => a.battery - b.battery)[0]
+			return cell('Mics', ch.length ? `${on.length}/${ch.length} <small>on air</small>` : '–', ch.length ? (low ? `lowest battery ${esc(low.name || low.id)} ${low.battery} %${low.rsqi !== null && low.rsqi !== undefined ? ' · RF ' + low.rsqi + ' %' : ''}` : 'no transmitter on') : 'no receivers answering')
+		}
+		case 'x32': {
+			const c = (s.audio?.consoles || []).find((x) => x.ok) || (s.audio?.consoles || [])[0]
+			return cell(c ? esc(c.console?.name || c.name) : 'Console', c?.ok ? (c.mainLevel !== null && c.mainLevel > -60 ? c.mainLevel.toFixed(1) + ' <small>dBFS main</small>' : 'quiet') : c ? esc(c.error || 'no meters') : '–', c?.ok ? `${c.active} channel${c.active === 1 ? '' : 's'} with signal · ${c.rate}/s` : 'no X32 in the roster')
+		}
+		case 'ndi': {
+			const src = s.discovery?.ndi || []
+			const ndiNet = (s.networks || []).filter((n) => /ndi/i.test(n.name))
+			return cell('NDI', `${src.length} <small>source${src.length === 1 ? '' : 's'}</small>`, src.length ? src.slice(0, 3).map((x) => esc(x.name)).join(' · ') + (src.length > 3 ? ' +' + (src.length - 3) : '') : ndiNet.length ? `${ndiNet[0].clients} on ${esc(vlanLabel(ndiNet[0].name))}` : 'none announced')
+		}
+		case 'dante': {
+			const clocks = s.discovery?.clocks || []
+			const d = clocks.find((c) => /mobile/i.test(c.network || '')) || clocks[0]
+			return cell('Dante clock', d ? (d.status === 'ok' ? '<span class="ok">locked</span>' : `<span class="warn">${esc(d.status)}</span>`) : '–', d ? `${d.leaders[0] ? 'leader ' + esc(d.leaders[0].name || d.leaders[0].ip) + ' · ' + d.leaders[0].syncPerS + ' sync/s' : 'no leader'} · ${d.followers.length} follower${d.followers.length === 1 ? '' : 's'}${clocks.length > 1 ? ' · ' + clocks.length + ' domains' : ''}` : 'no PTP seen on this computer')
+		}
+		case 'power': {
+			const pdus = (s.others || []).filter((o) => o.kind === 'pdu' && o.online)
+			const w = pdus.reduce((n, p) => n + (p.acPower || p.powerW || 0), 0)
+			return cell('Power', pdus.length ? `${Math.round(w)} <small>W</small>` : '–', pdus.length ? `${pdus.length} PDU${pdus.length === 1 ? '' : 's'} · ${pdus.reduce((n, p) => n + (p.outletsOn || 0), 0)}/${pdus.reduce((n, p) => n + (p.outlets || 0), 0)} outlets on` : 'no PDU seen')
+		}
+		default:
+			return ''
+	}
+}
+
+// ------------------------------------------------------------------ the health tiles' side panels (drawn from the live state)
+const LOCAL_TYPES = new Set(['switcher', 'encoders', 'recorders', 'audio', 'mics', 'dante', 'ndi', 'network'])
+const PANEL_KIND = { switcher: 'switcher', encoders: 'streams out', recorders: 'recorders', audio: 'audio', mics: 'wireless mics', dante: 'Dante', ndi: 'NDI', network: 'network' }
+const PANEL_TITLE = {
+	switcher: (s) => s?.atem?.name || 'Switcher',
+	encoders: () => 'Streams out',
+	recorders: () => 'Recorders',
+	audio: () => 'Audio',
+	mics: () => 'Wireless mics',
+	dante: () => 'Dante',
+	ndi: () => 'NDI',
+	network: () => 'Network at a glance',
+}
+const kvRows = (rows) => `<div class="kv">${rows.filter((r) => r && r[1] !== undefined && r[1] !== null && r[1] !== '').map(([k, v, cls]) => `<span>${esc(k)}</span><b class="${cls || ''}">${v}</b>`).join('')}</div>`
+const hbar = (v, max = 100, cls = '') => `<span class="hbar"><i class="${cls}" style="width:${Math.min(100, ((Number(v) || 0) / Math.max(1e-9, max)) * 100).toFixed(0)}%"></i></span>`
+const dev = (e, text, cls = '') => `<div data-sel="equipment:${esc(e.ip)}"><span class="tally ${e.active === false ? 'standby' : e.status || (e.online ? 'online' : 'offline')}"></span><div><b>${esc(e.name)}</b>${text ? `<small>${text}</small>` : ''}</div><span class="${cls}"></span></div>`
+function localPanel(type, s) {
+	if (type === 'switcher') return panelSwitcher(s)
+	if (type === 'encoders') return panelEncoders(s)
+	if (type === 'recorders') return panelRecorders(s)
+	if (type === 'audio') return panelAudio(s)
+	if (type === 'mics') return panelMics(s)
+	if (type === 'dante') return panelDante(s)
+	if (type === 'ndi') return panelNdi(s)
+	if (type === 'network') return panelNetwork(s)
+	return ''
+}
+function panelSwitcher(s) {
+	const at = s.atem
+	if (!at) return '<div class="empty">no switcher configured (Settings › Switcher)</div>'
+	const eq = at.equipment
+	const t = eq?.telemetry
+	const st = at.stream || {}
+	const ses = at.session
+	const held = (s.forensics?.sessions || []).filter((x) => x.state === 'held')
+	const sw = s.audio?.switcher
+	const own = ses?.own
+	const parts = []
+	parts.push(`<div class="verdict"><span class="lamp ${eq?.status === 'online' ? (st.state === 'arriving' || t?.streaming?.state === 'streaming' ? 'ready' : 'ready') : eq ? 'down' : ''}"></span><div><b>${esc(eq ? nice(eq.status) : 'not seen')}</b><small>${eq?.switch ? `${esc(eq.switch.name)} port ${eq.switch.port} · ${speedTxt(eq.switch.speed)} · ` : ''}${esc(at.ip)}${t?.product ? ' · ' + esc(t.product) : ''}${t?.version ? ' v' + esc(t.version) : ''}</small></div></div>`)
+	parts.push(`<h3>On air</h3>${kvRows([
+		['Program', t?.programName ? `<span class="error">${esc(t.programName)}</span>` : t?.error ? `<span class="warn">${esc(t.error)}</span>` : 'unknown'],
+		['Preview', esc(t?.previewName || '')],
+		['Stream out', t?.streaming ? `${t.streaming.state === 'streaming' ? '<span class="tag stream">live</span> ' : ''}${esc(t.streaming.state)}${t.streaming.bitrate ? ' · ' + (t.streaming.bitrate / 1e6).toFixed(1) + ' Mb/s' : ''}${t.streaming.cache !== null && t.streaming.cache !== undefined ? ' · cache ' + t.streaming.cache + ' %' : ''}${t.streaming.duration && t.streaming.duration !== '00:00:00' ? ' · ' + esc(t.streaming.duration) : ''}${t.streaming.service ? ' · ' + esc(t.streaming.service) : ''}` : ''],
+		['ISO record', t?.recording ? `${t.recording.active ? '<span class="tag rec">REC</span> ' + esc(t.recording.duration || '') : 'idle'}${t.recording.remaining ? ' · ' + esc(t.recording.remaining) + ' left' : ''}${t.recording.disk ? ' · ' + esc(t.recording.disk) : ''}${t.recording.filename ? ' · ' + esc(t.recording.filename) : ''}` : ''],
+	])}`)
+	parts.push(`<h3>Stream in</h3>${kvRows([
+		['Intake', `${eq ? fmtRate(eq.down) : '–'} · ${esc(st.state || 'idle')}${st.state === 'arriving' ? ` · ${fmtRate(st.rate)} above the usual ${fmtRate(st.baseline || 0)} since ${fmtTime(st.since)}` : st.baseline ? ` · usual level ${fmtRate(st.baseline)}` : ''}`],
+		['Sources', (st.sources || []).map((x) => `<span class="tag ${esc(x.confidence)}">${esc(x.confidence)}</span> ${esc(x.name)} ${esc(x.detail || '')}`).join('<br>') || (st.state === 'arriving' ? 'not identified yet' : 'none')],
+		['Flows in', (at.incoming || []).slice(0, 5).map((x) => `${esc(x.srcName || x.src)} → ${esc(x.proto)} ${x.dport} · ${fmtBytes(x.bytes)}${x.live ? ' · <span class="ok">live</span>' : ''}`).join('<br>')],
+		['Paths', (s.streamPaths || []).map((p) => `<span class="pl ${esc(p.status)}"></span> ${esc(p.name)} · ${esc(p.verdict)}`).join('<br>')],
+	])}${scope('insp', [{ data: eq?.history?.down || [], color: st.state === 'arriving' ? 'stream' : 'in' }, { data: eq?.history?.up || [], color: 'out' }], 'spark', { baseline: st.baseline })}`)
+	parts.push(`<h3>Control connections</h3>${kvRows([
+		['Read through', ses ? (ses.mode === 'companion' ? 'Companion (no slot taken)' : ses.mode === 'own' ? "Broadwatch's own session (one slot)" : esc(ses.mode)) : ''],
+		['Companion', ses?.companion ? (ses.companion.ok ? (ses.companion.connected ? '<span class="ok">connected to the switcher</span>' : '<span class="warn">not connected to the switcher</span>') : `<span class="warn">${esc(ses.companion.error || 'not reachable')}</span>`) : ''],
+		['Own session', own ? (own.state === 'connected' ? `<span class="ok">held since ${fmtTime(own.connectedAt)}</span>` : `${esc(own.state)}${own.error ? ' · ' + esc(own.error) : ''}`) : 'none'],
+		['Held now', held.length ? held.map((x) => `${esc(x.name || x.ip)}:${x.port} · since ${fmtTime(x.since)}`).join('<br>') : s.forensics ? 'none seen on the mirror' : 'unknown without the mirror capture'],
+		['Known holders', (ses?.controllers || []).map((c) => `${esc(c.name)}: ${c.held === null ? 'unknown' : c.held ? '<span class="warn">holds a slot</span>' : 'not connected'}`).join('<br>')],
+	])}`)
+	if (sw) parts.push(`<h3>Fairlight</h3>${sw.levels ? `${SCALE}${sw.levels.master ? meterRow('atem:master', 'Σ', 'Master', { level: sw.levels.master.level, peak: sw.levels.master.peak }, { hint: 'mix bus' }) : ''}${sw.levels.sources.slice(0, 12).map((x) => meterRow(`atem:${x.id}`, x.id < 1000 ? x.id : '', x.label, { level: x.level, peak: x.peak }, { muted: x.mix !== null && x.mix !== undefined && x.mix <= -99 && x.level > -60, hint: x.label })).join('')}${sw.levels.sources.length > 12 ? `<p class="ai-meta">${sw.levels.sources.length - 12} more inputs in the Audio section</p>` : ''}` : `<p>${esc(sw.note || 'no levels')}</p>`}`)
+	parts.push(`<div class="insp-actions">${eq ? `<button class="btn" data-sel="equipment:${esc(eq.ip)}">Device details</button>` : ''}<button class="btn quiet" data-goto="atemBlock">Streams section</button><button class="btn quiet" data-goto="forBlock">Forensics</button></div>`)
+	return parts.join('')
+}
+function panelEncoders(s) {
+	const eq = (s.equipment || []).filter((e) => e.active)
+	const wps = eq.filter((e) => e.telemetry?.kind === 'webpresenter')
+	const others = eq.filter((e) => e.role === 'encoder' && e.telemetry?.kind !== 'webpresenter')
+	const t = s.atem?.equipment?.telemetry
+	const rows = []
+	for (const e of wps) {
+		const w = e.telemetry
+		rows.push(dev(e, w.error ? `<span class="warn">${esc(w.error)}</span>` : `${w.streaming ? '<span class="tag stream">live</span> ' : ''}${esc(w.status)}${w.bitrate ? ' · ' + (w.bitrate / 1e6).toFixed(1) + ' Mb/s set' : ''}${w.streaming ? ' · ' + fmtRate(e.up) + ' out' : ''}${w.cache !== null && w.cache !== undefined ? ' · cache ' + w.cache : ''}${w.format ? ' · ' + esc(w.format) : ''}`))
+	}
+	if (t?.streaming) rows.push(`<div data-sel="switcher:now"><span class="tally ${t.streaming.state === 'streaming' ? 'live' : 'online'}"></span><div><b>${esc(s.atem.name)}</b><small>stream ${esc(t.streaming.state)}${t.streaming.bitrate ? ' · ' + (t.streaming.bitrate / 1e6).toFixed(1) + ' Mb/s' : ''}${t.streaming.cache ? ' · cache ' + t.streaming.cache + ' %' : ''}</small></div><span></span></div>`)
+	for (const e of others) rows.push(dev(e, `${esc(e.role)} · ${e.online ? 'on the network' : 'not on the network'}${e.probe ? (e.probe.ok ? ' · answers in ' + e.probe.ms.toFixed(0) + ' ms' : ' · <span class="warn">no answer</span>') : ''} · out ${fmtRate(e.up)}`))
+	const paths = (s.streamPaths || []).map((p) => `<div data-sel="path:${esc(p.id)}"><span class="pl ${esc(p.status)}"></span><div><b>${esc(p.name)}</b><small>${esc(p.verdict)}</small></div><span></span></div>`)
+	return `<h3>Encoders</h3><div class="rowlist">${rows.join('') || '<div class="empty">no encoder in the roster</div>'}</div>${paths.length ? `<h3>Stream paths in</h3><div class="rowlist">${paths.join('')}</div>` : ''}<p>${esc(s.health?.factors?.find((f) => f.id === 'stream_out')?.reason || '')}</p>`
+}
+function panelRecorders(s) {
+	const decks = (s.equipment || []).filter((e) => e.active && e.telemetry?.kind === 'hyperdeck')
+	const t = s.atem?.equipment?.telemetry
+	const parts = []
+	for (const e of decks) {
+		const h = e.telemetry
+		parts.push(`<h3>${esc(e.name)} <small>${esc(h.product || '')}${h.version ? ' v' + esc(h.version) : ''}</small></h3>${h.error ? `<p class="warn">${esc(h.error)}</p>` : kvRows([
+			['Transport', `${h.recording ? '<span class="tag rec">REC</span> ' : ''}${esc(h.mode)}${h.playback && h.playback.type && h.mode !== 'InputPreview' ? ' · ' + esc(h.playback.type) + (h.playback.speed ? ' ×' + h.playback.speed : '') + (h.playback.loop ? ' loop' : '') : ''}`, h.recording ? 'ok' : ''],
+			['Timecode', esc(h.timecode || '')],
+			['Format', esc([h.format, h.codec].filter(Boolean).join(' · '))],
+			['Disk', h.activeDisk ? `${esc(h.activeDisk.name)}${h.activeDisk.volume ? ' (' + esc(h.activeDisk.volume) + ')' : ''} · ${h.remainingS !== null && h.remainingS !== undefined ? fmtMinutes(Math.round(h.remainingS / 60)) + ' of recording left' : ''}<br>${hbar(h.activeDisk.size - h.activeDisk.free, h.activeDisk.size, h.activeDisk.free / h.activeDisk.size < 0.1 ? 'hot' : '')} ${fmtBytes(h.activeDisk.free)} free of ${fmtBytes(h.activeDisk.size)}${h.activeDisk.clips !== null ? ' · ' + h.activeDisk.clips + ' clips' : ''}` : 'no disk'],
+			h.disks?.length > 1 ? ['Slots', h.disks.map((d) => `${esc(d.name)}${d.active ? ' (active)' : ''}${d.free !== null ? ' · ' + fmtBytes(d.free) + ' free' : ''}`).join('<br>')] : null,
+			['Network', `${e.switch ? `${esc(e.switch.name)} port ${e.switch.port} · ${speedTxt(e.switch.speed)} · ` : ''}in ${fmtRate(e.down)} · out ${fmtRate(e.up)}`],
+		])}<div class="insp-actions"><button class="btn quiet" data-sel="equipment:${esc(e.ip)}">Device details</button></div>`)
+	}
+	if (t?.recording) parts.push(`<h3>${esc(s.atem.name)} · ISO record</h3>${kvRows([['State', t.recording.active ? `<span class="tag rec">REC</span> ${esc(t.recording.duration || '')}` : 'idle', t.recording.active ? 'ok' : ''], ['Remaining', esc(t.recording.remaining || '')], ['Disk', esc(t.recording.disk || '')], ['File', esc(t.recording.filename || '')]])}`)
+	if (!parts.length) return '<div class="empty">no recorder with telemetry in the roster: give a HyperDeck the telemetry "hyperdeck" in Edit roster</div>'
+	return parts.join('')
+}
+function panelAudio(s) {
+	const au = s.audio
+	if (!au) return '<div class="empty">waiting for the first poll</div>'
+	const parts = []
+	for (const c of au.consoles) {
+		parts.push(`<h3><span class="tally ${c.ok ? 'online' : c.online === false ? 'offline' : 'unresponsive'}"></span> ${esc(c.console?.name || c.name)} <small>${c.console ? esc(c.console.model) + ' · ' : ''}${c.ok ? `${c.active} channel${c.active === 1 ? '' : 's'} with signal · ${c.rate}/s` : esc(c.error || 'no meters')}</small></h3>`)
+		if (!c.ok) continue
+		const rows = [...c.main.map((m, i) => meterRow(`x32:${c.ip}:main:${i}`, ['L', 'R', 'M'][i], m.name || 'Main', m, { hint: m.name })), '<div class="msep"></div>', ...c.channels.map((m) => meterRow(`x32:${c.ip}:ch:${m.n - 1}`, m.n, m.name, m, { muted: m.on === false, hint: `channel ${m.n}` }))]
+		parts.push(`<div class="mcol">${SCALE}${rows.join('')}</div>`)
+	}
+	const sw = au.switcher
+	if (sw) parts.push(`<h3>${esc(sw.name)} · Fairlight</h3>${sw.levels ? `<div class="mcol">${SCALE}${sw.levels.master ? meterRow('atem:master', 'Σ', 'Master', { level: sw.levels.master.level, peak: sw.levels.master.peak }, { hint: 'mix bus' }) : ''}<div class="msep"></div>${sw.levels.sources.map((x) => meterRow(`atem:${x.id}`, x.id < 1000 ? x.id : '', x.label, { level: x.level, peak: x.peak }, { muted: x.mix !== null && x.mix !== undefined && x.mix <= -99 && x.level > -60, hint: x.label })).join('')}</div>` : `<p>${esc(sw.note || 'no levels yet')}</p>`}`)
+	if (au.others?.length) parts.push(`<h3>Other audio devices</h3><div class="rowlist">${au.others.map((o) => `<div data-sel="equipment:${esc(o.ip)}"><span class="tally ${o.online ? 'online' : 'offline'}"></span><div><b>${esc(o.name)}</b><small>${esc(o.note)}</small></div><span></span></div>`).join('')}</div>`)
+	if (!parts.length) return '<div class="empty">no audio devices in the roster</div>'
+	return parts.join('')
+}
+function panelMics(s) {
+	const mics = s.audio?.mics || []
+	if (!mics.length) return '<div class="empty">no wireless receivers in the roster (a Sennheiser EW-DX is recognised by its name or vendor, role "audio")</div>'
+	return mics
+		.map((m) => {
+			if (!m.ok) return `<h3><span class="tally ${m.online === false ? 'offline' : 'unresponsive'}"></span> ${esc(m.name)}</h3><p class="warn">${esc(m.error || 'not answering')}${m.online === false ? ' · not on the network' : ''}</p>`
+			return `<h3><span class="tally online"></span> ${esc(m.name)} <small>${esc(m.product || '')}</small></h3><table class="compact"><tbody>${m.channels
+				.map((ch) => {
+					const key = `mic:${m.ip}:${ch.id}`
+					const batt = ch.battery
+					return `<tr data-mic="${esc(key)}" class="${ch.link ? '' : 'off'}"><td><b>${esc(ch.name || ch.id.toUpperCase())}</b><small>${ch.frequency ? ch.frequency.toFixed(3) + ' MHz' : ''}${ch.link ? '' : ' · transmitter off'}${ch.mute || ch.tx?.mute ? ' · <span class="warn">muted</span>' : ''}${ch.warningText?.length ? ' · <span class="warn">' + esc(ch.warningText.join(', ')) + '</span>' : ''}</small></td><td>${hbar(batt ?? 0, 100, batt === null ? '' : batt < 10 ? 'hot' : batt < 20 ? 'warm' : '')}<em data-f="battTxt">${batt !== null && batt !== undefined ? batt + ' %' : '–'}</em><small>battery${ch.batteryMinutes ? ' · ' + fmtMinutes(ch.batteryMinutes) + ' left' : ''}</small></td><td><span class="hbar"><i class="${ch.rsqi !== null && ch.rsqi < 30 ? 'warm' : ''}" data-f="rf" style="width:${ch.rsqi ?? 0}%"></i></span><em data-f="rfTxt">${ch.rsqi !== null && ch.rsqi !== undefined ? ch.rsqi + ' %' : '–'}</em><small>RF <span data-f="rssi">${ch.rssi !== null && ch.rssi !== undefined ? ch.rssi + ' dBm' : ''}</span></small></td><td><span class="hbar af"><i class="${dbClass(ch.af)}" data-f="af" style="width:${dbPct(ch.af).toFixed(1)}%"></i></span><em data-f="afTxt">${fmtDb(ch.af)}</em><small>audio dBFS</small></td></tr>`
+				})
+				.join('')}</tbody></table>`
+		})
+		.join('')
+}
+function panelDante(s) {
+	const disc = s.discovery || {}
+	const clocks = disc.clocks || []
+	const nets = (s.networks || []).filter((n) => /dante/i.test(n.name))
+	const danteIp = (ip) => /^192\.168\.5\.|^10\.56\.19\./.test(ip || '')
+	const devices = (s.equipment || []).filter((e) => /dante/i.test(e.network || '') || danteIp(e.ip) || (e.role === 'audio' && /dante|x32|prism|audinate/i.test(e.name + ' ' + (e.oui || ''))))
+	const parts = []
+	const netName = (d) => d.network || (s.networks || []).find((n) => n.subnet && n.subnet.split('.').slice(0, 3).join('.') === String(d.subnet).split('.').slice(0, 3).join('.'))?.name || null
+	parts.push(`<h3>Clock domains <small>PTP v1, heard on this computer's interfaces</small></h3>${clocks.length ? clocks.map((d) => `<div class="kv"><span>Domain</span><b>${esc(netName(d) ? vlanLabel(netName(d)) : d.subnet)}${netName(d) ? ' <small>' + esc(d.subnet) + '</small>' : ''}</b><span>Status</span><b class="${d.status === 'ok' ? 'ok' : 'bad'}">${esc(d.status)}</b>${d.leaders.map((l) => `<span>Leader</span><b>${esc(l.name || l.ip)}${l.name ? ' · ' + esc(l.ip) : ''} · ${l.syncPerS} sync/s${l.uuid ? ' · clock ' + esc(l.uuid) : ''}${l.stratum !== null && l.stratum !== undefined ? ' · stratum ' + l.stratum : ''}</b>`).join('')}<span>Followers</span><b>${d.followers.length ? d.followers.map((f) => `${esc(f.name || f.ip)}${f.name ? ' <small>' + esc(f.ip) + '</small>' : ''}`).join('<br>') : 'none heard'}</b></div>`).join('') : `<p>No PTP traffic reaches this computer${disc.error ? ' (' + esc(disc.error) + ')' : ''}. A network interface on the Dante VLAN hears the clock without joining anything.</p>`}`)
+	parts.push(`<h3>Dante devices</h3><div class="rowlist">${devices.map((e) => dev(e, `${esc(e.ip)}${e.network ? ' · ' + esc(vlanLabel(e.network)) : ''}${e.switch ? ' · ' + esc(e.switch.name) + ' p' + e.switch.port : ''} · in ${fmtRate(e.down)} out ${fmtRate(e.up)}`)).join('') || '<div class="empty">none in the roster</div>'}</div>${disc.dante?.length ? `<p>Announced on the network: ${disc.dante.map((d) => esc(d.name) + (d.ip ? ' (' + esc(d.ip) + ')' : '')).join(', ')}</p>` : ''}`)
+	if (nets.length) parts.push(`<h3>Dante VLANs</h3>${kvRows(nets.map((n) => [vlanLabel(n.name), `${n.clients} clients · ↓ ${fmtRate(n.down)} ↑ ${fmtRate(n.up)} through the gateway`]))}`)
+	parts.push(`<p>Dante routing and subscriptions are not announced on the network; Dante Controller or Dante Director show them. What Broadwatch sees is the clock (every device must follow one leader), who is on the VLANs, and the traffic.</p>`)
+	return parts.join('')
+}
+function panelNdi(s) {
+	const disc = s.discovery || {}
+	const src = disc.ndi || []
+	const nets = (s.networks || []).filter((n) => /ndi/i.test(n.name))
+	const devices = (s.equipment || []).filter((e) => /ndi/i.test(e.network || '') || /^10\.56\.2[0-3]\./.test(e.ip || ''))
+	const parts = []
+	parts.push(`<h3>NDI sources on the air <small>announced over mDNS</small></h3><div class="rowlist">${src.map((x) => `<div ${x.ip && (s.equipment || []).some((e) => e.ip === x.ip) ? `data-sel="equipment:${esc(x.ip)}"` : ''}><span class="tally online"></span><div><b>${esc(x.name)}</b><small>${esc(x.device || x.host || '')}${x.ip ? ' · ' + esc(x.ip) : ''}${x.port ? ':' + x.port : ''}${x.groups && x.groups !== 'public' && x.groups !== 'Public' ? ' · group ' + esc(x.groups) : ''} · seen ${fmtAgo(x.seen)} ago</small></div><span></span></div>`).join('') || `<div class="empty">none announced${disc.error ? ' (' + esc(disc.error) + ')' : ''}; sources on another VLAN are only heard through an interface on it</div>`}</div>`)
+	parts.push(`<h3>Devices on the NDI VLAN</h3><div class="rowlist">${devices.map((e) => dev(e, `${esc(e.ip)}${e.switch ? ' · ' + esc(e.switch.name) + ' p' + e.switch.port + ' · ' + speedTxt(e.switch.speed) : ''} · in ${fmtRate(e.down)} out ${fmtRate(e.up)}`)).join('') || '<div class="empty">none in the roster</div>'}</div>`)
+	if (nets.length) parts.push(`<h3>NDI VLAN</h3>${kvRows(nets.map((n) => [vlanLabel(n.name), `${n.clients} clients · ↓ ${fmtRate(n.down)} ↑ ${fmtRate(n.up)} through the gateway`]))}${scope('insp', [{ data: nets[0].history?.down || [], color: 'in' }, { data: nets[0].history?.up || [], color: 'out' }], 'spark')}`)
+	parts.push('<p>Which device decodes which source is not announced: NDI receivers pull a stream directly from the source over TCP, so the traffic shows on the switch ports (a decoding device has a steady inbound rate on its port) and in the sources\' own monitors.</p>')
+	return parts.join('')
+}
+function panelNetwork(s) {
+	const gw = s.gateway
+	const sw = s.switches || []
+	const errPorts = sw.filter((x) => x.online).flatMap((x) => x.ports.filter((p) => p.errorsRecent).map((p) => ({ key: p.key, n: `${x.name} p${p.idx}`, cause: p.err?.cause })))
+	const parts = []
+	parts.push(`<h3>Internet</h3>${gw ? kvRows([['WAN', `<span class="${gw.wan.status === 'ok' ? 'ok' : 'bad'}">${esc(gw.wan.status)}</span> · ${gw.wan.latency ?? '–'} ms · ${speedTxt(gw.wan.speed)}${gw.wan.isp ? ' · ' + esc(gw.wan.isp) : ''}`], ['Traffic', `↓ ${fmtRate(gw.wan.down)} ↑ ${fmtRate(gw.wan.up)}`], ['Gateway', `${esc(gw.modelName)} · CPU ${pct(gw.cpu)} · memory ${pct(gw.mem)} · ${gw.temp ?? '–'}° · up ${fmtUptime(gw.uptime)}`], ['Clients', `${s.clients.total} (${s.clients.wired} wired, ${s.clients.wireless} wifi)`]]) + scope('insp', [{ data: gw.wan.history?.down || [], color: 'in' }, { data: gw.wan.history?.up || [], color: 'out' }], 'spark') : '<p class="warn">gateway not found</p>'}`)
+	parts.push(`<h3>Switches <small>${sw.filter((x) => x.online).length}/${sw.length} online</small></h3><div class="rowlist">${sw.map((x) => `<div data-sel="switch:${esc(x.mac)}"><span class="tally ${x.online ? 'online' : 'offline'}"></span><div><b>${esc(x.name)}</b><small>${x.online ? `${x.portsUp}/${x.portsTotal} ports · in ${fmtRate(x.totals.down)} out ${fmtRate(x.totals.up)} · uplink ${x.uplink.device ? esc(x.uplink.device) + ' p' + x.uplink.port + ' ' : ''}${speedTxt(x.uplink.speed)}${x.cpu !== null ? ' · cpu ' + x.cpu + '%' : ''}${x.temp !== null ? ' · ' + x.temp + '°' : ''}` : x.lastSeen ? 'last seen ' + fmtAgo(x.lastSeen) + ' ago' : 'offline'}</small></div><span class="${x.uplink.speed && x.uplink.speed < 1000 ? 'warn' : ''}"></span></div>`).join('')}</div>`)
+	parts.push(`<h3>VLANs</h3>${kvRows((s.networks || []).filter((n) => n.watched || n.clients > 0).slice(0, 8).map((n) => [vlanLabel(n.name), `${n.clients} clients · ↓ ${fmtRate(n.down)} ↑ ${fmtRate(n.up)}`]))}`)
+	if (errPorts.length) parts.push(`<h3>Ports with new errors</h3><div class="rowlist">${errPorts.map((p) => `<div data-sel="port:${esc(p.key)}"><span class="tally unresponsive"></span><div><b>${esc(p.n)}</b><small>${esc({ errors: 'damaged frames', drops: 'congestion', rxdrops: 'refused frames', flaps: 'link flapping' }[p.cause] || 'errors')}</small></div><span></span></div>`).join('')}</div>`)
+	const top = (s.flows?.top || []).slice(0, 6)
+	if (top.length) parts.push(`<h3>Biggest flows <small>last ${s.flows.window_s} s</small></h3>${kvRows(top.map((f) => [`${f.srcName || f.src}`, `→ ${esc(f.dstName || f.dst)}:${esc(f.dport)} · ${fmtBytes(f.bytes)}${f.action === 'blocked' ? ' · <span class="error">blocked</span>' : ''}`]))}`)
+	const alerts = (s.alerts || []).filter((a) => ['wan', 'gateway', 'switch', 'port', 'api'].includes(a.scope))
+	parts.push(`<h3>Open network items</h3>${alerts.length ? alerts.map((a) => `<div class="issue ${a.level}" data-alert="${esc(a.id)}"><i class="mark"></i><span>${esc(a.text)}</span></div>`).join('') : '<p class="ok">nothing open</p>'}`)
+	parts.push('<div class="insp-actions"><button class="btn quiet" data-goto="gwBlock">Gateway section</button><button class="btn quiet" data-goto="rackBlock">Switches</button><button class="btn quiet" data-goto="mapBlock">Signal map</button></div>')
+	return parts.join('')
+}
+
+// ------------------------------------------------------------------ equipment widgets: a line of live detail under a roster row
+function pbWidget(e) {
+	const t = e.telemetry
+	if (!t || t.error || !e.active) return ''
+	const w = (label, val) => `<span class="w">${label ? `<label>${label}</label>` : ''}<b>${val}</b></span>`
+	const bar = (v, max, cls = '') => `<span class="bar"><i class="${cls}" style="width:${Math.min(100, ((Number(v) || 0) / Math.max(1e-9, max)) * 100).toFixed(0)}%"></i></span>`
+	let items = []
+	if (t.kind === 'hyperdeck') items = [w('transport', `${t.recording ? '<span class="tag rec">REC</span>' : ''}${esc(t.mode)}`), w('timecode', esc(t.timecode || '–')), w('format', esc([t.format, t.codec].filter(Boolean).join(' · ') || '–')), t.activeDisk ? w('disk', `${esc(t.activeDisk.name)} · ${t.remainingS !== null && t.remainingS !== undefined ? fmtMinutes(Math.round(t.remainingS / 60)) + ' left ' : ''}${bar(t.activeDisk.size - t.activeDisk.free, t.activeDisk.size, t.activeDisk.free / t.activeDisk.size < 0.1 ? 'warn' : '')} ${fmtBytes(t.activeDisk.free)} free`) : w('disk', 'none'), t.disks?.length > 1 ? w('slots', t.disks.map((d) => `${esc(d.name)}${d.active ? '*' : ''}`).join(', ')) : '', w('network', `in ${fmtRate(e.down)} · out ${fmtRate(e.up)}${e.switch ? ' · ' + speedTxt(e.switch.speed) : ''}`)]
+	else if (t.kind === 'webpresenter') items = [w('stream', `${t.streaming ? '<span class="tag stream">live</span>' : ''}${esc(t.status)}`), w('bitrate', `${t.bitrate ? (t.bitrate / 1e6).toFixed(1) + ' Mb/s set' : '–'}${t.streaming ? ' · ' + fmtRate(e.up) + ' out ' + bar(e.up, (t.bitrate || 0) / 1e6 || 1, 'up') : ''}`), w('cache', t.cache !== null && t.cache !== undefined ? `${t.cache} ${bar(Number(t.cache), 100, Number(t.cache) > 50 ? 'warn' : '')}` : '–'), w('format', esc(t.format || '–')), w('network', `${fmtRate(e.up)} up${e.switch ? ' · ' + speedTxt(e.switch.speed) : ''}`)]
+	else if (t.kind === 'atem') items = [w('program', esc(t.programName || '–')), w('preview', esc(t.previewName || '–')), w('stream', `${t.streaming?.state === 'streaming' ? '<span class="tag stream">live</span>' : ''}${esc(t.streaming?.state || '–')}${t.streaming?.bitrate ? ' · ' + (t.streaming.bitrate / 1e6).toFixed(1) + ' Mb/s' : ''}${t.streaming?.cache ? ' · cache ' + t.streaming.cache + ' %' : ''}${t.streaming?.duration && t.streaming.duration !== '00:00:00' ? ' · ' + esc(t.streaming.duration) : ''}`), t.recording ? w('ISO record', `${t.recording.active ? '<span class="tag rec">REC</span>' + esc(t.recording.duration || '') : 'idle'}${t.recording.remaining ? ' · ' + esc(t.recording.remaining) + ' left' : ''}${t.recording.disk ? ' · ' + esc(t.recording.disk) : ''}`) : '', w('control', t.via === 'companion' ? 'via Companion' : 'own session'), w('intake', fmtRate(e.down))]
+	else if (t.kind === 'videohub') items = [w('router', `${esc(t.model || 'Videohub')}${t.name ? ' "' + esc(t.name) + '"' : ''}`), w('size', `${t.inputs} in × ${t.outputs} out`), w('routes', `${(t.routing || []).length}${t.locks ? ' · ' + t.locks + ' locked' : ''}`), w('', `<button class="btn mini quiet" data-sel="equipment:${esc(e.ip)}">routing table ▸</button>`)]
+	else if (t.kind === 'host') items = [w('cpu', `${t.cpu ?? '–'}% ${bar(t.cpu || 0, 100, t.cpu > 85 ? 'error' : t.cpu > 70 ? 'warn' : '')}`), w('ram', `${t.mem.pct}% ${bar(t.mem.pct, 100, t.mem.pct > 90 ? 'error' : '')} ${fmtBytes(t.mem.used)} of ${fmtBytes(t.mem.total)}`), t.gpu ? w('gpu', `${t.gpu.util}% ${bar(t.gpu.util, 100)} ${esc(String(t.gpu.name).replace('NVIDIA GeForce ', ''))} · ${fmtBytes(t.gpu.memUsed * 1048576)} of ${fmtBytes(t.gpu.memTotal * 1048576)} · ${t.gpu.temp}°${t.gpu.power ? ' · ' + Math.round(t.gpu.power) + ' W' : ''}`) : '', ...(t.disks || []).slice(0, 4).map((d) => w(esc(d.name.split(' ')[0]), `${fmtBytes(d.free)} free ${bar(d.size - d.free, d.size, d.free / d.size < 0.1 ? 'warn' : '')}`)), w('network', `in ${fmtRate(e.down)} · out ${fmtRate(e.up)}`)]
+	items = items.filter(Boolean)
+	return items.length ? `<div class="pbw">${items.join('')}</div>` : ''
+}
+// the inspector's extra sections for a device: the Videohub routing table, this PC's details
+function equipmentExtra(e) {
+	const t = e.telemetry
+	if (!t || t.error) return ''
+	if (t.kind === 'videohub') return `<h3>Routing <small>${t.inputs} in × ${t.outputs} out${t.locks ? ' · ' + t.locks + ' locked' : ''}</small></h3>${(t.routing || []).map((r) => `<div class="route"><span>${esc(r.outName)}</span><i>←</i><span>${esc(r.inName)}</span></div>`).join('') || '<p>no routes read</p>'}`
+	if (t.kind === 'host') return `<h3>This computer</h3>${kvRows([['Host', `${esc(t.hostname)} · ${esc(t.platform)} · up ${fmtUptime(t.uptime)}`], ['CPU', `${t.cpu ?? '–'} % · ${t.cores} cores · ${esc(t.cpuModel || '')}`], ['Memory', `${t.mem.pct} % · ${fmtBytes(t.mem.used)} of ${fmtBytes(t.mem.total)}`], t.gpu ? ['GPU', `${esc(t.gpu.name)} · ${t.gpu.util} % · ${fmtBytes(t.gpu.memUsed * 1048576)} of ${fmtBytes(t.gpu.memTotal * 1048576)} · ${t.gpu.temp} °C${t.gpu.power ? ' · ' + Math.round(t.gpu.power) + ' W' : ''}`] : null, ['Disks', (t.disks || []).map((d) => `${esc(d.name)} · ${fmtBytes(d.free)} free of ${fmtBytes(d.size)}`).join('<br>')]])}`
+	if (t.kind === 'hyperdeck' && t.disks?.length) return `<h3>Media</h3>${kvRows(t.disks.map((d) => [d.name, `${d.active ? '<span class="ok">active</span> · ' : ''}${d.volume ? esc(d.volume) + ' · ' : ''}${d.remainingS !== null && d.remainingS !== undefined ? fmtMinutes(Math.round(d.remainingS / 60)) + ' of recording left · ' : ''}${d.free !== null ? fmtBytes(d.free) + ' free of ' + fmtBytes(d.size) : ''}${d.clips !== null ? ' · ' + d.clips + ' clips' : ''}`]))}`
+	return ''
 }
 
 fetch('/api/state').then((r) => r.json()).then((s) => s.ts && render(s)).catch(() => {})

@@ -94,8 +94,11 @@ input:focus, select:focus { outline: none; border-color: var(--out); box-shadow:
 .ready-text small { font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .hud-cells { display: flex; min-width: 0; overflow: hidden; }
 .cell { display: flex; flex-direction: column; justify-content: center; padding: 6px 16px; min-width: 0; border-right: 1px solid var(--line); flex: 0 0 auto; overflow: hidden; }
-.cell#hudWan { min-width: 168px; }
-.cell#hudConsole { min-width: 150px; }
+.cell.m-wan { min-width: 168px; }
+.cell.m-console { min-width: 150px; }
+.cell.m-encoder, .cell.m-switcher, .cell.m-record, .cell.m-deck, .cell.m-pc, .cell.m-mics, .cell.m-x32, .cell.m-ndi, .cell.m-dante, .cell.m-power { min-width: 150px; max-width: 230px; }
+.cell .bar { height: 4px; margin: 3px 0 4px; width: 100%; }
+.cell b .tag { vertical-align: middle; margin-right: 4px; }
 .cell label { display: block; font-size: 10.5px; color: var(--ink3); margin-bottom: 2px; letter-spacing: .02em; white-space: nowrap; }
 .cell b { font-size: 15.5px; font-weight: 500; line-height: 1.1; white-space: nowrap; }
 .cell small { font-size: 10.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -615,7 +618,7 @@ details.standby summary small { font-size: 11px; }
 
 /* ---------------------------------------------------------------- responsive: the HUD sheds cells, never clips words */
 @media (max-width: 1640px) { .gw { grid-template-columns: 1fr 1fr; } }
-@media (max-width: 1700px) { .cell#hudConsole { display: none; } }
+@media (max-width: 1700px) { .cell.m-console { display: none; } }
 @media (max-width: 1500px) { .cell.intake small { display: none; } .cell.intake { min-width: 170px; } .vl small { display: none; } .vl { min-width: 136px; padding: 5px 9px 4px; } }
 @media (max-width: 1380px) { :root { --insp-w: 360px; } .hud { grid-template-columns: auto minmax(180px, 260px) minmax(0, 1fr) auto; } }
 @media (max-width: 1250px) {
@@ -691,6 +694,46 @@ table.mics tr.off .hbar i { opacity: .3; }
 .vmic em { font-size: 8px; color: var(--ink3); line-height: 1; margin-top: 1px; white-space: nowrap; overflow: hidden; max-width: 26px; }
 @media (max-width: 1500px) { .mcols { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 1100px) { .mcols { grid-template-columns: 1fr; } }
+
+/* ---------------------------------------------------------------- forensics: the capture toolbar, raw files, the AI reading */
+.forbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 0 0 12px; }
+.forbar select { padding: 4px 8px; font-size: 12px; }
+.forbar .find { width: 320px; }
+.forbar .btn.mini.diagnose { padding: 3px 9px; }
+.forfiles { margin-top: 12px; font-size: 12px; color: var(--ink2); border: 1px solid var(--line); background: var(--panel); border-radius: var(--radius); padding: 8px 12px; }
+.forfiles a { margin-right: 14px; white-space: nowrap; }
+.for .whole { grid-column: 1 / -1; }
+.for .whole table { font-size: 12px; }
+.for .whole .tape { max-height: 420px; }
+.for h4 .btn { margin-left: auto; }
+.ai-reading { grid-column: 1 / -1; border: 1px solid var(--line2); border-left: 3px solid var(--out); background: var(--panel); padding: 10px 14px; border-radius: var(--radius); }
+.ai-reading h4 { margin: 0 0 6px; }
+
+/* ---------------------------------------------------------------- equipment widgets (one line of live detail under a roster row) */
+.pbw { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 6px 22px; align-items: center; padding: 2px 8px 8px 34px; font-size: 11.5px; color: var(--ink2); }
+.pbw .w { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.pbw .w label { color: var(--ink3); font-size: 10.5px; }
+.pbw .w b { font-weight: 500; color: var(--ink); }
+.pbw .w .bar { width: 70px; height: 5px; }
+.pbw .w .tag { font-size: 10px; }
+.pb.wide { display: grid; }
+
+/* ---------------------------------------------------------------- the side panels of the health tiles */
+.insp-body .mrow { grid-template-columns: 24px 80px 1fr 40px; }
+.insp-body .mscale { margin: 0 44px 0 112px; }
+.insp-body .mcol { margin-bottom: 8px; }
+.insp-body table.compact { font-size: 11.5px; }
+.insp-body table.compact td, .insp-body table.compact th { padding: 3px 5px; }
+.insp-body .hbar { display: inline-block; vertical-align: middle; width: 54px; height: 6px; background: var(--panel3); border-radius: 1px; position: relative; overflow: hidden; margin-right: 5px; }
+.insp-body .hbar i { position: absolute; left: 0; top: 0; bottom: 0; background: var(--ok); }
+.insp-body .hbar i.warm { background: var(--warn); }
+.insp-body .hbar i.hot { background: var(--error); }
+.insp-body .rowlist { display: flex; flex-direction: column; gap: 4px; margin: 6px 0; }
+.insp-body .rowlist > div { display: grid; grid-template-columns: 10px 1fr auto; gap: 8px; align-items: center; padding: 5px 8px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel2); font-size: 12px; cursor: pointer; }
+.insp-body .rowlist > div:hover { border-color: var(--ink3); }
+.insp-body .rowlist small { display: block; color: var(--ink3); font-size: 10.5px; }
+.insp-body .route { display: grid; grid-template-columns: 1fr 14px 1fr; gap: 6px; font-size: 11.5px; padding: 2px 0; border-bottom: 1px solid var(--line); }
+.insp-body .route i { color: var(--ink3); font-style: normal; text-align: center; }
 
 /* ---------------------------------------------------------------- the log: filter bar and the table */
 .logbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; margin: 0 0 12px; }
