@@ -179,6 +179,16 @@ export class AI {
 			const ses = at.session
 			if (ses) L.push(`  switcher data source: ${ses.mode === 'companion' ? 'Companion (Broadwatcher holds no control slot)' : ses.mode}; Broadwatcher's own session: ${ses.own ? ses.own.state + (ses.own.error ? ' (' + ses.own.error + ')' : '') : 'none'}; Companion: ${ses.companion ? (ses.companion.ok ? (ses.companion.connected ? 'connected to the switcher' : 'NOT connected to the switcher') : ses.companion.error) : 'not used'}; slot holders: ${(ses.controllers || []).map((c) => `${c.name} ${c.held === null ? 'unknown' : c.held ? 'YES' : 'no'}`).join(', ') || 'unknown'}`)
 		}
+		const au = state.audio
+		if (au && (au.consoles.length || au.mics.length || au.others.length)) {
+			const parts = [
+				...au.consoles.map((c) => `${c.name}${c.console ? ' (' + c.console.model + ' "' + c.console.name + '")' : ''}: ${c.ok ? `meters live, ${c.active} channels with signal, main ${c.mainLevel !== null && c.mainLevel > -60 ? c.mainLevel.toFixed(0) + ' dBFS' : 'quiet'}` : c.error}`),
+				...au.mics.map((m) => `${m.name}${m.product ? ' (' + m.product + ')' : ''}: ${m.ok ? m.channels.map((ch) => `${ch.name || ch.id}${ch.frequency ? ' ' + ch.frequency.toFixed(3) + ' MHz' : ''} ${ch.link ? `ON AIR battery ${ch.battery ?? '?'}% RF ${ch.rsqi ?? '?'}% AF ${ch.af ?? '?'} dBFS${ch.mute || ch.tx?.mute ? ' MUTED' : ''}${ch.warningText.length ? ' warnings: ' + ch.warningText.join('/') : ''}` : 'transmitter off (no link)'}`).join('; ') : m.error}`),
+				...au.others.map((o) => `${o.name}: ${o.note}`),
+			]
+			if (au.switcher) parts.push(`switcher Fairlight levels: ${au.switcher.levels ? `master ${au.switcher.levels.master?.level ?? '?'} dBFS, ${au.switcher.levels.sources.length} inputs` : au.switcher.note || 'none'}`)
+			L.push('AUDIO (a transmitter that is off is normal outside a show; low battery or weak RF on one that is on matters): ' + parts.join(' | '))
+		}
 		const fx = state.forensics
 		if (fx?.running) L.push(`MIRROR PORT (every packet at the switcher's port, ${fx.pps} pkt/s): control sessions held by ${fx.sessions.filter((s) => s.state === 'held').map((s) => `${s.name || s.ip} (${s.pps} pkt/s)`).join(', ') || 'nobody'}; refused recently: ${fx.sessions.filter((s) => s.state === 'refused').map((s) => s.name || s.ip).join(', ') || 'none'}; live flows: ${fx.flows.filter((f) => f.live).slice(0, 6).map((f) => `${f.name || f.peer} ${f.app}->port ${f.targetPort} ${f.state} ${f.inMbps} Mb/s ${f.detail || ''}`).join('; ') || 'none'}; last events: ${fx.events.slice(0, 5).map((e) => `${new Date(e.t).toLocaleTimeString()} ${e.text}`).join(' | ') || 'none'}`)
 		const sp = state.streamPaths || []

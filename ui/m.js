@@ -34,7 +34,41 @@ function render(s) {
 	const eq = at?.equipment
 	$('streams').innerHTML = at ? `<div class="intake"><div class="big ${st.state === 'arriving' ? 'stream' : ''}">${eq ? fmtRate(eq.down) : '–'}</div><div class="state ${esc(st.state || 'idle')}">${st.state === 'arriving' ? `stream arriving · ${fmtRate(st.rate)} above the quiet level · for ${fmtAgo(st.since)}` : `quiet · usual level ${fmtRate(st.baseline || 0)}${st.until ? ' · last stream ended ' + fmtAgo(st.until) + ' ago' : ''}`}</div>${(st.sources || []).length ? `<div class="src">${st.sources.slice(0, 3).map((x) => `<b>${esc(x.name)}</b> (${esc(x.confidence)}) ${esc(x.detail || '')}`).join('<br>')}</div>` : ''}<div class="src">${esc(at.name)}${eq?.switch ? ` · ${esc(eq.switch.name)} port ${eq.switch.port}` : ''}${eq?.telemetry?.programName ? ` · program ${esc(eq.telemetry.programName)}` : ''}</div></div>` : '<div class="empty">no switcher configured</div>'
 	$('paths').innerHTML = (s.streamPaths || []).length ? s.streamPaths.map((p) => `<div class="${esc(p.status)}">${esc(p.name)} <span class="k">WAN ${esc(p.wanPorts)} → ${esc(p.target.name)}</span><small>${esc(p.verdict)}</small></div>`).join('') : '<div class="idle">no port forwards to broadcast gear</div>'
+	renderMics(s)
 	$('events').innerHTML = s.events.slice(0, 25).map((ev) => `<div class="${esc(ev.level || 'info')}">${esc(ev.text)}<small>${fmtTime(ev.t)}</small></div>`).join('') || '<div class="info">nothing yet</div>'
+}
+
+// the wireless mics: one row per receiver channel with battery and RF bars (EW-DX over SSC)
+const fmtDb = (db) => (db === null || db === undefined || db < -89 ? '–' : db.toFixed(1))
+const battClass = (b) => (b === null ? '' : b < 10 ? 'error' : b < 20 ? 'warn' : 'ok')
+function renderMics(s) {
+	const mics = s.audio?.mics || []
+	if (!mics.length) return ($('mics').innerHTML = '<div class="idle">no wireless receivers in the roster</div>')
+	$('mics').innerHTML = mics
+		.map((m) => {
+			if (!m.ok) return `<div class="warn"><b>${esc(m.name)}</b><small>${esc(m.error || 'not answering')}${m.online === false ? ' · not on the network' : ''}</small></div>`
+			return m.channels
+				.map((ch) => `<div class="${ch.link ? (ch.battery !== null && ch.battery < 20) || (ch.rsqi !== null && ch.rsqi < 30) ? 'warn' : 'ok' : 'idle'}" data-mic="${esc(m.ip)}:${esc(ch.id)}"><b>${esc(ch.name || ch.id.toUpperCase())}</b> <span class="k">${esc(m.name)}${ch.frequency ? ' · ' + ch.frequency.toFixed(3) + ' MHz' : ''}</span>${ch.link ? `<div class="mbars"><span><label>battery</label><span class="hb"><i class="${battClass(ch.battery)}" style="width:${ch.battery ?? 0}%"></i></span><em>${ch.battery !== null ? ch.battery + ' %' : '–'}</em></span><span><label>RF</label><span class="hb"><i class="${ch.rsqi !== null && ch.rsqi < 30 ? 'warn' : 'ok'}" data-f="rf" style="width:${ch.rsqi ?? 0}%"></i></span><em data-f="rfTxt">${ch.rsqi !== null ? ch.rsqi + ' %' : '–'}</em></span><span><label>audio</label><span class="hb"><i class="ok" data-f="af" style="width:${ch.af === null ? 0 : Math.max(0, Math.min(100, ((ch.af + 60) / 60) * 100)).toFixed(0)}%"></i></span><em data-f="afTxt">${fmtDb(ch.af)}</em></span></div><small>${[ch.tx?.name, ch.tx?.type, ch.mute || ch.tx?.mute ? 'MUTED' : '', ch.batteryMinutes ? 'about ' + ch.batteryMinutes + ' min left' : '', ...ch.warningText].filter(Boolean).join(' · ') || 'on air'}</small>` : '<small>transmitter off</small>'}</div>`)
+				.join('')
+		})
+		.join('')
+}
+function applyMeters(m) {
+	for (const [ip, rx] of Object.entries(m?.mic || {})) {
+		for (const [id, v] of Object.entries(rx)) {
+			const row = document.querySelector(`[data-mic="${CSS.escape(ip + ':' + id)}"]`)
+			if (!row) continue
+			const [af, rsqi] = v
+			const afEl = row.querySelector('[data-f="af"]')
+			if (afEl) afEl.style.width = (af === null ? 0 : Math.max(0, Math.min(100, ((af + 60) / 60) * 100))).toFixed(0) + '%'
+			const afTxt = row.querySelector('[data-f="afTxt"]')
+			if (afTxt) afTxt.textContent = fmtDb(af)
+			const rf = row.querySelector('[data-f="rf"]')
+			if (rf) rf.style.width = (rsqi ?? 0) + '%'
+			const rfTxt = row.querySelector('[data-f="rfTxt"]')
+			if (rfTxt) rfTxt.textContent = rsqi !== null ? rsqi + ' %' : '–'
+		}
+	}
 }
 
 async function ask(q) {
@@ -68,6 +102,7 @@ $('askInput').addEventListener('keydown', (e) => {
 function connect() {
 	const es = new EventSource('/api/events')
 	es.addEventListener('state', (e) => render(JSON.parse(e.data)))
+	es.addEventListener('meters', (e) => applyMeters(JSON.parse(e.data)))
 	es.addEventListener('ai', (e) => {
 		const j = JSON.parse(e.data)
 		if (j && !j.error) aiInfo = j

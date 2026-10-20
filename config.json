@@ -1,6 +1,6 @@
 {
   "_comment": "Broadwatcher configuration. The app copies this file to its user-data folder on first run (menu: Broadwatcher > Open config file) and reads that copy from then on. The equipment roster is edited in the app (Broadcast equipment > Edit roster); 'active: false' = on standby: shown greyed, not probed, never an alert.",
-  "config_version": 6,
+  "config_version": 7,
   "gateway": {
     "name": "BIG WAN (UDM Pro Max)",
     "url": "https://192.168.20.1",
@@ -29,7 +29,9 @@
     "temp_c": 70,
     "port_error_rate": 1,
     "stream_min_mbps": 1.5,
-    "_comment": "stream_min_mbps: how much the traffic into the ATEM must rise above its quiet baseline to count as an arriving stream"
+    "mic_battery_pct": 20,
+    "mic_rf_pct": 30,
+    "_comment": "stream_min_mbps: how much the traffic into the ATEM must rise above its quiet baseline to count as an arriving stream. mic_battery_pct / mic_rf_pct: a wireless transmitter below this battery level (warning; error below 10 %) or an EW-DX receiver channel below this signal quality (RSQI) raises an alert."
   },
   "atem": {
     "name": "ATEM Television Studio HD8 ISO",

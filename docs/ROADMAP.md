@@ -184,6 +184,21 @@ Already partly in place; this makes it continuous and visible:
 - **UI:** a meter strip (peak-hold, 10 Hz) on the Audio tile and a full Audio detail view: Fairlight inputs,
   X32 channels/buses, mics with battery/RF bars. Size: 2 days for ATEM + X32, 1 day for EW-DX.
 
+**Done in 0.9.0 (2026-10-19):** `server/x32.js` subscribes to `/meters/1` (32 channels) and `/meters/2`
+(16 buses, 6 matrices, main L/R/mono) on every active roster X32 (probe `x32`), ten updates a second with
+1.5 s peak hold, names and mutes from `/ch`, `/bus`, `/mtx`, `/main`; `server/ssc.js` reads the EW-DX
+receivers (roster role `audio` with a mic-like name or vendor) over SSC: name, frequency, mute, warnings
+(`NoLink` = transmitter off), the linked transmitter's battery, and the AF / RSQI / RSSI meters by
+subscription. `state.audio` and a 5-Hz `meters` SSE event feed the *Audio* section (hairline bars with
+tabular numbers), the meter strips on the Audio and Mics tiles, the phone page's *Mics* rows, the health
+factors (consoles must send meters; mics on air must have battery and RF) and the alerts (battery below
+20 %, RSQI below 30 %, muted or off while the profile expects mics). Fairlight levels: `AtemClient.wantLevels`
+sends `SFLN` after `InCm` and decodes `FDLv` / `FMLv`, but only when `atem.session` is `own` (Settings >
+Switcher says so); through Companion the switcher sends no levels. Verified live on the X32 Compact and X32
+Rack and on the three EM 2 Dante receivers (all transmitters were off that evening: the link / battery / RF
+paths follow the SSC schema the receivers returned, not a live transmitter). The field X32 Dante card has no
+probe and is listed as "nothing to read".
+
 ---
 
 ## 6. Broadcast health score and the home view
@@ -213,8 +228,8 @@ when the profile says it should run). Size: 3 days (score + tiles + profile edit
 expectations), the home view (lamp, score, why, eight tiles with sparklines and targets), show profiles in
 the config with the *Prepare a broadcast* dialog (expectations, roster ticks, test every probe, save and
 activate) and the profile menu; the AI narrates on top of the score and cannot change the verdict. Still
-open from this section: live meter strip on the Audio tile (needs section 5), Dante clock and mic RF/battery
-(sections 2 and 5).
+open from this section: the Dante clock (section 2). The Audio tile's meter strip and the mics' RF/battery
+came with 0.9.0 (section 5).
 
 ## 7. Mobile version
 
@@ -259,7 +274,7 @@ and the *Open on a phone…* menu (no QR code yet: the menu copies the link inst
 
 1. Stream path check (section 0) + remote-source command capture (4) — directly aimed at the forwarded-stream problem.
 2. Health score, show profiles, glance board, mobile page (6, 7).
-3. Audio: Fairlight + X32 meters, EW-DX mics (5).
+3. Audio: Fairlight + X32 meters, EW-DX mics (5). *Done in 0.9.0.*
 4. One server / viewers + Companion variables (8.1, 8.2).
 5. Dante (2) once the PC has a foot in the VLAN; NDI (3).
 6. Mirror-port forensics (1) when needed.

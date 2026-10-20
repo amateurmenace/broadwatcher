@@ -14,8 +14,9 @@ broadcast readiness and explain problems.
   Settings, the light/dark switch and the readiness-rail toggle (or the `R` key). The clock and the controls
   always fit; the cells drop off whole on narrow windows instead of being cut (console under 1700 px, then
   the VLANs one by one).
-- **Section bar**: Health · Gateway · Signal map · Streams · Stream paths · Switches · Equipment · Events,
-  each a jump link; every section has a ▾ to collapse it (remembered), so the map can take the room.
+- **Section bar**: Health · Gateway · Signal map · Streams · Stream paths · Audio · Forensics · Switches ·
+  Equipment · Events, each a jump link; every section has a ▾ to collapse it (remembered), so the map can
+  take the room.
 - **Broadcast health** (the glance board): one lamp and a score out of 100 computed from everything that
   affects a healthy stream (internet, switches, port errors, link speeds, port load, the switcher, the
   roster, stream out, stream in, recorders, audio, mics, Dante, NDI, error alerts), each factor weighed and
@@ -23,8 +24,9 @@ broadcast readiness and explain problems.
   recorders rolling, mics, Dante, NDI). Ready ≥ 90, Degraded ≥ 72, At risk ≥ 50, else Down; a critical factor
   at zero (WAN down, a switch with broadcast gear offline, the switcher off the network, an interrupted
   stream) pulls the verdict to at least At risk. Then eight tiles: Stream out · Stream in · Audio · Dante ·
-  NDI · Mics · Network · Recorders, each with a lamp, one number, one line and a 10-minute sparkline;
-  clicking one opens the thing behind it. The AI narrates on top of the score (its headline, reasons and
+  NDI · Mics · Network · Recorders, each with a lamp, one number, one line and a 10-minute sparkline (the
+  Audio tile carries a live meter strip instead, one thin bar per X32 channel plus the main pair; the Mics
+  tile one battery bar per receiver channel); clicking one opens the thing behind it. The AI narrates on top of the score (its headline, reasons and
   actions) but never changes the verdict; the HUD lamp is the score. **Prepare a broadcast…** picks or
   creates a profile, sets its expectations, ticks the roster (unticked devices go on standby), runs *Test
   every probe* and saves; the profile menu in the header switches profiles without touching the roster.
@@ -54,6 +56,19 @@ broadcast readiness and explain problems.
   setup, key and format), red = the forward points at a device that is on standby or off the network (the
   classic case: a sender using the HD8's default port 1935 lands on the field Mini) or the firewall blocked
   it. Port scanners knocking on open ports are listed as probes and ignored. Click a row for the senders.
+- **Audio**: live meters from the X32 consoles and the state of the wireless mics, with their real sources.
+  Every X32 in the roster with the probe `x32` streams its meters over OSC (the open Behringer protocol,
+  ten updates a second): 32 channels, 16 mix buses, 6 matrices and the main L/R/mono as thin horizontal
+  bars with the level in dBFS, a 1.5-second peak hold, the channel names and mutes from the console.
+  Every Sennheiser EW-DX receiver in the roster (role *audio*, recognised by a name or vendor that says
+  so) is read over SSC, Sennheiser's JSON-over-UDP control protocol: per receiver channel the name,
+  frequency, whether a transmitter is linked (off = "transmitter off", never a guess), the transmitter's
+  battery with the minutes left, the RF quality (RSQI, with the RSSI and the antenna in use), the audio
+  level, mutes and the receiver's own warnings. A roster audio device that has neither (the field X32
+  Dante card) is listed with "nothing to read". The switcher's own Fairlight levels appear here only when
+  Broadwatcher holds its own session with it (Settings > Switcher: *own session*); read through Companion,
+  the switcher sends no levels. Alerts: a transmitter below 20 % battery (error below 10 %), RF quality
+  below 30 %, and, when the show profile expects mics, a mic that is muted or off.
 - **Stream forensics**: with a switch port mirrored from the switcher's port into a spare network adapter of
   this computer, Broadwatcher runs tshark on it and shows the switcher's traffic as the switcher sees it:
   every **control session** (who holds one, since when, how many packets a second; two programs on one
@@ -126,16 +141,19 @@ The gear button in the top bar (or **Broadwatcher > Settings…**, Ctrl/Cmd+,) o
   next to *Reassess now* in the readiness rail for one-click changes during a show; it only offers the
   providers that are set up. Keys are stored in your local config file and masked in the screen (an empty
   field keeps the saved key, *Remove* forgets it).
-- **UniFi gateway** (URL, Integrations API key, site), **SNMP** (community, interval), **Companion** (API
-  address, ATEM connection label, start with Broadwatcher), **Server** (listen on this computer only or on the
-  LAN, port; applies after a restart) and the alert **thresholds**. Gateway, SNMP and poll changes restart the
-  polling in place; AI, thresholds, Companion and the switcher mode apply immediately.
+- **UniFi gateway** (URL, Integrations API key, site), **Switcher** (name, IP and how it is read: through
+  Companion, an own session, or not at all; the help text says why Fairlight audio levels need an own
+  session), **SNMP** (community, interval), **Companion** (API address, ATEM connection label, start with
+  Broadwatcher), **Server** (listen on this computer only or on the LAN, port; applies after a restart) and
+  the alert **thresholds**, including the mic battery and RF quality levels. Gateway, SNMP and poll changes
+  restart the polling in place; AI, thresholds, Companion and the switcher mode apply immediately.
 
 ## On a phone
 
 **Broadwatcher > Open on a phone…** shows the link to the phone page (`/m`): the health verdict and score,
-the eight tiles, open items, streams into the switcher, the stream paths, the Ask box and the event tape, in
-one column, live over the same server-sent events as the desk. The server must listen on the LAN (the menu
+the eight tiles, open items, streams into the switcher, the stream paths, the wireless mics (one row per
+receiver channel with battery, RF and audio bars), the Ask box and the event tape, in one column, live over
+the same server-sent events as the desk. The server must listen on the LAN (the menu
 offers to switch *Settings > Server* to the whole LAN and restart; Windows asks once to allow Broadwatcher
 through the firewall). The link carries an access key generated once per install (`server.token` in the
 config file); the phone keeps it in a cookie, and anything on the LAN without the key gets a 401. Open the
@@ -181,9 +199,12 @@ roster edited in the app always wins over the bundled list (new bundled devices 
   usual place), `enabled`. Setting up the mirror in UniFi: Devices > the switch > Ports > a spare port >
   Port Manager > Operation Mirroring, source = the switcher's port. Install Wireshark with Npcap on this
   computer; give the adapter no IP (it gets none anyway).
-- `equipment[]`: `active`, `name`, `ip`, `group`, `role`, optional `probe` (`tcp:<port>`, `atem`, `x32`),
-  `telemetry` (`webpresenter`, `hyperdeck`, `atem`), `companion` (Companion connection label for a switcher),
-  `min_speed`, `hero: true` for the main switcher.
+- `equipment[]`: `active`, `name`, `ip`, `group`, `role`, optional `probe` (`tcp:<port>`, `atem`, `x32`; an
+  X32 with this probe also streams its meters), `telemetry` (`webpresenter`, `hyperdeck`, `atem`),
+  `companion` (Companion connection label for a switcher), `min_speed`, `hero: true` for the main switcher. A
+  device with role `audio` whose name says EW-DX / receiver / wireless mic (or whose vendor is Sennheiser or
+  Shure) is read over SSC on UDP 45.
+- `thresholds.mic_battery_pct` (20) and `thresholds.mic_rf_pct` (30): the mic alert levels.
 - `networks[]`: VLANs in the HUD, in that order (Settings > UniFi gateway > *VLANs in the top bar*; once
   edited there, `networks_edited` keeps your list across upgrades). `poll`: intervals. `thresholds`: alert
   levels incl. `stream_min_mbps`.
@@ -227,7 +248,8 @@ universal) and Windows (installer + portable) packages into it.
 Server modules: `server/unifi.js` (API client), `server/snmp.js` (SNMP v2c), `server/collector.js` (polls,
 rates, stream detector, topology, alerts, event tape, roster, inspector details), `server/probe.js`
 (TCP / X32 OSC), `server/rest.js` (Blackmagic REST), `server/atem.js` (read-only ATEM protocol client with
-the remote-source command capture), `server/companion.js` (Companion HTTP API), `server/ai.js` (digest +
-prompts), `server/server.js` (HTTP + SSE + roster API). UI: `ui/app.js`, `ui/map.js`, `ui/styles.css`
+the remote-source command capture and the Fairlight level request), `server/x32.js` (X32 meters over OSC),
+`server/ssc.js` (Sennheiser EW-DX over SSC), `server/companion.js` (Companion HTTP API), `server/ai.js`
+(digest + prompts), `server/server.js` (HTTP + SSE + roster API). UI: `ui/app.js`, `ui/map.js`, `ui/styles.css`
 (light and dark themes). `node scripts/atem-capture.mjs [ip]` captures the HD8's undocumented remote-source
 commands once (one abandoned session: only when no show is on).

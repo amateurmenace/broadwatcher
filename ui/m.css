@@ -54,3 +54,13 @@ h2 { margin: 18px 0 8px; font-family: var(--serif); font-weight: 400; font-size:
 .qa .q { font-weight: 600; margin-bottom: 4px; }
 .qa .a { white-space: pre-wrap; color: var(--ink2); }
 footer { margin-top: 24px; font-size: 11px; color: var(--ink3); }
+/* mics: battery, RF and audio bars per receiver channel */
+.mbars { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; margin-top: 6px; }
+.mbars > span { display: block; min-width: 0; }
+.mbars label { display: block; font-size: 10px; color: var(--ink3); }
+.mbars .hb { display: block; height: 6px; background: var(--panel2); border: 1px solid var(--line); border-radius: 2px; overflow: hidden; margin: 2px 0; }
+.mbars .hb i { display: block; height: 100%; background: var(--ok); }
+.mbars .hb i.warn { background: var(--warn); }
+.mbars .hb i.error { background: var(--error); }
+.mbars em { font-style: normal; font-size: 12px; color: var(--ink2); }
+.list > div.ok { border-left-color: var(--ok); }

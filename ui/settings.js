@@ -34,7 +34,7 @@ window.Settings = (function () {
 		const pv = ai.providers || {}
 		const prov = ai.provider === 'anthropic' ? 'anthropic' : 'local'
 		const welcome = msg === 'welcome'
-		$('settingsEditor').innerHTML = `<header><h2>Settings</h2><small>${d.flavor === 'public' ? 'Broadwatcher Community' : 'Broadwatcher'} · saved to ${esc(d.configPath || 'the user config')}</small><nav class="jump">${['ai', 'gateway', 'snmp', 'companion', 'capture', 'server', 'thresholds'].map((s) => `<a href="#set-${s}" data-jump="${s}">${{ ai: 'AI', gateway: 'UniFi gateway', snmp: 'SNMP', companion: 'Companion', capture: 'Capture', server: 'Server', thresholds: 'Thresholds' }[s]}</a>`).join('')}</nav></header>
+		$('settingsEditor').innerHTML = `<header><h2>Settings</h2><small>${d.flavor === 'public' ? 'Broadwatcher Community' : 'Broadwatcher'} · saved to ${esc(d.configPath || 'the user config')}</small><nav class="jump">${['ai', 'gateway', 'atem', 'snmp', 'companion', 'capture', 'server', 'thresholds'].map((s) => `<a href="#set-${s}" data-jump="${s}">${{ ai: 'AI', gateway: 'UniFi gateway', atem: 'Switcher', snmp: 'SNMP', companion: 'Companion', capture: 'Capture', server: 'Server', thresholds: 'Thresholds' }[s]}</a>`).join('')}</nav></header>
 		<div class="body settings">
 			${welcome ? `<div class="welcome"><h3>Welcome</h3><p>Broadwatcher needs three things to start watching a network: the address and an Integrations API key of your UniFi gateway, the SNMP community if you want live port counters, and an AI provider for the readiness verdict (a local OpenAI-compatible server such as LM Studio, or Claude with your own Anthropic key). Everything else can wait.</p></div>` : ''}
 			<section id="set-ai"><h3>AI</h3>
@@ -63,6 +63,11 @@ window.Settings = (function () {
 				${field('VLANs in the top bar', `<input id="gw_networks" value="${esc((d.networks || []).join(', '))}" placeholder="Default, BIG_NDI, BIG_MOBILE_DANTE">`, `network names as UniFi spells them, in the order shown; known: ${esc((d.knownNetworks || []).map((n) => n.name + (n.vlan ? ' (' + n.vlan + ')' : '')).join(', ') || 'none yet')}. Three or four fit; the bar sheds them on narrow windows.`)}
 				<div class="row"><button class="btn" type="button" data-test="gateway">Test gateway</button><span class="msg" id="test-gateway"></span></div>
 			</section>
+			<section id="set-atem"><h3>Switcher</h3>
+				${field('Name', `<input id="atem_name" value="${esc(d.atem?.name || '')}" placeholder="ATEM Television Studio HD8 ISO">`)}
+				${field('IP address', `<input id="atem_ip" value="${esc(d.atem?.ip || '')}" class="mono" placeholder="192.168.20.79">`, 'the main switcher: the intake meter, the stream detector and the stream path check watch it')}
+				${field('Read it', `<select id="atem_session">${[['companion', 'through Companion (no control slot)'], ['auto', 'through Companion; an own session only while Companion is away'], ['own', 'with an own session (one control slot; Fairlight audio levels)'], ['none', 'not at all']].map(([v, l]) => `<option value="${v}" ${(d.atem?.session || 'companion') === v ? 'selected' : ''}>${l}</option>`).join('')}</select>`, 'An ATEM has only a handful of control slots and keeps a closed one for about two minutes; reading it through Companion costs it nothing. <b>Fairlight audio levels</b> are the one thing Companion does not pass on: the switcher streams them only to a session that asks for them, so they appear in the Audio section only with an own session (Broadwatcher then holds one slot and asks again every ten seconds). The X32 and EW-DX meters do not depend on this.')}
+			</section>
 			<section id="set-snmp"><h3>SNMP (live port counters)</h3>
 				${field('Community', secret('snmp_community', { set: !!d.snmp.community, hint: d.snmp.community ? d.snmp.community.slice(-2) : '' }, 'netwatch'), 'UniFi Network > Settings > System > Advanced > SNMP, v1/v2c; empty = counters from the controller only (30-90 s old)')}
 				${field('Read every', `${num('snmp_every_s', d.snmp.every_s, 2, 60)} s`)}
@@ -90,6 +95,8 @@ window.Settings = (function () {
 					${field('Memory', `${num('th_mem_pct', d.thresholds.mem_pct, 1, 100)} %`)}
 					${field('Temperature', `${num('th_temp_c', d.thresholds.temp_c, 1, 120)} °C`)}
 					${field('Stream rise', `${num('th_stream_min_mbps', d.thresholds.stream_min_mbps, 0.1, 100, 0.1)} Mb/s`, 'how much the switcher intake must rise above its quiet level to count as an arriving stream')}
+					${field('Mic battery', `${num('th_mic_battery_pct', d.thresholds.mic_battery_pct ?? 20, 1, 100)} %`, 'a wireless transmitter below this raises a warning (an error below 10 %)')}
+					${field('Mic RF quality', `${num('th_mic_rf_pct', d.thresholds.mic_rf_pct ?? 30, 1, 100)} %`, 'EW-DX receive signal quality (RSQI) below this counts as weak RF')}
 				</div>
 			</section>
 		</div>
@@ -109,11 +116,12 @@ window.Settings = (function () {
 			ai: { enabled: $('ai_enabled').checked, provider: prov === 'anthropic' ? 'anthropic' : 'openai', base_url: val('ai_base_url').trim(), model: val('ai_model').trim(), api_key: secretVal('ai_api_key'), anthropic_api_key: secretVal('ai_anthropic_api_key'), anthropic_model: val('ai_anthropic_model'), anthropic_effort: val('ai_anthropic_effort'), assess_every_s: Number(val('ai_assess_every_s')) || 180 },
 			gateway: { name: val('gw_name').trim(), url: val('gw_url').trim(), api_key: secretVal('gw_api_key'), site: val('gw_site').trim() || 'default', ui_url: val('gw_ui_url').trim() },
 			networks: val('gw_networks').split(',').map((s) => s.trim()).filter(Boolean),
+			atem: { name: val('atem_name').trim(), ip: val('atem_ip').trim(), session: val('atem_session') },
 			snmp: { community: secretVal('snmp_community'), every_s: Number(val('snmp_every_s')) || 3 },
 			companion: { url: val('cmp_url').trim(), atem_label: val('cmp_atem_label').trim() || 'atem', autostart: $('cmp_autostart').checked },
 			server: { host: val('srv_host'), port: Number(val('srv_port')) || 8766 },
 			capture: { interface: val('cap_interface').trim(), tshark: val('cap_tshark').trim(), enabled: $('cap_enabled').checked },
-			thresholds: { wan_latency_ms: Number(val('th_wan_latency_ms')), cpu_pct: Number(val('th_cpu_pct')), mem_pct: Number(val('th_mem_pct')), temp_c: Number(val('th_temp_c')), stream_min_mbps: Number(val('th_stream_min_mbps')) },
+			thresholds: { wan_latency_ms: Number(val('th_wan_latency_ms')), cpu_pct: Number(val('th_cpu_pct')), mem_pct: Number(val('th_mem_pct')), temp_c: Number(val('th_temp_c')), stream_min_mbps: Number(val('th_stream_min_mbps')), mic_battery_pct: Number(val('th_mic_battery_pct')) || 20, mic_rf_pct: Number(val('th_mic_rf_pct')) || 30 },
 		}
 	}
 

@@ -251,9 +251,161 @@ function renderHome(s) {
 		.sort((a, b) => b.weight * (1 - b.value) - a.weight * (1 - a.value))
 		.slice(0, 4)
 	const tileHtml = (s.tiles || [])
-		.map((t) => `<div class="tile ${esc(t.level)}" data-tile="${esc(t.id)}" title="${esc(t.line)}"><div class="th"><span class="lamp sm ${esc(t.level)}"></span>${esc(t.label)}</div><div class="tv">${esc(t.value)}${t.unit ? `<small>${esc(t.unit)}</small>` : ''}</div><div class="tl">${esc(t.line)}</div>${t.series && t.series.length > 1 ? scope('tile:' + t.id, [{ data: t.series, color: t.id === 'stream_out' ? 'out' : 'in' }], 'tspark', { bare: true }) : `<div class="nosp" title="${esc(t.note || 'no series yet')}"></div>`}</div>`)
+		.map((t) => `<div class="tile ${esc(t.level)}" data-tile="${esc(t.id)}" title="${esc(t.line)}"><div class="th"><span class="lamp sm ${esc(t.level)}"></span>${esc(t.label)}</div><div class="tv">${esc(t.value)}${t.unit ? `<small>${esc(t.unit)}</small>` : ''}</div><div class="tl">${esc(t.line)}</div>${t.series && t.series.length > 1 ? scope('tile:' + t.id, [{ data: t.series, color: t.id === 'stream_out' ? 'out' : 'in' }], 'tspark', { bare: true }) : t.strip ? stripHtml(s, t.strip) : `<div class="nosp" title="${esc(t.note || 'no series yet')}"></div>`}</div>`)
 		.join('')
 	$('home').innerHTML = `<div class="verdict-big" data-sel="health:now"><span class="lamp ${verdictClass(h.verdict)}"></span><div><b>${esc(nice(h.verdict))}</b><div class="score">${h.score}<small> / 100 · ${esc(h.profile?.name || '')}</small></div><p>${esc(aiFresh ? aiInfo.headline : h.headline)}</p><ul class="why">${why.map((f) => `<li class="${esc(f.level)}"><b>${esc(f.label)}</b> · ${esc(f.reason)}</li>`).join('') || '<li class="ok"><b>All factors</b> at full marks</li>'}</ul><div class="ai-meta">${aiFresh ? `AI: ${esc(aiInfo.model)} · ${fmtAgo(aiInfo.t)} ago${aiInfo.aiVerdict && aiInfo.aiVerdict !== h.verdict ? ` · the model would have said ${esc(nice(aiInfo.aiVerdict))}` : ''}` : aiStatus?.enabled ? 'AI narrative pending' : 'AI off · score only'} · click for every factor</div></div></div><div class="tiles">${tileHtml}</div>`
+	indexMeters()
+}
+
+// ------------------------------------------------------------------ audio: X32 meters, EW-DX receivers, Fairlight
+// levels are dBFS; a bar runs from -60 to 0; green below -18, amber to -6, red above; peak = a 1.5 s hold
+const dbPct = (db) => (db === null || db === undefined ? 0 : Math.max(0, Math.min(100, ((db + 60) / 60) * 100)))
+const dbClass = (db) => (db === null || db === undefined || db < -89 ? '' : db >= -6 ? 'hot' : db >= -18 ? 'warm' : '')
+const fmtDb = (db) => (db === null || db === undefined || db < -89 ? '–' : db > -0.05 ? '0.0' : db.toFixed(1))
+const fmtMinutes = (m) => (m >= 60 ? `${Math.floor(m / 60)} h ${String(m % 60).padStart(2, '0')}` : `${m} min`)
+const meterEls = new Map() // data-m key -> {el, fill, peak, db} for the 5-Hz updates without re-rendering
+const stripEls = new Map() // data-vstrip key -> [bars]
+const SCALE = `<div class="mscale">${[-60, -40, -20, -12, -6, 0].map((d) => `<span style="left:${dbPct(d).toFixed(1)}%">${d === 0 ? '0' : d}</span>`).join('')}</div>`
+function meterRow(key, n, name, mt, { muted = false, hint = '' } = {}) {
+	const silent = mt.level === null || mt.level < -89
+	return `<div class="mrow${muted ? ' muted' : ''}${silent && !muted ? ' silent' : ''}${mt.clip ? ' clip' : ''}" data-m="${esc(key)}" title="${esc(hint || name || n)}"><span class="mn">${esc(n)}</span><span class="mname">${esc(name) || '<small>–</small>'}</span><span class="mbar"><i class="mfill ${dbClass(mt.level)}" style="width:${dbPct(mt.level).toFixed(1)}%"></i><b class="mpeak" style="left:${dbPct(mt.peak).toFixed(1)}%"></b></span><span class="mdb">${fmtDb(mt.level)}</span></div>`
+}
+// the tile strips: thin vertical bars, one per X32 channel plus the main pair; one per receiver channel (battery)
+function stripHtml(s, kind) {
+	const au = s.audio
+	if (kind === 'x32') {
+		const live = (au?.consoles || []).filter((c) => c.ok)
+		if (!live.length) return `<div class="nosp" title="${esc((au?.consoles || []).map((c) => `${c.name}: ${c.error || 'no meters'}`).join(' · ') || 'no console')}"></div>`
+		return `<div class="vstrips">${live
+			.map((c) => `<div class="vstrip" data-vstrip="x32:${esc(c.ip)}" title="${esc(c.console?.name || c.name)} · channels 1–32, then main L/R"><span class="vgrp">${c.channels.map((m) => `<i data-v="ch" class="${dbClass(m.level)}" style="height:${dbPct(m.level).toFixed(0)}%"></i>`).join('')}</span><span class="vgrp main">${c.main.slice(0, 2).map((m) => `<i data-v="main" class="${dbClass(m.level)}" style="height:${dbPct(m.level).toFixed(0)}%"></i>`).join('')}</span></div>`)
+			.join('')}</div>`
+	}
+	if (kind === 'mics') {
+		const rx = (au?.mics || []).filter((m) => m.ok)
+		if (!rx.length) return `<div class="nosp" title="${esc((au?.mics || []).map((m) => `${m.name}: ${m.error || ''}`).join(' · ') || 'no receiver')}"></div>`
+		return `<div class="vstrips mics">${rx
+			.map((m) => `<div class="vstrip" title="${esc(m.name)} · battery per channel">${m.channels.map((ch) => `<span class="vmic${ch.link ? '' : ' off'}" title="${esc(ch.name || ch.id)}: ${ch.link ? `battery ${ch.battery ?? '?'} % · RF ${ch.rsqi ?? '?'} %` : 'transmitter off'}"><i class="${ch.battery === null ? '' : ch.battery < 10 ? 'hot' : ch.battery < 20 ? 'warm' : ''}" style="height:${ch.link ? ch.battery ?? 0 : 0}%"></i><em>${esc((ch.name || ch.id).slice(0, 5))}</em></span>`).join('')}</div>`)
+			.join('')}</div>`
+	}
+	return ''
+}
+function consolePanel(c) {
+	const lamp = c.ok ? 'online' : c.online === false ? 'offline' : 'unresponsive'
+	const head = `<h4 class="click" data-sel="equipment:${esc(c.ip)}"><span class="tally ${lamp}"></span>${esc(c.name)} <small>${c.console ? `${esc(c.console.name)} · ${esc(c.console.model)} · fw ${esc(c.console.firmware)} · ` : ''}${esc(c.ip)} · ${c.ok ? `meters live · ${c.rate} updates/s · since ${fmtTime(c.since)} · ${c.active} channel${c.active === 1 ? '' : 's'} with signal` : `<span class="warn">${esc(c.error || 'no meters')}</span>`}</small></h4>`
+	if (!c.ok) return `<div class="x32p">${head}<div class="empty">${c.online === false ? 'the console is not on the network' : c.answered ? 'the console answers OSC but no meter data arrives (the subscription is renewed every 8 s)' : 'no answer on UDP 10023 (OSC): is the console on, and reachable from this computer?'}</div></div>`
+	const col = (title, rows) => `<div class="mcol"><div class="mhead">${title}</div>${SCALE}${rows.join('')}</div>`
+	const ch = (from, to) => c.channels.slice(from, to).map((m) => meterRow(`x32:${c.ip}:ch:${m.n - 1}`, m.n, m.name, m, { muted: m.on === false, hint: `channel ${m.n}${m.name ? ' ' + m.name : ''}${m.on === false ? ' · muted' : ''}` }))
+	const buses = c.buses.map((m) => meterRow(`x32:${c.ip}:bus:${m.n - 1}`, 'B' + m.n, m.name, m, { muted: m.on === false, hint: `mix bus ${m.n}${m.name ? ' ' + m.name : ''}` }))
+	const mtx = c.matrix.map((m) => meterRow(`x32:${c.ip}:mtx:${m.n - 1}`, 'M' + m.n, m.name, m, { hint: `matrix ${m.n}${m.name ? ' ' + m.name : ''}` }))
+	const main = c.main.map((m, i) => meterRow(`x32:${c.ip}:main:${i}`, ['L', 'R', 'M'][i], m.name, m, { hint: m.name }))
+	return `<div class="x32p">${head}<div class="mcols">${col('Channels 1–16', ch(0, 16))}${col('Channels 17–32', ch(16, 32))}${col('Mix buses · matrix · main', [...buses, ...mtx, '<div class="msep"></div>', ...main])}</div></div>`
+}
+function micRows(m) {
+	if (!m.ok) return `<tr class="click off" data-sel="equipment:${esc(m.ip)}"><td><span class="tally ${m.online === false ? 'offline' : 'unresponsive'}"></span></td><td><b>${esc(m.name)}</b><small class="mono">${esc(m.ip)}</small></td><td colspan="6"><span class="warn">${esc(m.error || 'not answering')}</span><small>${m.online === false ? 'not on the network' : 'on the network, but Sennheiser Sound Control (JSON over UDP 45) gets no answer: is this really an EW-DX receiver, and can this computer reach the Dante VLAN?'}</small></td></tr>`
+	return m.channels
+		.map((ch) => {
+			const key = `mic:${m.ip}:${ch.id}`
+			const batt = ch.battery
+			const bcls = batt === null ? '' : batt < 10 ? 'hot' : batt < 20 ? 'warm' : ''
+			const rf = ch.rsqi
+			const rcls = rf === null ? '' : rf < 30 ? 'warm' : ''
+			return `<tr class="click${ch.link ? '' : ' off'}" data-sel="equipment:${esc(m.ip)}" data-mic="${esc(key)}">
+			<td><span class="tally ${ch.link ? 'online' : ''}"></span></td>
+			<td><b>${esc(ch.name || ch.id.toUpperCase())}</b><small>${esc(m.name)} · ${esc(ch.id.toUpperCase())}${m.product ? ' · ' + esc(m.product) : ''}</small></td>
+			<td class="num">${ch.frequency ? ch.frequency.toFixed(3) + ' MHz' : '–'}<small>${ch.gain !== null ? 'gain ' + ch.gain + ' dB' : ''}</small></td>
+			<td>${ch.link ? `<span class="ok">on air</span><small>${esc(ch.tx?.name || '')}${ch.tx?.type ? (ch.tx?.name ? ' · ' : '') + esc(ch.tx.type) : ''}${ch.tx?.mute ? ' · <span class="warn">muted at the transmitter</span>' : ''}</small>` : `transmitter off<small>no link with the receiver</small>`}</td>
+			<td class="mcell"><span class="hbar"><i class="${bcls}" data-f="batt" style="width:${batt ?? 0}%"></i></span><em data-f="battTxt">${batt !== null ? batt + ' %' : '–'}</em><small>${ch.batteryMinutes ? 'about ' + fmtMinutes(ch.batteryMinutes) + ' left' : ch.batteryType ? esc(ch.batteryType) : ''}</small></td>
+			<td class="mcell"><span class="hbar"><i class="${rcls}" data-f="rf" style="width:${rf ?? 0}%"></i></span><em data-f="rfTxt">${rf !== null ? rf + ' %' : '–'}</em><small data-f="rssi">${ch.rssi !== null ? ch.rssi + ' dBm' : ''}${ch.antenna ? ' · antenna ' + ch.antenna : ''}</small></td>
+			<td class="mcell"><span class="hbar af"><i class="${dbClass(ch.af)}" data-f="af" style="width:${dbPct(ch.af).toFixed(1)}%"></i></span><em data-f="afTxt">${fmtDb(ch.af)}</em>${ch.mute ? '<small class="warn">muted at the receiver</small>' : '<small>dBFS</small>'}</td>
+			<td>${ch.warningText.length ? ch.warningText.map((w) => `<span class="tag blocked">${esc(w)}</span>`).join(' ') : ch.link ? '<small>none</small>' : ''}</td></tr>`
+		})
+		.join('')
+}
+function switcherPanel(sw) {
+	if (!sw) return ''
+	const head = `<h4 class="click" data-sel="equipment:${esc(sw.ip)}"><span class="tally ${sw.levels ? 'online' : sw.mode === 'own' && sw.held ? 'unresponsive' : ''}"></span>${esc(sw.name)} · Fairlight <small>${sw.mode === 'own' ? (sw.held ? (sw.levels ? `levels live · ${sw.levels.sources.length} inputs` : 'own session held · waiting for the first levels') : 'own session not held right now') : `read through ${esc(sw.mode)}`}</small></h4>`
+	if (!sw.levels) return `<div class="x32p">${head}<div class="empty">${esc(sw.note || 'no levels yet')}</div></div>`
+	const L = sw.levels
+	const rows = L.sources.map((x) => meterRow(`atem:${x.id}`, x.id < 1000 ? x.id : '', x.label, { level: x.level, peak: x.peak }, { hint: `${x.label} · input ${fmtDb(x.input)} dBFS` }))
+	const master = L.master ? [meterRow('atem:master', 'Σ', 'Master', { level: L.master.level, peak: L.master.peak }, { hint: 'master out' })] : []
+	const half = Math.ceil(rows.length / 2)
+	return `<div class="x32p">${head}<div class="mcols">${[rows.slice(0, half), rows.slice(half), master].filter((r) => r.length).map((r, i) => `<div class="mcol"><div class="mhead">${i === 2 || (i === 1 && !rows.slice(half).length) ? 'Master' : 'Inputs'}</div>${SCALE}${r.join('')}</div>`).join('')}</div><p class="mnote">Levels are decoded from the switcher's FDLv / FMLv commands as the official SDK lays them out; they have not been checked against a live switcher yet (an own session is needed and the HD8's slots are taken on show days).</p></div>`
+}
+function renderAudio(s) {
+	const au = s.audio
+	const panel = $('audioPanel')
+	if (!au) {
+		$('audioNote').textContent = ''
+		panel.innerHTML = '<div class="empty">waiting for the first poll</div>'
+		return
+	}
+	const sm = au.summary
+	$('audioNote').textContent = [`${sm.consolesLive}/${sm.consoles} console${sm.consoles === 1 ? '' : 's'} sending meters`, sm.receivers ? `${sm.receiversAnswering}/${sm.receivers} receivers answering · ${sm.onAir}/${sm.channels} mics on air` : '', 'X32 over OSC · EW-DX over SSC · levels in dBFS, peak held 1.5 s'].filter(Boolean).join(' · ')
+	const consoles = au.consoles.map(consolePanel).join('')
+	const mics = au.mics.length ? `<div class="micp"><h4>Wireless mics <small>Sennheiser EW-DX over SSC · battery and RF per receiver channel · ${sm.onAir}/${sm.channels} on air</small></h4><table class="mics"><thead><tr><th></th><th>Channel</th><th class="num">Frequency</th><th>Transmitter</th><th>Battery</th><th>RF quality</th><th>Audio</th><th>Warnings</th></tr></thead><tbody>${au.mics.map(micRows).join('')}</tbody></table></div>` : ''
+	const others = au.others.length ? `<div class="micp"><h4>Other audio devices in the roster <small>nothing to read from them</small></h4>${au.others.map((o) => `<div class="orow click" data-sel="equipment:${esc(o.ip)}"><span class="tally ${o.online ? 'online' : 'offline'}"></span><b>${esc(o.name)}</b><span class="mono">${esc(o.ip)}</span><small>${esc(o.note)}</small></div>`).join('')}</div>` : ''
+	const empty = !au.consoles.length && !au.mics.length && !au.others.length && !au.switcher ? '<div class="empty">no audio devices in the roster: give an X32 the probe "x32", name a Sennheiser receiver so it says so (EW-DX, receiver), role "audio"</div>' : ''
+	panel.innerHTML = consoles + mics + switcherPanel(au.switcher) + others + empty
+	indexMeters()
+}
+// re-index the live meter elements after any render that may have replaced them
+function indexMeters() {
+	meterEls.clear()
+	for (const el of document.querySelectorAll('[data-m]')) meterEls.set(el.getAttribute('data-m'), { el, fill: el.querySelector('.mfill'), peak: el.querySelector('.mpeak'), db: el.querySelector('.mdb') })
+	stripEls.clear()
+	for (const el of document.querySelectorAll('[data-vstrip]')) stripEls.set(el.getAttribute('data-vstrip'), { ch: [...el.querySelectorAll('[data-v="ch"]')], main: [...el.querySelectorAll('[data-v="main"]')] })
+	for (const tr of document.querySelectorAll('[data-mic]')) meterEls.set(tr.getAttribute('data-mic'), { el: tr, af: tr.querySelector('[data-f="af"]'), afTxt: tr.querySelector('[data-f="afTxt"]'), rf: tr.querySelector('[data-f="rf"]'), rfTxt: tr.querySelector('[data-f="rfTxt"]'), rssi: tr.querySelector('[data-f="rssi"]') })
+}
+function setMeter(m, level, peak, flags = 0) {
+	if (!m || !m.fill) return
+	m.fill.style.width = dbPct(level).toFixed(1) + '%'
+	m.fill.className = 'mfill ' + dbClass(level)
+	if (m.peak) m.peak.style.left = dbPct(peak).toFixed(1) + '%'
+	if (m.db) m.db.textContent = fmtDb(level)
+	m.el.classList.toggle('muted', !!(flags & 1))
+	m.el.classList.toggle('clip', !!(flags & 2))
+	m.el.classList.toggle('silent', level < -89 && !(flags & 1))
+}
+// the "meters" event, up to five times a second: move the bars that exist, never re-render
+function applyMeters(m) {
+	if (!m || !meterEls.size) return
+	for (const [ip, c] of Object.entries(m.x32 || {})) {
+		for (const [g, list] of Object.entries({ ch: c.ch, bus: c.bus, mtx: c.mtx, main: c.main })) list.forEach((v, i) => setMeter(meterEls.get(`x32:${ip}:${g}:${i}`), v[0], v[1], v[2]))
+		const st = stripEls.get(`x32:${ip}`)
+		if (st) {
+			c.ch.forEach((v, i) => st.ch[i] && ((st.ch[i].style.height = dbPct(v[0]).toFixed(0) + '%'), (st.ch[i].className = dbClass(v[0]))))
+			c.main.forEach((v, i) => st.main[i] && ((st.main[i].style.height = dbPct(v[0]).toFixed(0) + '%'), (st.main[i].className = dbClass(v[0]))))
+		}
+	}
+	for (const [ip, rx] of Object.entries(m.mic || {})) {
+		for (const [id, v] of Object.entries(rx)) {
+			const r = meterEls.get(`mic:${ip}:${id}`)
+			if (!r || !r.af) continue
+			const [af, rsqi, rssi, link] = v
+			r.af.style.width = dbPct(af).toFixed(1) + '%'
+			r.af.className = dbClass(af)
+			if (r.afTxt) r.afTxt.textContent = fmtDb(af)
+			if (r.rf) {
+				r.rf.style.width = (rsqi ?? 0) + '%'
+				r.rf.className = rsqi === null ? '' : rsqi < 30 ? 'warm' : ''
+			}
+			if (r.rfTxt) r.rfTxt.textContent = rsqi !== null ? rsqi + ' %' : '–'
+			if (r.rssi && rssi !== null) r.rssi.textContent = rssi + ' dBm'
+			r.el.classList.toggle('off', !link)
+		}
+	}
+	if (m.atem) {
+		for (const x of m.atem.sources || []) setMeter(meterEls.get(`atem:${x.id}`), x.level, x.peak)
+		if (m.atem.master) setMeter(meterEls.get('atem:master'), m.atem.master.level, m.atem.master.peak)
+	}
+}
+// the inspector's audio lines for an X32 or a receiver
+function audioSection(e) {
+	const a = e.audio
+	if (!a) return ''
+	if (a.kind === 'x32') return `<h3>Meters</h3><div class="kv"><span>Console</span><b>${a.console ? `${esc(a.console.name)} · ${esc(a.console.model)} · fw ${esc(a.console.firmware)}` : '–'}</b><span>Meters</span><b class="${a.ok ? 'ok' : 'bad'}">${a.ok ? `live · ${a.rate}/s · ${a.active} channel${a.active === 1 ? '' : 's'} with signal` : esc(a.error || 'none')}</b>${a.ok ? `<span>Main</span><b>${a.mainLevel !== null && a.mainLevel > -60 ? a.mainLevel.toFixed(1) + ' dBFS' : 'quiet'}</b>` : ''}</div><p>The full meters are in the Audio section.</p>`
+	if (a.kind === 'ewdx') return `<h3>Receiver channels</h3>${a.ok ? `<div class="kv">${a.channels.map((ch) => `<span>${esc(ch.name || ch.id)}</span><b>${ch.link ? `<span class="ok">on air</span> · battery ${ch.battery ?? '?'} % · RF ${ch.rsqi ?? '?'} %${ch.rssi !== null ? ' (' + ch.rssi + ' dBm)' : ''} · AF ${fmtDb(ch.af)} dBFS${ch.mute || ch.tx?.mute ? ' · <span class="warn">muted</span>' : ''}${ch.warningText.length ? ' · ' + esc(ch.warningText.join(', ')) : ''}` : 'transmitter off'}${ch.frequency ? ` · ${ch.frequency.toFixed(3)} MHz` : ''}</b>`).join('')}</div>` : `<p class="warn">${esc(a.error || 'not answering')}</p>`}<p>${a.product ? esc(a.product) + ' · ' : ''}Sennheiser Sound Control over UDP 45.</p>`
+	return ''
 }
 function tileClick(id) {
 	const t = (state?.tiles || []).find((x) => x.id === id)
@@ -724,6 +876,7 @@ function renderInspector() {
 	}
 	if (ent) parts.push(entitySection(type, ent))
 	if (type === 'equipment' && ent && ent.active && (ent.telemetry?.kind === 'atem' || ent.role === 'switcher')) parts.push(sessionSection(ent))
+	if (type === 'equipment' && ent?.audio) parts.push(audioSection(ent))
 	if (type === 'equipment' && ent) parts.push(`<div class="insp-actions">${ent.active ? `<button class="btn quiet" data-standby="${esc(ent.ip)}">Put on standby (not part of this broadcast)</button>` : `<button class="btn" data-activate="${esc(ent.ip)}">Add to this broadcast</button>`}<button class="btn quiet" id="editRosterInsp">Edit roster</button></div>`)
 	if (type === 'equipment' && ent?.history) parts.push(`<h3>Traffic · last ${Math.round((ent.history.down.length * 5) / 60)} min</h3>${scope('insp', [{ data: ent.history.down, color: 'in' }, { data: ent.history.up, color: 'out' }], 'spark')}`)
 	if (type === 'switch' && ent?.history) parts.push(`<h3>Traffic · all ports</h3>${scope('insp', [{ data: ent.history.down, color: 'in' }, { data: ent.history.up, color: 'out' }], 'spark')}`)
@@ -835,9 +988,10 @@ function sessionSection(e) {
 	const ownTxt = !own ? 'none' : own.state === 'connected' ? `<span class="ok">held since ${fmtTime(own.connectedAt)}</span> · ${own.commands} updates${own.captured ? ` · ${own.captured} remote-source commands captured` : ''}` : own.state === 'refused' ? `<span class="warn">refused (${esc(own.error)})</span> at ${fmtTime(own.lastHello)} · ${own.refusals} in a row · next hello ${own.retryAt ? fmtTime(own.retryAt) : '–'}` : own.closed || own.error === 'released' ? 'released' : `${esc(own.state)}${own.error ? ' · ' + esc(own.error) : ''}${own.retryAt ? ' · next hello ' + fmtTime(own.retryAt) : ''}`
 	const compTxt = comp ? (comp.ok ? (comp.connected ? `<span class="ok">Companion is connected to the switcher</span>` : `<span class="warn">Companion is not connected to the switcher</span>`) : `<span class="warn">${esc(comp.error || 'Companion not reachable')}</span>`) : state?.companion ? (state.companion.ok ? 'Companion reachable' : `<span class="warn">Companion not reachable at ${esc(state.companion.url)}</span>`) : ''
 	const ctl = (ses?.controllers || []).map((c) => `<li><b>${esc(c.name)}</b>${c.where ? ' · ' + esc(c.where) : ''}: ${c.held === null ? 'unknown' : c.held ? '<span class="warn">holds a slot</span>' : 'not connected'} <small>${esc(c.how)}</small></li>`).join('')
+	const levelsTxt = mode === 'own' ? (own?.levels ? `<span class="ok">live · ${own.levels.sources.length} inputs</span>` : own?.state === 'connected' ? 'asked for, waiting' : 'with the session') : 'only with an own session (Companion passes no levels)'
 	return `<h3>Control connection</h3><div class="ctl">
-		<div class="row"><span>Read the switcher</span><select id="atemMode" data-ip="${esc(e.ip)}">${[['companion', 'through Companion (no slot)'], ['auto', 'Companion, own session only if Companion is away'], ['own', 'with Broadwatcher’s own session (one slot)'], ['none', 'not at all']].map(([v, l]) => `<option value="${v}" ${mode === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
-		<div class="kv" style="margin-top:4px"><span>Companion</span><b>${compTxt || '–'}</b><span>Own session</span><b>${ownTxt}</b></div>
+		<div class="row"><span>Read the switcher</span><select id="atemMode" data-ip="${esc(e.ip)}">${[['companion', 'through Companion (no slot)'], ['auto', 'Companion, own session only if Companion is away'], ['own', 'with Broadwatcher’s own session (one slot, Fairlight levels)'], ['none', 'not at all']].map(([v, l]) => `<option value="${v}" ${mode === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+		<div class="kv" style="margin-top:4px"><span>Companion</span><b>${compTxt || '–'}</b><span>Own session</span><b>${ownTxt}</b><span>Fairlight levels</span><b>${levelsTxt}</b></div>
 		<div class="row" style="margin-top:8px">${own && own.state === 'connected' ? `<button class="btn quiet" data-atem-session="release" data-ip="${esc(e.ip)}">Release the slot</button>` : mode === 'own' || mode === 'auto' ? `<button class="btn quiet" data-atem-session="connect" data-ip="${esc(e.ip)}">Try to connect now</button>` : ''}${own && own.captured ? `<button class="btn quiet" data-capture="${esc(e.ip)}">Show protocol capture</button>` : ''}</div>
 		<p style="margin:8px 0 2px">An ATEM keeps only a handful of control slots, and a program that was closed keeps its slot for ~${Math.round((ses?.holdMs || 120000) / 60000)} min. Known slot holders:</p><ul>${ctl || '<li>none listed (config.json → atem.controllers)</li>'}</ul></div><div id="captureOut"></div>`
 }
@@ -944,6 +1098,7 @@ function render(s) {
 	renderMap(s)
 	if (!folded('atemBlock')) renderAtem(s)
 	if (!folded('pathBlock')) renderPaths(s)
+	if (!folded('audioBlock')) renderAudio(s)
 	if (!folded('forBlock')) renderForensics(s)
 	if (!folded('rackBlock') && !labelEdit) renderRack(s)
 	if (!folded('patchBlock')) renderPatch(s)
@@ -969,6 +1124,7 @@ function connect() {
 	es.addEventListener('event', () => {
 		if (selection) refreshInspector()
 	})
+	es.addEventListener('meters', (e) => applyMeters(JSON.parse(e.data)))
 	es.onerror = () => {
 		$('readyVerdict').textContent = 'Reconnecting'
 		$('readyLamp').className = 'lamp down'

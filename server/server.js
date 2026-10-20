@@ -1,6 +1,8 @@
 // Broadwatcher server: runs the collector, serves the dashboard (ui/) and a live feed.
 //   GET  /api/state                 full current state (JSON)
-//   GET  /api/events                server-sent events: "state" after every device poll, "event" for the tape
+//   GET  /api/events                server-sent events: "state" after every device poll, "event" for the tape,
+//                                   "meters" (X32 levels, EW-DX AF/RF, Fairlight levels) up to five times a second
+//   GET  /api/audio                 the audio part of the state (consoles, receivers, the switcher's levels)
 //   GET  /api/details?type=&id=     inspector data for an alert / switch / port / equipment / atem / wan / path
 //   GET  /api/ai/status             AI availability + the cached assessment
 //   GET  /api/ai/assess[?refresh=1] broadcast-readiness verdict (cached)
@@ -133,7 +135,7 @@ function settingsView(config, ai, configPath, forensics = null, collectorNetwork
 		snmp: { community: config.snmp?.community || '', every_s: config.snmp?.every_s || 3 },
 		companion: { url: config.companion?.url || 'http://127.0.0.1:8000', atem_label: config.companion?.atem_label || 'atem', autostart: config.companion?.autostart !== false },
 		server: { host: config.server?.host || '127.0.0.1', port: config.server?.port || 8766 },
-		thresholds: { wan_latency_ms: 80, cpu_pct: 85, mem_pct: 90, temp_c: 70, stream_min_mbps: 1.5, ...Object.fromEntries(Object.entries(config.thresholds || {}).filter(([k]) => !k.startsWith('_'))) },
+		thresholds: { wan_latency_ms: 80, cpu_pct: 85, mem_pct: 90, temp_c: 70, stream_min_mbps: 1.5, mic_battery_pct: 20, mic_rf_pct: 30, ...Object.fromEntries(Object.entries(config.thresholds || {}).filter(([k]) => !k.startsWith('_'))) },
 		poll: { devices_s: 5, clients_s: 10, flows_s: 10, log_s: 30, probe_s: 15, telemetry_s: 10, ...(config.poll || {}) },
 		atem: { name: config.atem?.name || '', ip: config.atem?.ip || '', session: config.atem?.session || 'companion' },
 	}
@@ -191,6 +193,7 @@ export function startServer({ config, configPath = null, host = '127.0.0.1', por
 		collector = new Collector(config, log)
 		collector.on('state', (state) => broadcast('state', state))
 		collector.on('event', (ev) => broadcast('event', ev))
+		collector.on('meters', (m) => broadcast('meters', m)) // live audio levels, at most five times a second
 		collector.start()
 		lastAlertKey = null
 	}
@@ -393,6 +396,7 @@ export function startServer({ config, configPath = null, host = '127.0.0.1', por
 			}
 			if (p === '/api/probe/test' && req.method === 'POST') return sendJson(res, { results: await collector.testProbes(), t: Date.now() })
 			if (p === '/api/health') return sendJson(res, { ok: collector.state.ok, ts: collector.state.ts, errors: collector.state.errors })
+			if (p === '/api/audio') return sendJson(res, collector.state.audio || { consoles: [], mics: [], others: [], switcher: null })
 			if (p === '/api/config') return sendJson(res, redacted())
 			if (p === '/api/details') return sendJson(res, collector.details(q.get('type'), q.get('id')))
 			if (p === '/api/equipment' && req.method === 'GET') return sendJson(res, { equipment: config.equipment, groups: [...new Set(config.equipment.map((e) => e.group))], configPath })

@@ -1,7 +1,7 @@
 {
   "_comment": "Broadwatcher Community: the public build's defaults. No keys, no site-specific devices. Everything here is edited in the app (Settings, Edit roster) on first run and saved to the user config file.",
   "flavor": "public",
-  "config_version": 6,
+  "config_version": 7,
   "gateway": {
     "name": "UniFi gateway",
     "url": "https://192.168.1.1",
@@ -28,7 +28,9 @@
     "mem_pct": 90,
     "temp_c": 70,
     "port_error_rate": 1,
-    "stream_min_mbps": 1.5
+    "stream_min_mbps": 1.5,
+    "mic_battery_pct": 20,
+    "mic_rf_pct": 30
   },
   "atem": {
     "name": "ATEM switcher",

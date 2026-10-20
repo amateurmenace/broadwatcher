@@ -96,16 +96,53 @@ export function computeHealth(state, profile, th = {}) {
 		else factor('recorders', 'Recorders', 8, 1, on ? txt : `idle (not expected in "${profile?.name || 'this profile'}")`, { target: decks[0] ? { type: 'equipment', id: decks[0].ip } : { type: 'atem' } })
 	}
 
-	// ---- audio: X32 consoles answer OSC; Dante VLAN; mics
+	// ---- audio: the X32 consoles stream their meters (OSC); the wireless mics report link, battery and RF (SSC)
+	const au = state.audio
 	const consoles = eq.filter((e) => /^x32/.test(String(e.probeSpec || '')))
-	const consolesOk = consoles.filter((e) => e.probe?.ok)
 	if (!consoles.length) factor('audio', 'Audio', 6, 0, 'no X32 in the roster', { na: true })
-	else factor('audio', 'Audio', 6, consolesOk.length / consoles.length, consolesOk.length === consoles.length ? `${consoles.map((e) => e.probe?.info?.name || e.name).join(', ')} answering` : `${consoles.filter((e) => !e.probe?.ok).map((e) => e.name).join(', ')} not answering`, { target: { type: 'equipment', id: consoles[0].ip } })
+	else {
+		const snap = (e) => (au?.consoles || []).find((c) => c.ip === e.ip) || null
+		const live = consoles.filter((e) => snap(e)?.ok)
+		const quiet = consoles.filter((e) => !snap(e)?.ok && (snap(e)?.answered || e.probe?.ok))
+		const dead = consoles.filter((e) => !live.includes(e) && !quiet.includes(e))
+		const v = (live.length + quiet.length * 0.6) / consoles.length
+		const liveTxt = live.map((e) => {
+			const c = snap(e)
+			return `${c.console?.name || e.name}: ${c.active} channel${c.active === 1 ? '' : 's'} with signal, main ${c.mainLevel !== null && c.mainLevel > -60 ? c.mainLevel.toFixed(0) + ' dBFS' : 'quiet'}`
+		})
+		const badTxt = [...quiet.map((e) => `${e.name} answers but sends no meters`), ...dead.map((e) => `${e.name} not answering`)]
+		factor('audio', 'Audio', 6, v, [...liveTxt, ...badTxt].join(' · ') || 'waiting for the first meters', { target: { type: 'equipment', id: (dead[0] || quiet[0] || consoles[0]).ip } })
+	}
 	const mics = eq.filter(isMic)
 	if (!mics.length) factor('mics', 'Mics', 4, 0, 'no wireless receivers in the roster', { na: true })
 	else {
-		const up = mics.filter((e) => e.online)
-		factor('mics', 'Mics', 4, expect.mics ? up.length / mics.length : 1, `${up.length}/${mics.length} receivers on the network${expect.mics && up.length < mics.length ? ' (the profile expects all)' : ''} · RF and battery need SSC (roadmap)`, { target: { type: 'equipment', id: mics[0].ip } })
+		const snap = (e) => (au?.mics || []).find((m) => m.ip === e.ip) || null
+		const answering = mics.filter((e) => snap(e)?.ok)
+		const silent = mics.filter((e) => !snap(e)?.ok)
+		const chans = answering.flatMap((e) => snap(e).channels.map((c) => ({ ...c, rxIp: e.ip, who: c.name || c.id })))
+		const linked = chans.filter((c) => c.link)
+		const lowBatt = linked.filter((c) => c.battery !== null && c.battery < num(th.mic_battery_pct || 20))
+		const weakRf = linked.filter((c) => c.rsqi !== null && c.rsqi < num(th.mic_rf_pct || 30))
+		const muted = linked.filter((c) => c.mute || c.tx?.mute)
+		const problems = [...lowBatt.map((c) => `${c.who} battery ${c.battery} %`), ...weakRf.map((c) => `${c.who} RF ${c.rsqi} %`), ...(expect.mics ? muted.map((c) => `${c.who} muted`) : [])]
+		const worst = lowBatt[0] || weakRf[0] || (expect.mics ? muted[0] : null) || null
+		let v
+		let reason
+		if (!answering.length) {
+			const up = mics.filter((e) => e.online)
+			v = expect.mics ? 0 : up.length ? 0.9 : 0.6
+			reason = `${up.length}/${mics.length} receivers on the network, none answering SSC (UDP 45)${expect.mics ? ' · the profile expects mics' : ''}`
+		} else if (expect.mics) {
+			// spare channels with the transmitter off do not count against a show; the ones on air must be healthy
+			const good = linked.filter((c) => !lowBatt.includes(c) && !weakRf.includes(c) && !muted.includes(c)).length
+			v = linked.length ? good / linked.length : 0.2
+			reason = linked.length ? `${linked.length}/${chans.length} mics on air${problems.length ? ' · ' + problems.join(', ') : ' · batteries and RF fine'}` : `${chans.length} receiver channels, no transmitter on (the profile expects mics)`
+		} else {
+			v = problems.length ? 0.7 : 1
+			reason = linked.length ? `${linked.length}/${chans.length} mics on${problems.length ? ' · ' + problems.join(', ') : ' · batteries and RF fine'}` : `${answering.length} receiver${answering.length === 1 ? '' : 's'} answering, transmitters off (none expected in "${profile?.name || 'this profile'}")`
+		}
+		if (silent.length && answering.length) reason += ` · ${silent.map((e) => e.name).join(', ')} not answering SSC`
+		factor('mics', 'Mics', 4, v, reason, { target: { type: 'equipment', id: worst?.rxIp || silent[0]?.ip || mics[0].ip } })
 	}
 	const vlan = (re) => (state.networks || []).filter((n) => re.test(n.name))
 	const dante = vlan(/dante/i)
@@ -144,7 +181,7 @@ export function computeHealth(state, profile, th = {}) {
 }
 
 // wireless receivers: by name (EW-DX, "receiver", "wireless mic") or by vendor (Sennheiser, Shure)
-const isMic = (e) => /ew-?dx|\breceiver\b|wireless\s*mic|\bmics?\b/i.test(e.name || '') || /sennheiser|shure/i.test(e.oui || '')
+export const isMic = (e) => /ew-?dx?\b|\breceiver\b|wireless\s*mic|\bmics?\b/i.test(e.name || '') || /sennheiser|shure/i.test(e.oui || '')
 
 function sameSubnet(ip, cidr) {
 	const [net, bitsStr] = String(cidr).split('/')
@@ -168,6 +205,9 @@ export function tiles(state, health) {
 	const rolling = decks.filter((e) => e.telemetry.recording)
 	const consoles = eq.filter((e) => /^x32/.test(String(e.probeSpec || '')))
 	const mics = eq.filter(isMic)
+	const au = state.audio
+	const consolesLive = (au?.consoles || []).filter((c) => c.ok && consoles.some((e) => e.ip === c.ip))
+	const micChans = (au?.mics || []).filter((m) => m.ok && mics.some((e) => e.ip === m.ip)).flatMap((m) => m.channels)
 	const nets = state.networks || []
 	const dante = nets.filter((n) => /dante/i.test(n.name))
 	const ndi = nets.filter((n) => /ndi/i.test(n.name))
@@ -181,10 +221,10 @@ export function tiles(state, health) {
 	return [
 		{ id: 'stream_out', label: 'Stream out', level: lvl('stream_out'), value: live.length ? rate(outRate) : enc ? enc.telemetry.status || 'idle' : '–', line: f.stream_out?.reason || '', series: enc ? enc.history?.up || [] : [], target: f.stream_out?.target || (enc ? { type: 'equipment', id: enc.ip } : null) },
 		{ id: 'stream_in', label: 'Stream in', level: lvl('stream_in'), value: hero ? rate(hero.down) : '–', line: f.stream_in?.reason || '', series: hero ? hero.history?.down || [] : [], target: f.stream_in?.target || { type: 'atem' } },
-		{ id: 'audio', label: 'Audio', level: lvl('audio'), value: consoles.length ? `${consoles.filter((e) => e.probe?.ok).length}/${consoles.length}` : '–', line: f.audio?.reason || '', series: [], target: f.audio?.target || null, note: 'meters: roadmap' },
+		{ id: 'audio', label: 'Audio', level: lvl('audio'), value: consoles.length ? `${consolesLive.length}/${consoles.length}` : '–', line: f.audio?.reason || '', series: [], target: f.audio?.target || null, unit: consoles.length ? 'consoles live' : '', strip: 'x32' },
 		{ id: 'dante', label: 'Dante', level: lvl('dante'), value: dante.length ? `${dante.reduce((n, v) => n + num(v.clients), 0)}` : '–', line: f.dante?.reason || '', series: sum(dante.map((n) => n.history?.down || [])), target: f.dante?.target || null, unit: 'devices' },
 		{ id: 'ndi', label: 'NDI', level: lvl('ndi'), value: ndi.length ? rate(ndi.reduce((n, v) => n + num(v.down) + num(v.up), 0)) : '–', line: f.ndi?.reason || '', series: sum(ndi.map((n) => n.history?.down || [])), target: f.ndi?.target || null },
-		{ id: 'mics', label: 'Mics', level: lvl('mics'), value: mics.length ? `${mics.filter((e) => e.online).length}/${mics.length}` : '–', line: f.mics?.reason || '', series: [], target: f.mics?.target || null },
+		{ id: 'mics', label: 'Mics', level: lvl('mics'), value: !mics.length ? '–' : micChans.length ? `${micChans.filter((c) => c.link).length}/${micChans.length}` : `${mics.filter((e) => e.online).length}/${mics.length}`, unit: !mics.length ? '' : micChans.length ? 'on air' : 'receivers', line: f.mics?.reason || '', series: [], target: f.mics?.target || null, strip: 'mics' },
 		{ id: 'network', label: 'Network', level: ['wan', 'switches', 'errors', 'links', 'util', 'gateway'].map(lvl).includes('bad') ? 'bad' : ['wan', 'switches', 'errors', 'links', 'util', 'gateway'].map(lvl).includes('warn') ? 'warn' : 'ok', value: gw ? `${sw.filter((s) => s.online).length}/${sw.length}` : '–', line: [f.wan, f.switches, f.errors, f.links, f.util].filter((x) => x && x.value !== null && x.value < 1).map((x) => x.reason)[0] || `${f.wan?.reason || ''}`, series: gw ? gw.wan.history?.down || [] : [], target: { type: 'section', id: 'rackBlock' }, unit: 'switches' },
 		{ id: 'recorders', label: 'Recorders', level: lvl('recorders'), value: decks.length || hero?.telemetry?.recording ? `${rolling.length + (hero?.telemetry?.recording?.active ? 1 : 0)}/${decks.length + (hero?.telemetry?.recording ? 1 : 0)}` : '–', line: f.recorders?.reason || '', series: [], target: f.recorders?.target || null, unit: 'rolling' },
 	]

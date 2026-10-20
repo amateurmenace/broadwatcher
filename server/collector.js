@@ -13,7 +13,9 @@ import { telemetry as restTelemetry } from './rest.js'
 import { AtemClient } from './atem.js'
 import { SnmpSwitch } from './snmp.js'
 import { Companion } from './companion.js'
-import { computeHealth, tiles, PROFILE_DEFAULTS } from './health.js'
+import { X32Meters } from './x32.js'
+import { SscMonitor } from './ssc.js'
+import { computeHealth, tiles, PROFILE_DEFAULTS, isMic } from './health.js'
 import { execFile } from 'node:child_process'
 
 const num = (x) => {
@@ -72,7 +74,7 @@ export class Collector extends EventEmitter {
 		this.log = log
 		this.api = new UniFi(config.gateway)
 		this.poll = { devices_s: 5, clients_s: 10, flows_s: 10, log_s: 30, probe_s: 15, telemetry_s: 10, history_points: 120, ...(config.poll || {}) }
-		this.th = { wan_latency_ms: 80, cpu_pct: 85, mem_pct: 90, temp_c: 70, stream_min_mbps: 1.5, ...(config.thresholds || {}) }
+		this.th = { wan_latency_ms: 80, cpu_pct: 85, mem_pct: 90, temp_c: 70, stream_min_mbps: 1.5, mic_battery_pct: 20, mic_rf_pct: 30, ...(config.thresholds || {}) }
 		this.state = {
 			ts: 0,
 			started: Date.now(),
@@ -94,6 +96,7 @@ export class Collector extends EventEmitter {
 			updated: {},
 			streamPaths: [],
 			companion: null,
+			audio: null,
 		}
 		this.portLabels = config.port_labels || {} // "switchmac:port" -> {name, ip, note}: what is really on a port when UniFi cannot tell
 		this.profiles = Array.isArray(config.profiles) && config.profiles.length ? config.profiles : PROFILE_DEFAULTS.map((p) => ({ ...p, expect: { ...p.expect } }))
@@ -103,6 +106,9 @@ export class Collector extends EventEmitter {
 		this.state.profiles = { list: this.profiles.map((p) => ({ id: p.id, name: p.name, expect: p.expect, roster: p.roster || null })), active: this.activeProfile }
 		this.companion = new Companion(config.companion || {}, log)
 		this.companionState = new Map() // atem ip -> {lastOk, okSince} for the companion/auto hysteresis
+		this.x32 = new X32Meters({ log }) // live meters from the X32 consoles (roster probe "x32")
+		this.ssc = new SscMonitor({ log }) // Sennheiser EW-DX receivers over SSC (roster role "audio" with a mic-like name or vendor)
+		this.metersSent = { x32: -1, ssc: -1, atem: 0 } // what the last "meters" event carried
 		this.forwardHits = new Map() // port-forward name -> [{t, src, srcName, region, bytes, action, wanPort}] last hour
 		this.processes = { t: 0, names: new Set() } // process census for the switcher slot list (refreshed every minute)
 		this.counters = new Map() // "mac:port" -> {rx, tx, t, down, up, tRate, errors}
@@ -159,6 +165,29 @@ export class Collector extends EventEmitter {
 		every('probe', this.poll.probe_s, () => this.pollProbes())
 		every('telemetry', this.poll.telemetry_s, () => this.pollTelemetry())
 		if (this.snmp.cfg.community) every('snmp', this.snmp.cfg.every_s, () => this.pollSnmp())
+		this.syncAudioTargets()
+		this.x32.start()
+		this.ssc.start()
+		// live levels travel on their own event, at most five times a second and only when something moved
+		this.timers.push(setInterval(() => this.emitMeters(), 200))
+	}
+
+	// which audio devices are read live: X32 consoles = roster probe "x32"; EW-DX receivers = role "audio" with a
+	// mic-like name or vendor (isMic); only while active (standby devices are never polled). Cheap to call often.
+	syncAudioTargets() {
+		const eq = this.cfg.equipment.filter((e) => e.active !== false && e.ip)
+		const isX32 = (e) => /^x32/.test(String(e.probe || ''))
+		this.x32.setConsoles(eq.filter(isX32).map((e) => ({ ip: e.ip, name: e.name, port: Number(String(e.probe).split(':')[1]) || undefined })))
+		this.ssc.setReceivers(eq.filter((e) => e.role === 'audio' && !isX32(e) && isMic({ name: e.name, oui: this.rawClients.find((c) => c.ip === e.ip)?.oui })).map((e) => ({ ip: e.ip, name: e.name })))
+	}
+
+	// the "meters" event: X32 levels, EW-DX AF/RF, Fairlight levels (own session only), compact, when they moved
+	emitMeters() {
+		const hero = this.cfg.atem?.ip ? this.atems.get(this.cfg.atem.ip) : null
+		const atem = hero && !hero.closed && hero.wantsLevels ? hero.levelsSnapshot() : null
+		if (this.x32.version === this.metersSent.x32 && this.ssc.version === this.metersSent.ssc && (atem?.t || 0) === this.metersSent.atem) return
+		this.metersSent = { x32: this.x32.version, ssc: this.ssc.version, atem: atem?.t || 0 }
+		this.emit('meters', { t: Date.now(), x32: this.x32.compact(), mic: this.ssc.compact(), atem })
 	}
 
 	// real-time port counters straight from the switches (needs SNMP v2c enabled in UniFi); only the ports that
@@ -197,6 +226,8 @@ export class Collector extends EventEmitter {
 	stop() {
 		for (const t of this.timers) clearInterval(t)
 		this.timers = []
+		this.x32.stop()
+		this.ssc.stop()
 		for (const c of this.atems.values()) c.removeAllListeners() // the sessions themselves stay open (see ATEM_POOL)
 	}
 
@@ -358,6 +389,8 @@ export class Collector extends EventEmitter {
 				c.on('released', () => this.event('device', `${e.name}: Broadwatcher released its control connection (the switcher frees the slot in ~2 min)`, { entity: { type: 'equipment', id: e.ip } }))
 			}
 			c.ensure()
+			// Fairlight levels only on an own session (the switcher streams them on request; Companion passes none)
+			c.wantLevels(mode === 'own')
 			const snap = c.snapshot()
 			const full = c.state === 'refused' && c.error === 'too many clients'
 			const reachable = c.state === 'connected' || full
@@ -916,6 +949,10 @@ export class Collector extends EventEmitter {
 		// the mirror-port view of the switcher's traffic (when tshark runs on this machine)
 		this.state.forensics = this.forensics ? this.forensics.snapshot({ flows: 30, events: 40 }) : null
 
+		// live audio: X32 meters, EW-DX receivers, the switcher's Fairlight levels (own session only)
+		this.syncAudioTargets()
+		this.state.audio = this.audioState(now, equipment)
+
 		// ATEM hero + stream detection
 		const atemCfg = this.cfg.atem
 		if (atemCfg?.ip) {
@@ -944,6 +981,49 @@ export class Collector extends EventEmitter {
 		if (prevVerdict && prevVerdict !== this.state.health.verdict) this.event('health', `Broadcast health ${this.state.health.verdict} (${this.state.health.score}): ${this.state.health.headline}`, { level: this.state.health.verdict === 'READY' ? 'info' : this.state.health.verdict === 'DEGRADED' ? 'warn' : 'error' })
 		this.state.ts = now
 		this.state.ok = Object.keys(this.state.errors).length === 0
+	}
+
+	// everything audio for the state: the consoles (meters, names, mute), the receivers (per channel: link, battery,
+	// RF, AF, warnings), the roster's other audio devices that have nothing to read, and the switcher's Fairlight
+	// levels when Broadwatcher holds its own session. Also attaches a summary to each roster entry (`audio`).
+	audioState(now, equipment) {
+		const byIp = new Map(equipment.map((e) => [e.ip, e]))
+		const consoles = this.x32.snapshot().map((c) => {
+			const e = byIp.get(c.ip)
+			return { ...c, name: e?.name || c.name, online: e ? e.online : null }
+		})
+		const mics = this.ssc.snapshot().map((m) => {
+			const e = byIp.get(m.ip)
+			return { ...m, name: e?.name || m.name, online: e ? e.online : null }
+		})
+		const known = new Set([...consoles.map((c) => c.ip), ...mics.map((m) => m.ip)])
+		const others = equipment.filter((e) => e.active && !e.discovered && e.role === 'audio' && !known.has(e.ip)).map((e) => ({ ip: e.ip, name: e.name, online: e.online, note: e.probeSpec ? `reachability only (probe ${e.probeSpec}): no meter protocol for this device` : 'nothing to read: no probe (an X32 needs probe "x32"; a Sennheiser receiver is recognised by its name or vendor)' }))
+		const atemIp = this.cfg.atem?.ip || null
+		const hero = atemIp ? this.atems.get(atemIp) : null
+		const mode = atemIp ? this.atemMode(byIp.get(atemIp) || this.cfg.atem).mode : 'none'
+		const switcher = atemIp ? { ip: atemIp, name: this.cfg.atem.name, mode, held: !!hero && !hero.closed && hero.state === 'connected', levels: mode === 'own' && hero && !hero.closed ? hero.levelsSnapshot() : null, note: mode === 'own' ? null : 'Fairlight levels need Broadwatcher’s own switcher session (Settings › Switcher: own session); read through Companion, the switcher sends no levels' } : null
+		for (const c of consoles) {
+			const e = byIp.get(c.ip)
+			if (e) e.audio = { kind: 'x32', ok: c.ok, error: c.error, active: c.active, mainLevel: c.mainLevel, console: c.console, rate: c.rate }
+			const key = `audio:${c.ip}`
+			const sig = c.ok ? 'live' : c.answered ? 'silent' : 'gone'
+			const prev = this.prev.eq.get(key)
+			if (prev !== undefined && prev !== sig && e?.active) this.event('audio', `${c.name}: ${sig === 'live' ? `meters live (${c.console?.model || 'X32'}, ${c.rate}/s)` : sig === 'silent' ? 'answers but sends no meters' : 'meters stopped (no answer)'}`, { entity: { type: 'equipment', id: c.ip }, level: sig === 'live' ? 'info' : 'warn' })
+			this.prev.eq.set(key, sig)
+		}
+		for (const m of mics) {
+			const e = byIp.get(m.ip)
+			if (e) e.audio = { kind: 'ewdx', ok: m.ok, error: m.error, product: m.product, channels: m.channels }
+			for (const ch of m.channels) {
+				const key = `mic:${m.ip}:${ch.id}`
+				const sig = !m.ok ? 'away' : ch.link ? 'on' : 'off'
+				const prev = this.prev.eq.get(key)
+				if (prev !== undefined && prev !== sig && e?.active) this.event('audio', `${ch.name || ch.id} (${m.name}): ${sig === 'on' ? `transmitter on${ch.battery !== null ? ' · battery ' + ch.battery + ' %' : ''}${ch.rsqi !== null ? ' · RF ' + ch.rsqi + ' %' : ''}` : sig === 'off' ? 'transmitter off' : 'receiver stopped answering SSC'}`, { entity: { type: 'equipment', id: m.ip }, level: sig === 'away' ? 'warn' : 'info' })
+				this.prev.eq.set(key, sig)
+			}
+		}
+		const channels = mics.filter((m) => m.ok).flatMap((m) => m.channels)
+		return { t: now, consoles, mics, others, switcher, summary: { consoles: consoles.length, consolesLive: consoles.filter((c) => c.ok).length, receivers: mics.length, receiversAnswering: mics.filter((m) => m.ok).length, channels: channels.length, onAir: channels.filter((c) => c.link).length } }
 	}
 
 	// show profiles: what a broadcast is expected to have running; the active one drives the health score
@@ -1213,6 +1293,7 @@ export class Collector extends EventEmitter {
 			this.atems.delete(ip)
 		}
 		for (const e of clean) if (!e.active) this.prev.eq.delete(e.ip)
+		this.syncAudioTargets()
 		if (this.rawDevices.length) {
 			this.rebuild()
 			this.emit('state', this.state)
@@ -1281,6 +1362,32 @@ export class Collector extends EventEmitter {
 				const tl = e.telemetry
 				if (tl.kind === 'webpresenter' && /interrupt|error|fail/i.test(tl.status)) push('error', 'stream', 'out', ent, `${e.name}: stream ${tl.status}`, 'The Web Presenter lost its connection to the streaming platform. Check the WAN, the stream key and the platform status.')
 				if (tl.kind === 'atem' && tl.streaming?.state && tl.streaming.state !== 'idle' && tl.streaming.state !== 'streaming') push('warn', 'stream', 'state', ent, `${e.name}: stream ${tl.streaming.state}`, 'The ATEM Mini is between states (connecting/stopping); if this persists its stream destination is not reachable.')
+			}
+		}
+		// audio: the consoles' meters and the wireless mics (battery, RF, mute, link) against what the show expects
+		const expectMics = !!this.profiles.find((p) => p.id === this.activeProfile)?.expect?.mics
+		const au = st.audio
+		for (const c of au?.consoles || []) {
+			const ent = { type: 'equipment', id: c.ip }
+			if (c.online && !c.ok && c.answered) push('warn', 'audio', 'meters', ent, `${c.name} answers OSC but sends no meters`, 'The console replies to /xinfo but the meter subscription (/batchsubscribe to /meters/1 and /meters/2, renewed every 8 s) brings nothing back. A firewall between this computer and the console may drop the console’s replies, or the console’s subscription table is full of other apps. Restarting Broadwatcher subscribes afresh.')
+		}
+		for (const m of au?.mics || []) {
+			const ent = { type: 'equipment', id: m.ip }
+			if (m.online && !m.ok) {
+				if (m.seen) push('warn', 'audio', 'ssc', ent, `${m.name} stopped answering SSC (UDP 45)`, 'The receiver is on the network but no longer answers Sennheiser Sound Control requests. It may be rebooting, or its control port is blocked between this computer and the Dante VLAN.')
+				continue
+			}
+			if (!m.ok) continue
+			for (const ch of m.channels) {
+				const who = `${ch.name || ch.id} (${m.name})`
+				if (!ch.link) {
+					if (expectMics) push('warn', 'audio', `link-${ch.id}`, ent, `${who}: transmitter off or out of range`, 'The receiver reports no link with its transmitter (SSC warning NoLink): the handheld or bodypack is switched off, its battery is flat, or it is out of range. The show profile expects the mics on air; fine if this one is a spare.')
+					continue
+				}
+				if (ch.battery !== null && ch.battery < this.th.mic_battery_pct) push(ch.battery < 10 ? 'error' : 'warn', 'audio', `battery-${ch.id}`, ent, `${who}: battery ${ch.battery} %${ch.batteryMinutes ? ' · about ' + ch.batteryMinutes + ' min left' : ''}`, 'Change the battery at the next break. Below 10 % the transmitter can switch off mid-sentence.')
+				if (ch.rsqi !== null && ch.rsqi < this.th.mic_rf_pct) push('warn', 'audio', `rf-${ch.id}`, ent, `${who}: RF weak (${ch.rsqi} %${ch.rssi !== null ? ', ' + ch.rssi + ' dBm' : ''})`, 'The receive signal quality is low: the transmitter is far from the antennas, something blocks the path, or another transmitter sits on a nearby frequency. Expect dropouts. Check the antennas and run a scan on the receiver.')
+				if (expectMics && (ch.mute || ch.tx?.mute)) push('info', 'audio', `mute-${ch.id}`, ent, `${who} is muted${ch.tx?.mute ? ' at the transmitter' : ' at the receiver'}`, 'The show profile expects this mic on air but it is muted. Fine during a break; a problem once the talent speaks.')
+				for (const w of ch.warningText || []) push('warn', 'audio', `warn-${ch.id}-${w.replace(/\W+/g, '')}`, ent, `${who}: ${w}`, `The receiver raises the warning "${w}" for this channel.`)
 			}
 		}
 		const at = st.atem

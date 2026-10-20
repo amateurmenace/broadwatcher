@@ -24,6 +24,13 @@ const STREAM_STATE = { 1: 'idle', 2: 'connecting', 4: 'streaming', 32: 'stopping
 // RTMS: best guess from atem-connection's RecordingStatus (Idle, Recording, Stopping as bits); the raw value is kept
 const RECORD_STATE = { 0: 'idle', 1: 'idle', 2: 'recording', 4: 'stopping' }
 const REFUSED_BACKOFF_MS = [120000, 240000, 480000, 900000]
+const LEVELS_RESEND_MS = 10000 // the switcher stops streaming levels after a while unless asked again
+const LEVELS_STALE_MS = 3000
+// Fairlight audio input ids that are not video inputs (best effort: the official SDK numbers; the names of the
+// SDI/HDMI inputs come from InPr). Only used when Broadwatcher holds its own session (atem.session = "own").
+const AUDIO_INPUT_NAMES = { 1001: 'XLR 1', 1002: 'XLR 2', 1101: 'AES/EBU', 1201: 'RCA', 1301: 'Mic 1', 1302: 'Mic 2', 1401: 'MADI', 1501: 'TRS', 2001: 'Media Player 1', 2002: 'Media Player 2', 2003: 'Media Player 3', 2004: 'Media Player 4', 3001: 'Talkback' }
+// Fairlight level values are int16 hundredths of a dB; -10000 and below mean silence
+const lvlDb = (b, off) => (b.length >= off + 2 ? Math.max(-100, b.readInt16BE(off) / 100) : null)
 
 const cstr = (b, off, len) => {
 	const s = b.subarray(off, Math.min(b.length, off + len))
@@ -211,6 +218,74 @@ export class AtemClient extends EventEmitter {
 		this.capture = capture instanceof RegExp ? (n) => capture.test(n) : Array.isArray(capture) ? (n) => capture.includes(n) : () => false
 		this.raw = new Map() // command name -> [{t, body(Buffer), n}] the last distinct bodies (n = repeats of the same body)
 		this.seen = new Map() // command name -> {n, last, len}
+		// Fairlight levels: the switcher streams FDLv (per input) and FMLv (master) at ~10 Hz once asked with SFLN.
+		// Off by default: only an own session can ask, and only atem.session = "own" turns it on (never Companion).
+		this.wantsLevels = false
+		this.levelsSentAt = 0
+		this.sid = 0 // the session id the switcher assigned (needed to send it a command)
+		this.pid = 0 // our packet counter
+		this.levels = { t: 0, master: null, sources: new Map(), inputs: new Map() }
+	}
+
+	// ask the switcher for Fairlight levels (or stop asking); needs a held session, re-sent every 10 s
+	wantLevels(on) {
+		on = !!on
+		if (on === this.wantsLevels) return
+		this.wantsLevels = on
+		if (this.state === 'connected') this.sendLevelsRequest(on)
+		if (!on) this.levels = { t: 0, master: null, sources: new Map(), inputs: this.levels.inputs }
+	}
+
+	sendLevelsRequest(on) {
+		this.levelsSentAt = Date.now()
+		this.sendCommand('SFLN', Buffer.from([on ? 1 : 0, 0, 0, 0]))
+	}
+
+	// one command to the switcher in an AckRequest packet (the switcher acknowledges it; we do not retransmit,
+	// the levels request is simply repeated every ten seconds)
+	sendCommand(name, body) {
+		if (!this.sock || this.state !== 'connected') return false
+		const len = 12 + 8 + body.length
+		const b = Buffer.alloc(len)
+		b.writeUInt16BE((FLAG_ACKREQ << 8) | len, 0)
+		b.writeUInt16BE(this.sid, 2)
+		this.pid = (this.pid + 1) & 0x7fff
+		b.writeUInt16BE(this.pid, 10)
+		b.writeUInt16BE(8 + body.length, 12)
+		b.write(name, 16, 4, 'latin1')
+		body.copy(b, 20)
+		this.sock.send(b, this.port, this.ip, () => {})
+		return true
+	}
+
+	handleLevels(name, body, now) {
+		const L = this.levels
+		if (name === 'FAIP' && body.length >= 8) {
+			// Fairlight audio input properties: index, type (0 embedded with video, 1 media player, 2 external)
+			L.inputs.set(body.readUInt16BE(0), { type: body[2], port: body.readUInt16BE(6) })
+			return
+		}
+		if (name === 'FMLv' && body.length >= 28) {
+			L.master = { t: now, left: lvlDb(body, 20), right: lvlDb(body, 22), peakL: lvlDb(body, 24), peakR: lvlDb(body, 26), inL: lvlDb(body, 0), inR: lvlDb(body, 2), compressor: lvlDb(body, 8), limiter: lvlDb(body, 10) }
+			L.t = now
+			return
+		}
+		if (name === 'FDLv' && body.length >= 46) {
+			const id = body.readUInt16BE(0)
+			L.sources.set(id, { t: now, id, inL: lvlDb(body, 16), inR: lvlDb(body, 18), left: lvlDb(body, 38), right: lvlDb(body, 40), peakL: lvlDb(body, 42), peakR: lvlDb(body, 44), compressor: lvlDb(body, 24), limiter: lvlDb(body, 26), expander: lvlDb(body, 28) })
+			L.t = now
+		}
+	}
+
+	// the levels as the state shows them: null until the switcher has sent any in the last three seconds
+	levelsSnapshot() {
+		const L = this.levels
+		const now = Date.now()
+		if (!this.wantsLevels || !L.t || now - L.t > LEVELS_STALE_MS) return null
+		const label = (id) => this.data.inputs[id]?.long || AUDIO_INPUT_NAMES[id] || (id >= 1 && id < 1000 ? `Input ${id}` : `Audio input ${id}`)
+		const pack = (s) => ({ level: Math.max(s.left ?? -100, s.right ?? -100), peak: Math.max(s.peakL ?? -100, s.peakR ?? -100), left: s.left, right: s.right, input: Math.max(s.inL ?? -100, s.inR ?? -100), compressor: s.compressor, limiter: s.limiter })
+		const sources = [...L.sources.values()].filter((s) => now - s.t <= LEVELS_STALE_MS).sort((a, b) => a.id - b.id).map((s) => ({ id: s.id, label: label(s.id), type: L.inputs.get(s.id)?.type ?? null, ...pack(s) }))
+		return { t: L.t, master: L.master && now - L.master.t <= LEVELS_STALE_MS ? pack(L.master) : null, sources }
 	}
 
 	static get SLOT_HOLD_MS() {
@@ -256,7 +331,8 @@ export class AtemClient extends EventEmitter {
 		this.lastPacket = Date.now()
 		this.timer = setInterval(() => {
 			// the switcher sends a packet about every second; silence means the session is gone
-			if (Date.now() - this.lastPacket > 8000) this.fail(this.state === 'connecting' ? 'timeout' : 'lost', AtemClient.SLOT_HOLD_MS)
+			if (Date.now() - this.lastPacket > 8000) return this.fail(this.state === 'connecting' ? 'timeout' : 'lost', AtemClient.SLOT_HOLD_MS)
+			if (this.wantsLevels && this.state === 'connected' && Date.now() - this.levelsSentAt > LEVELS_RESEND_MS) this.sendLevelsRequest(true)
 		}, 2000)
 	}
 
@@ -267,6 +343,7 @@ export class AtemClient extends EventEmitter {
 		const len = msg.readUInt16BE(0) & 0x07ff
 		const sid = msg.readUInt16BE(2)
 		const pid = msg.readUInt16BE(10)
+		this.sid = sid
 		if (flags & FLAG_HELLO) {
 			const code = msg[12]
 			if (code === 3) return this.fail('too many clients', 0, 'refused')
@@ -319,8 +396,10 @@ export class AtemClient extends EventEmitter {
 					this.connectedAt = now
 					this.refusals = 0
 					this.emit('connected')
+					if (this.wantsLevels) this.sendLevelsRequest(true)
 				}
-			} else decodeKnown(name, body, this.data)
+			} else if (name === 'FDLv' || name === 'FMLv' || name === 'FAIP') this.handleLevels(name, body, now)
+			else decodeKnown(name, body, this.data)
 		} catch {}
 		if (this.state === 'connected') this.emit('update', name)
 	}
@@ -330,6 +409,7 @@ export class AtemClient extends EventEmitter {
 		this.teardown()
 		this.state = state
 		this.error = error
+		this.levels = { t: 0, master: null, sources: new Map(), inputs: new Map() }
 		if (error === 'too many clients') {
 			// every refused hello is a knock on a full switcher: back off further each time so a human controller
 			// that is waiting for a slot gets it before we do
@@ -385,6 +465,8 @@ export class AtemClient extends EventEmitter {
 			refusals: this.refusals,
 			retryAt: this.state === 'connected' || this.closed ? null : this.retryAt,
 			captured: [...this.raw.values()].reduce((n, l) => n + l.length, 0),
+			wantsLevels: this.wantsLevels,
+			levels: live ? this.levelsSnapshot() : null,
 			summary: live ? `${d.product || 'ATEM'}${d.streaming?.state ? ' · stream ' + d.streaming.state : ''}${d.recording?.active ? ' · RECORDING' : ''}` : null,
 		}
 	}

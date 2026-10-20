@@ -69,6 +69,24 @@ touching anything. The roadmap for the next phase is in `docs/ROADMAP.md`.
   publish to the HD8 using a wrong key: connect accepted, then the switcher closes the connection before
   any publish → "rejected" + alert. Killing node abruptly can orphan tshark: the restart recipe kills
   `tshark` and `dumpcap` too.
+- Live audio (0.9.0): `server/x32.js` (`X32Meters`: one UDP socket, `/batchsubscribe` to `/meters/1` and
+  `/meters/2` with timefactor 2 = 10 blobs/s, `/renew` every 8 s, names and `mix/on` once a minute, peak hold
+  1.5 s then 12 dB/s; the blobs are little-endian; `snapshot()` / `compact()`), `server/ssc.js`
+  (`SscMonitor`: JSON over UDP 45, polls rx/mates/m every 5 s, subscribes to the `m` meters for 12 s and
+  renews every 10 s, 424 on `mates.txN` = no transmitter linked, `NoLink` in `warnings` = transmitter off).
+  The collector keeps both (`syncAudioTargets`: X32 = roster probe `x32`, receivers = role `audio` +
+  `isMic` from `health.js`), builds `state.audio` (`consoles`, `mics`, `others` = audio gear with nothing to
+  read, `switcher` = Fairlight levels or the note why not, `summary`) in `audioState`, attaches `audio` to
+  each roster entry, emits a `meters` event (≤ 5/s, compact arrays) that `server.js` broadcasts as SSE
+  `meters`; `/api/audio`. Health: `audio` = consoles sending meters (answering without meters counts 0.6),
+  `mics` = on-air channels with battery ≥ `mic_battery_pct` and RSQI ≥ `mic_rf_pct` (thresholds,
+  config_version 7; spare channels with the transmitter off do not count against a show). Alerts scope
+  `audio`. UI: Audio section (`renderAudio`, `applyMeters` moves the bars without re-rendering, `meterEls`),
+  tile strips (`stripHtml`, `tiles[].strip`), inspector `audioSection`, phone `renderMics`; Settings got a
+  Switcher section (name, IP, session mode with the Fairlight note) and the two mic thresholds.
+  `AtemClient.wantLevels(on)` sends `SFLN` after `InCm` (re-sent every 10 s) and decodes `FDLv` / `FMLv`
+  into `levelsSnapshot()`; the collector turns it on only when `atem.session === 'own'`. Untested against
+  a live switcher (needs an own session), decoded as the official SDK lays the commands out.
 - Phone page: `ui/m.html` + `m.js` + `m.css` + `manifest.webmanifest` + `icon-512.png`, served at `/m`;
   non-loopback requests need `server.token` (`?key=` once, then the `bw_key` cookie; manifest and icons are
   public); `/api/phone` lists the LAN links; Electron menu "Open on a phone…" (switches `server.host` to
@@ -174,6 +192,18 @@ touching anything. The roadmap for the next phase is in `docs/ROADMAP.md`.
   keeps `atem-remote.exe <ip> --server` alive while NDI Machine runs; its launcher is a Windows startup item.
 - Not ATEM clients: 192.168.20.176 (web UI "Blackmagic Design", syncs to AWS; Cloud Store-like),
   192.168.20.237 "BIGs-Air-2" (only TCP 9990 = Videohub protocol).
+- Audio gear (verified 2026-10-19 from this PC, routed unicast through the UDM): X32 (Studio) 192.168.5.154 =
+  "BIG_Compact-01", X32 Compact, firmware 4.09; X32 Rack 192.168.5.143 = "BIG_MBR-AudioRack", firmware
+  4.06-8; both answer `/batchsubscribe` with `/meters/1` = 96 floats (32 channels, 32 gate, 32 dynamics) and
+  `/meters/2` = 49 floats (16 bus, 6 matrix, main L, main R, mono, 24 gain reductions). Channel 1 is "Neil",
+  2 "L Pod", 3/4 "Floor L/R", 7/8 "Zoom L/R"; the Rack's bus 1 is "Caption Mix", the Compact's bus 2 "MADI
+  Return". The three EW-DX receivers 192.168.5.11-.13 are EW-DX EM 2 Dante (product `EWDX2CHD`, device name
+  `EWDXEM2D`, firmware 2.0.1): channels WHH-1/WHH-2 (496.6 / 497.2 MHz), WHH-3/W-4 (487.0 / 489.4),
+  W-5/W-6 (494.2 / 497.8). SSC facts: `m.rxN` has `af` (dBFS, -138.5 = nothing), `rsqi` (%), `rssi` (dBm),
+  `divi` (0/1/2 = none/A/B); battery lives on the linked transmitter (`mates.txN.battery.gauge`, %) and is 424
+  "failed dependency" while no transmitter is linked; subscriptions (`osc.state.subscribe`, `#` with
+  min/max/count/lifetime) work and the receiver clamps the interval to 480 ms. Every transmitter was off
+  during the 0.9.0 build, so battery / RF / AF on air have not been seen live yet.
 - The UDM logs flows to its own address, so a UniFi poller anywhere on the LAN shows up as flows to
   192.168.20.1:443 (only this PC does, every ~11 s). No flow crosses the UDM on port 9910: every ATEM
   controller is on the Default VLAN. Internet scanners knock on the forwarded ports all day (180-byte
