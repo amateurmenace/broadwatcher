@@ -137,6 +137,7 @@ export class Collector extends EventEmitter {
 	// ---------------------------------------------------------------- scheduling
 	start() {
 		const holdOff = new Map() // poll name -> time before which it is not retried (the controller said 5xx / timed out)
+		const streak = new Map() // poll name -> consecutive failures
 		const every = (name, s, fn) => {
 			const run = async () => {
 				if (this.busy.has(name)) return
@@ -144,12 +145,19 @@ export class Collector extends EventEmitter {
 				this.busy.add(name)
 				try {
 					await fn()
+					if (streak.get(name)) this.event('device', `UniFi ${name} poll answering again`, { level: 'info' })
+					streak.delete(name)
 					delete this.state.errors[name]
 				} catch (e) {
-					this.state.errors[name] = `${new Date().toLocaleTimeString()} ${e.message}`
+					const n = (streak.get(name) || 0) + 1
+					streak.set(name, n)
+					// a controller that answers 5xx or times out is overloaded: leave it alone for a minute, and one such
+					// failure is a note, not an alert (the Network application hiccups and recovers); the second one is
+					const transient = /HTTP 5\d\d|timeout|ECONNRESET|ECONNREFUSED|EAI_AGAIN|ENOTFOUND/i.test(e.message)
+					if (!transient || n >= 2) this.state.errors[name] = `${new Date().toLocaleTimeString()} ${e.message}`
+					else this.event('device', `UniFi ${name} poll: ${e.message} (asking again in a minute)`, { level: 'info' })
 					this.log(`[${name}] ${e.message}`)
-					// a controller that answers 5xx or times out is overloaded: leave it alone for a minute
-					if (/HTTP 5\d\d|timeout/i.test(e.message)) holdOff.set(name, Date.now() + 60000)
+					if (transient) holdOff.set(name, Date.now() + 60000)
 				} finally {
 					this.busy.delete(name)
 				}
@@ -383,10 +391,10 @@ export class Collector extends EventEmitter {
 				this.atems.set(e.ip, c)
 			}
 			if (!c.listenerCount('connected')) {
-				c.on('connected', () => this.event('device', `${e.name}: Broadwatcher holds a control connection (${c.data.product || 'ATEM'})`, { entity: { type: 'equipment', id: e.ip } }))
+				c.on('connected', () => this.event('device', `${e.name}: Broadwatch holds a control connection (${c.data.product || 'ATEM'})`, { entity: { type: 'equipment', id: e.ip } }))
 				c.on('disconnected', (err) => this.event('device', `${e.name}: switcher session lost (${err}); next attempt in 2 min`, { entity: { type: 'equipment', id: e.ip }, level: 'warn' }))
-				c.on('refused', () => c.refusals === 1 && this.event('device', `${e.name} refused a control connection (too many clients): its slots are held by other controllers; Broadwatcher backs off (2, 4, 8, then 15 min)`, { entity: { type: 'equipment', id: e.ip }, level: 'warn' }))
-				c.on('released', () => this.event('device', `${e.name}: Broadwatcher released its control connection (the switcher frees the slot in ~2 min)`, { entity: { type: 'equipment', id: e.ip } }))
+				c.on('refused', () => c.refusals === 1 && this.event('device', `${e.name} refused a control connection (too many clients): its slots are held by other controllers; Broadwatch backs off (2, 4, 8, then 15 min)`, { entity: { type: 'equipment', id: e.ip }, level: 'warn' }))
+				c.on('released', () => this.event('device', `${e.name}: Broadwatch released its control connection (the switcher frees the slot in ~2 min)`, { entity: { type: 'equipment', id: e.ip } }))
 			}
 			c.ensure()
 			// Fairlight levels only on an own session (the switcher streams them on request; Companion passes none)
@@ -985,7 +993,7 @@ export class Collector extends EventEmitter {
 
 	// everything audio for the state: the consoles (meters, names, mute), the receivers (per channel: link, battery,
 	// RF, AF, warnings), the roster's other audio devices that have nothing to read, and the switcher's Fairlight
-	// levels when Broadwatcher holds its own session. Also attaches a summary to each roster entry (`audio`).
+	// levels when Broadwatch holds its own session. Also attaches a summary to each roster entry (`audio`).
 	audioState(now, equipment) {
 		const byIp = new Map(equipment.map((e) => [e.ip, e]))
 		const consoles = this.x32.snapshot().map((c) => {
@@ -1001,7 +1009,7 @@ export class Collector extends EventEmitter {
 		const atemIp = this.cfg.atem?.ip || null
 		const hero = atemIp ? this.atems.get(atemIp) : null
 		const mode = atemIp ? this.atemMode(byIp.get(atemIp) || this.cfg.atem).mode : 'none'
-		const switcher = atemIp ? { ip: atemIp, name: this.cfg.atem.name, mode, held: !!hero && !hero.closed && hero.state === 'connected', levels: mode === 'own' && hero && !hero.closed ? hero.levelsSnapshot() : null, note: mode === 'own' ? null : 'Fairlight levels need Broadwatcher’s own switcher session (Settings › Switcher: own session); read through Companion, the switcher sends no levels' } : null
+		const switcher = atemIp ? { ip: atemIp, name: this.cfg.atem.name, mode, held: !!hero && !hero.closed && hero.state === 'connected', levels: mode === 'own' && hero && !hero.closed ? hero.levelsSnapshot() : null, note: mode === 'own' ? null : 'Fairlight levels need Broadwatch’s own switcher session (Settings › Switcher: own session); read through Companion, the switcher sends no levels' } : null
 		for (const c of consoles) {
 			const e = byIp.get(c.ip)
 			if (e) e.audio = { kind: 'x32', ok: c.ok, error: c.error, active: c.active, mainLevel: c.mainLevel, console: c.console, rate: c.rate }
@@ -1327,11 +1335,20 @@ export class Collector extends EventEmitter {
 			const id = `${scope}:${kind}:${entity?.id || entity?.type || scope}`
 			if (!this.alertSince.has(id)) {
 				this.alertSince.set(id, now)
-				if (st.ts) this.event('alert', `${level === 'error' ? 'PROBLEM' : level === 'warn' ? 'Warning' : 'Note'}: ${text}`, { entity, level, alertId: id })
+				if (st.ts) this.event('alert', `${level === 'error' ? 'PROBLEM' : level === 'warn' ? 'Warning' : 'Note'}: ${text}`, { entity, level, alertId: id, scope, kind, explain })
 			}
 			a.push({ id, level, scope, kind, entity, text, explain, since: this.alertSince.get(id) })
 		}
-		for (const [k, v] of Object.entries(st.errors)) push('error', 'api', 'poll', { type: 'api', id: k }, `UniFi ${k} poll failing: ${v}`, 'Broadwatcher cannot read this part of the UniFi API. Check that the gateway is reachable from this computer and that the API key is still valid (UniFi Network > Settings > Control Plane > Integrations).')
+		for (const [k, v] of Object.entries(st.errors)) {
+			const why = /HTTP 5\d\d/.test(v)
+				? `The UniFi Network application on the gateway answers the ${k} request with an internal error. That is the controller software, not the network: switching and routing carry on, Broadwatch just cannot refresh ${k} and asks again every minute. It usually clears by itself within a few minutes. If it stays, restart the Network application (UniFi OS > Applications > Network) or the gateway at a quiet moment, and look at UniFi OS > System Log for the cause.`
+				: /HTTP 40[13]/.test(v)
+					? 'The gateway refused the API key. Make a new local API key under UniFi Network > Settings > Control Plane > Integrations and paste it into Settings > UniFi gateway.'
+					: /timeout|ECONN|ENOTFOUND|EAI_AGAIN/i.test(v)
+						? `The gateway did not answer in time. Check that this computer can reach ${this.cfg.gateway?.url || 'the gateway'} (the management VLAN, no firewall in between) and that the controller is not overloaded.`
+						: 'Broadwatch cannot read this part of the UniFi API. Check that the gateway is reachable from this computer and that the API key is still valid (UniFi Network > Settings > Control Plane > Integrations).'
+			push('error', 'api', 'poll', { type: 'api', id: k }, `UniFi ${k} poll failing: ${v}`, why)
+		}
 		const gw = st.gateway
 		if (gw) {
 			if (gw.wan.status !== 'ok') push('error', 'wan', 'status', { type: 'wan' }, `WAN ${gw.wan.status}`, 'The internet link on the gateway is not healthy. Outgoing streams (Web Presenters) and incoming remote streams from outside the building depend on it.')
@@ -1356,7 +1373,7 @@ export class Collector extends EventEmitter {
 			const ent = { type: 'equipment', id: e.ip }
 			if (!e.online) push(e.hero ? 'error' : 'warn', 'equipment', 'offline', ent, `${e.name} not on the network`, `UniFi does not see ${e.name} (${e.ip}) on any switch port or access point${e.lastSeen ? `; it was last seen ${Math.round((now - e.lastSeen) / 60000)} min ago` : ''}. Powered off, unplugged, or its link is down.`)
 			else if (e.reachable === false) push(e.hero ? 'error' : 'warn', 'equipment', 'unresponsive', ent, `${e.name} not answering (${e.probeSpec}: ${e.probe?.error || 'no reply'})`, `${e.name} is on the network but its control port does not answer. The device may be booting, frozen, or a firewall/VLAN rule is in the way. Control from Companion and ATEM/HyperDeck software will fail until it answers.`)
-			else if (e.probe?.info?.state === 'too many clients') push('warn', 'equipment', 'clients', ent, `${e.name} refused Broadwatcher's control connection (all slots taken)`, `The switcher answered "too many clients": every one of its few control slots is held by another program (Companion, ATEM Software Control, hardware panels, the NDI Machine ATEM bridge, another Broadwatcher). Broadwatcher holds none and backs off (2, 4, 8, then 15 min between attempts). A program that was closed keeps its slot for about two minutes. To stop knocking altogether, read the switcher through Companion (switcher inspector > Control connection > Companion).`)
+			else if (e.probe?.info?.state === 'too many clients') push('warn', 'equipment', 'clients', ent, `${e.name} refused Broadwatch's control connection (all slots taken)`, `The switcher answered "too many clients": every one of its few control slots is held by another program (Companion, ATEM Software Control, hardware panels, the NDI Machine ATEM bridge, another Broadwatch). Broadwatch holds none and backs off (2, 4, 8, then 15 min between attempts). A program that was closed keeps its slot for about two minutes. To stop knocking altogether, read the switcher through Companion (switcher inspector > Control connection > Companion).`)
 			else if (e.switch?.speed && minSpeed && e.switch.speed < minSpeed) push('warn', 'equipment', 'speed', ent, `${e.name} linked at ${e.switch.speed} Mb/s`, `${e.name} negotiated ${e.switch.speed} Mb/s on ${e.switch.name} port ${e.switch.port}. Video streams and NDI need gigabit: check the cable and the port.`)
 			if (e.telemetry && !e.telemetry.error) {
 				const tl = e.telemetry
@@ -1369,7 +1386,7 @@ export class Collector extends EventEmitter {
 		const au = st.audio
 		for (const c of au?.consoles || []) {
 			const ent = { type: 'equipment', id: c.ip }
-			if (c.online && !c.ok && c.answered) push('warn', 'audio', 'meters', ent, `${c.name} answers OSC but sends no meters`, 'The console replies to /xinfo but the meter subscription (/batchsubscribe to /meters/1 and /meters/2, renewed every 8 s) brings nothing back. A firewall between this computer and the console may drop the console’s replies, or the console’s subscription table is full of other apps. Restarting Broadwatcher subscribes afresh.')
+			if (c.online && !c.ok && c.answered) push('warn', 'audio', 'meters', ent, `${c.name} answers OSC but sends no meters`, 'The console replies to /xinfo but the meter subscription (/batchsubscribe to /meters/1 and /meters/2, renewed every 8 s) brings nothing back. A firewall between this computer and the console may drop the console’s replies, or the console’s subscription table is full of other apps. Restarting Broadwatch subscribes afresh.')
 		}
 		for (const m of au?.mics || []) {
 			const ent = { type: 'equipment', id: m.ip }
@@ -1414,7 +1431,7 @@ export class Collector extends EventEmitter {
 		const ids = new Set(a.map((x) => x.id))
 		for (const [id, since] of this.alertSince) if (!ids.has(id)) {
 			this.alertSince.delete(id)
-			if (st.ts) this.event('clear', `Cleared: ${id.split(':').slice(0, 2).join(' ')} ${this.describeEntity(id)} (after ${Math.round((now - since) / 60000)} min)`, { level: 'info', alertId: id })
+			if (st.ts) this.event('clear', `Cleared: ${id.split(':').slice(0, 2).join(' ')} ${this.describeEntity(id)} (after ${Math.round((now - since) / 60000)} min)`, { level: 'info', alertId: id, scope: id.split(':')[0], kind: id.split(':')[1], duration: now - since })
 		}
 		const order = { error: 0, warn: 1, info: 2 }
 		a.sort((x, y) => order[x.level] - order[y.level] || x.since - y.since)
@@ -1430,7 +1447,7 @@ export class Collector extends EventEmitter {
 		return id
 	}
 
-	// everything the inspector needs about one thing: the entity, related UniFi events, flows and Broadwatcher events
+	// everything the inspector needs about one thing: the entity, related UniFi events, flows and Broadwatch events
 	details(type, id) {
 		const st = this.state
 		let entity = null

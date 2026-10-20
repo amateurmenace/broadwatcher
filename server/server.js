@@ -1,4 +1,4 @@
-// Broadwatcher server: runs the collector, serves the dashboard (ui/) and a live feed.
+// Broadwatch server: runs the collector, serves the dashboard (ui/) and a live feed.
 //   GET  /api/state                 full current state (JSON)
 //   GET  /api/events                server-sent events: "state" after every device poll, "event" for the tape,
 //                                   "meters" (X32 levels, EW-DX AF/RF, Fairlight levels) up to five times a second
@@ -22,6 +22,7 @@ import path from 'node:path'
 import crypto from 'node:crypto'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { Collector } from './collector.js'
+import { Journal } from './journal.js'
 import { AI, ANTHROPIC_MODELS } from './ai.js'
 import { UniFi } from './unifi.js'
 import { SnmpSwitch } from './snmp.js'
@@ -36,7 +37,7 @@ const DEEP_KEYS = ['gateway', 'poll', 'thresholds', 'ai', 'snmp', 'server', 'ate
 // what the user made in the app and a newer bundle must never take away: port labels, show profiles, the
 // VLAN list once it was edited in Settings (networks_edited), the roster (handled below)
 const USER_KEYS = ['port_labels', 'profiles', 'active_profile', 'networks_edited', 'equipment_edited']
-const BUNDLED_SECRETS = { ai: ['anthropic_api_key', 'api_key'], gateway: ['api_key'], snmp: ['community'] }
+const BUNDLED_SECRETS = { ai: ['anthropic_api_key', 'anthropic_workspace_id', 'api_key'], gateway: ['api_key'], snmp: ['community'] }
 
 // The bundled config is the source of truth for the equipment list, the ATEM, SNMP and AI defaults; the user's
 // copy may override any of it. When the bundled config is newer (config_version) than the user's copy, the
@@ -65,9 +66,13 @@ export function loadConfig(bundledPath, userPath) {
 		// a roster edited in the app survives upgrades: the user's entries win, new bundled devices are appended;
 		// fields that a newer bundle adds to a known device (e.g. its Companion label) are filled in when missing
 		if (user.equipment_edited && Array.isArray(user.equipment)) {
-			const byIp = new Map(user.equipment.map((e) => [e.ip, e]))
+			// devices that left the building (the bundle's retired_equipment) go on an upgrade, even from an edited roster
+			const retired = new Set(outdated ? base.retired_equipment || [] : [])
+			const kept = user.equipment.filter((e) => !retired.has(e.ip))
+			if (kept.length !== user.equipment.length) console.log(`config: ${user.equipment.length - kept.length} retired device(s) removed from the roster`)
+			const byIp = new Map(kept.map((e) => [e.ip, e]))
 			const baseByIp = new Map((base.equipment || []).map((e) => [e.ip, e]))
-			merged.equipment = [...user.equipment.map((e) => (baseByIp.get(e.ip)?.companion && e.companion === undefined ? { ...e, companion: baseByIp.get(e.ip).companion } : e)), ...(base.equipment || []).filter((e) => !byIp.has(e.ip)).map((e) => ({ ...e, active: false }))]
+			merged.equipment = [...kept.map((e) => (baseByIp.get(e.ip)?.companion && e.companion === undefined ? { ...e, companion: baseByIp.get(e.ip).companion } : e)), ...(base.equipment || []).filter((e) => !byIp.has(e.ip)).map((e) => ({ ...e, active: false }))]
 			merged.equipment_edited = true
 		}
 		if (outdated) {
@@ -128,7 +133,7 @@ function settingsView(config, ai, configPath, forensics = null, collectorNetwork
 		capture: { interface: config.capture?.interface || '', tshark: config.capture?.tshark || '', enabled: config.capture?.enabled !== false, available: forensics ? forensics.available : false, running: forensics ? forensics.stats.running : false, error: forensics ? forensics.stats.error : null, tsharkDefault: forensics ? forensics.tshark : '' },
 		firstRun: !g.api_key,
 		configPath,
-		ai: { enabled: a.enabled !== false, provider: ai.provider, base_url: a.base_url || '', model: a.model || '', anthropic_model: a.anthropic_model || 'claude-opus-5-5', anthropic_effort: a.anthropic_effort || 'medium', assess_every_s: a.assess_every_s || 180, keys: { local: mask(a.api_key), anthropic: mask(a.anthropic_api_key), env: !!process.env.ANTHROPIC_API_KEY }, models: ANTHROPIC_MODELS, providers: ai.providers() },
+		ai: { enabled: a.enabled !== false, provider: ai.provider, base_url: a.base_url || '', model: a.model || '', anthropic_workspace_id: a.anthropic_workspace_id || '', anthropic_model: a.anthropic_model || 'claude-opus-5-5', anthropic_effort: a.anthropic_effort || 'medium', assess_every_s: a.assess_every_s || 180, keys: { local: mask(a.api_key), anthropic: mask(a.anthropic_api_key), env: !!process.env.ANTHROPIC_API_KEY, envWorkspace: !!process.env.ANTHROPIC_WORKSPACE_ID }, models: ANTHROPIC_MODELS, providers: ai.providers() },
 		gateway: { name: g.name || '', url: g.url || '', site: g.site || 'default', ui_url: g.ui_url || '', key: mask(g.api_key) },
 		networks: Array.isArray(config.networks) ? config.networks : [],
 		knownNetworks: (collectorNetworks || []).map((n) => ({ name: n.name, vlan: n.vlan, clients: n.clients })),
@@ -182,6 +187,19 @@ export function startServer({ config, configPath = null, host = '127.0.0.1', por
 	let collector = null
 	const token = ensureToken(config, configPath)
 	const ai = new AI(config.ai || {}, log, config.thresholds || {})
+	// the journal: alerts raised and cleared, events, the notable UniFi events, AI and app errors, on disk beside the config
+	const journal = new Journal(path.join(configPath ? path.dirname(configPath) : path.join(__dirname, '..'), 'journal'), log)
+	ai.journal = journal
+	// a bug in a poll or a parser must not take the whole server down: note it in the log and carry on
+	const appError = (what) => (e) => {
+		const msg = `${what}: ${e?.stack || e?.message || e}`
+		log('[server] ' + msg)
+		try {
+			journal.record({ kind: 'server', level: 'error', text: 'App error, ' + msg.split('\n')[0].slice(0, 300) }, { key: 'server:' + msg.split('\n')[0].slice(0, 120) })
+		} catch {}
+	}
+	process.on('unhandledRejection', appError('unhandled rejection'))
+	process.on('uncaughtException', appError('uncaught exception'))
 	const sseClients = new Set()
 	const broadcast = (event, data) => {
 		if (!sseClients.size) return
@@ -192,7 +210,9 @@ export function startServer({ config, configPath = null, host = '127.0.0.1', por
 	const startCollector = () => {
 		collector = new Collector(config, log)
 		collector.on('state', (state) => broadcast('state', state))
+		collector.on('state', (state) => journal.importUnifi(state.log))
 		collector.on('event', (ev) => broadcast('event', ev))
+		collector.on('event', (ev) => journal.record(ev))
 		collector.on('meters', (m) => broadcast('meters', m)) // live audio levels, at most five times a second
 		collector.start()
 		lastAlertKey = null
@@ -209,7 +229,10 @@ export function startServer({ config, configPath = null, host = '127.0.0.1', por
 
 	// stream forensics: tshark on the mirror of the switcher's port (config.capture), when set up on this machine
 	const forensics = new Forensics(config.capture || {}, { targetIp: config.atem?.ip || null, log, nameFor: (ip) => collector.nameFor(ip) })
-	forensics.on('event', (ev) => broadcast('event', { ...ev, kind: 'forensics', text: 'Mirror: ' + ev.text }))
+	forensics.on('event', (ev) => {
+		broadcast('event', { ...ev, kind: 'forensics', text: 'Mirror: ' + ev.text })
+		journal.record({ ...ev, kind: 'forensics', text: 'Mirror: ' + ev.text })
+	})
 	collector.forensics = forensics
 	if (forensics.enabled) {
 		forensics.start()
@@ -218,7 +241,7 @@ export function startServer({ config, configPath = null, host = '127.0.0.1', por
 
 	// automatic re-assessment: every assess_every_s, and soon after the set of alerts changes
 	const autoAssess = async () => {
-		if (!ai.enabled || !collector.state.ts) return
+		if (!ai.enabled || !collector.state.ts || ai.configError) return // a key/workspace problem: wait for new settings (Reassess now still tries)
 		const key = collector.state.alerts.map((a) => a.id).join('|')
 		const changed = key !== lastAlertKey
 		lastAlertKey = key
@@ -227,9 +250,20 @@ export function startServer({ config, configPath = null, host = '127.0.0.1', por
 			if (r) broadcast('ai', r)
 		} catch (e) {
 			log('[ai] ' + e.message)
+			journal.record({ kind: 'ai', level: 'warn', text: 'AI assessment failed: ' + e.message }, { key: 'ai:' + e.message.slice(0, 80) })
 			broadcast('ai', { error: e.message, t: Date.now() })
 		}
 	}
+	// the log's query string: since (ms), levels (csv), cat, q, clears=1, open=1, limit
+	const journalQuery = (q, maxLimit) => ({
+		since: q.get('since') ? Number(q.get('since')) : Date.now() - 86400000,
+		levels: q.get('levels') ? new Set(q.get('levels').split(',')) : null,
+		cat: q.get('cat') || null,
+		q: q.get('q') || '',
+		clears: q.get('clears') === '1',
+		open: q.get('open') === '1',
+		limit: Math.min(maxLimit, Number(q.get('limit')) || maxLimit),
+	})
 	setTimeout(autoAssess, 20000)
 	const aiTimer = setInterval(autoAssess, 30000)
 
@@ -280,7 +314,7 @@ export function startServer({ config, configPath = null, host = '127.0.0.1', por
 			} else if (section === 'companion') {
 				collector.companion = new Companion(config.companion, log)
 				applied.push('Companion')
-			} else if (section === 'server') restart.push('server host/port (restart Broadwatcher)')
+			} else if (section === 'server') restart.push('server host/port (restart Broadwatch)')
 			else restart.push(section)
 		}
 		if (restart.some((r) => ['gateway', 'snmp', 'poll'].includes(r))) {
@@ -347,13 +381,22 @@ export function startServer({ config, configPath = null, host = '127.0.0.1', por
 				if (key !== token) {
 					if (p === '/m' || p === '/') {
 						res.writeHead(401, { 'Content-Type': 'text/html; charset=utf-8' })
-						return res.end('<!doctype html><meta name="viewport" content="width=device-width"><body style="font:16px system-ui;padding:24px;background:#f3f0e9;color:#1f1d1a"><h2 style="font-family:Georgia,serif;font-weight:400">Broadwatcher</h2><p>This link needs the access key. Open it from the app: <b>Broadwatcher &gt; Open on a phone…</b></p>')
+						return res.end('<!doctype html><meta name="viewport" content="width=device-width"><body style="font:16px system-ui;padding:24px;background:#f3f0e9;color:#1f1d1a"><h2 style="font-family:Georgia,serif;font-weight:400">Broadwatch</h2><p>This link needs the access key. Open it from the app: <b>Broadwatch &gt; Open on a phone…</b></p>')
 					}
 					return sendJson(res, { error: 'access key required' }, 401)
 				}
 				if (q.get('key')) res.setHeader('Set-Cookie', `bw_key=${encodeURIComponent(token)}; Path=/; Max-Age=31536000; SameSite=Lax`)
 			}
 			if (p === '/api/state') return sendJson(res, collector.state)
+			if (p === '/api/journal') {
+				const qq = journalQuery(q, 2000)
+				return sendJson(res, { entries: journal.query(qq), facets: journal.facets(qq.since), summary: journal.summary() })
+			}
+			if (p === '/api/journal/export') {
+				const entries = journal.query(journalQuery(q, 20000))
+				res.writeHead(200, { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': `attachment; filename="broadwatch-log-${new Date().toISOString().slice(0, 10)}.csv"` })
+				return res.end('﻿' + journal.csv(entries))
+			}
 			if (p === '/api/phone') {
 				const lan = host === '0.0.0.0'
 				const addrs = lanAddresses()
@@ -398,7 +441,16 @@ export function startServer({ config, configPath = null, host = '127.0.0.1', por
 			if (p === '/api/health') return sendJson(res, { ok: collector.state.ok, ts: collector.state.ts, errors: collector.state.errors })
 			if (p === '/api/audio') return sendJson(res, collector.state.audio || { consoles: [], mics: [], others: [], switcher: null })
 			if (p === '/api/config') return sendJson(res, redacted())
-			if (p === '/api/details') return sendJson(res, collector.details(q.get('type'), q.get('id')))
+			if (p === '/api/details') {
+				if (q.get('type') === 'journal') {
+					// a log row: the entry itself, plus everything the inspector knows about the thing it is about
+					const entry = journal.get(q.get('id'))
+					if (!entry) return sendJson(res, { error: 'this log entry is no longer in memory' })
+					const d = entry.entity?.type && entry.entity.id != null ? collector.details(entry.entity.type, entry.entity.id) : null
+					return sendJson(res, { ...(d && !d.error ? d : {}), type: 'journal', entry, alertOpen: entry.alertId ? collector.state.alerts.some((a) => a.id === entry.alertId) : false })
+				}
+				return sendJson(res, collector.details(q.get('type'), q.get('id')))
+			}
 			if (p === '/api/equipment' && req.method === 'GET') return sendJson(res, { equipment: config.equipment, groups: [...new Set(config.equipment.map((e) => e.group))], configPath })
 			if (p === '/api/equipment' && req.method === 'POST') {
 				const body = await readBody(req)
@@ -460,7 +512,7 @@ export function startServer({ config, configPath = null, host = '127.0.0.1', por
 			if (p === '/api/companion') return sendJson(res, await collector.companion.status())
 			if (p === '/api/atem/capture') {
 				const c = collector.atems.get(q.get('ip') || config.atem?.ip)
-				return sendJson(res, c ? c.captureReport() : { error: 'Broadwatcher holds no session with this switcher (Control connection > own session, or node scripts/atem-capture.mjs when no show is on)' })
+				return sendJson(res, c ? c.captureReport() : { error: 'Broadwatch holds no session with this switcher (Control connection > own session, or node scripts/atem-capture.mjs when no show is on)' })
 			}
 			if (p === '/api/atem/session' && req.method === 'POST') {
 				const body = await readBody(req)
@@ -476,7 +528,7 @@ export function startServer({ config, configPath = null, host = '127.0.0.1', por
 					} catch (e) {
 						log('[config] could not save: ' + e.message)
 					}
-					collector.event('device', `Switcher data source set to "${mode}"${mode === 'companion' ? ' (through Companion; Broadwatcher holds no control slot)' : mode === 'own' ? ' (Broadwatcher holds its own control slot)' : ''}`, { entity: { type: 'equipment', id: ip } })
+					collector.event('device', `Switcher data source set to "${mode}"${mode === 'companion' ? ' (through Companion; Broadwatch holds no control slot)' : mode === 'own' ? ' (Broadwatch holds its own control slot)' : ''}`, { entity: { type: 'equipment', id: ip } })
 					collector.pollTelemetry().catch(() => {})
 					return sendJson(res, { ok: true, mode, saved })
 				}
@@ -540,7 +592,7 @@ export function startServer({ config, configPath = null, host = '127.0.0.1', por
 		server.listen(port, host, () => {
 			const addr = server.address()
 			const url = `http://${host === '0.0.0.0' ? '127.0.0.1' : host}:${addr.port}/`
-			log(`Broadwatcher listening on ${url}${host === '0.0.0.0' ? ' (and on the LAN)' : ''}`)
+			log(`Broadwatch listening on ${url}${host === '0.0.0.0' ? ' (and on the LAN)' : ''}`)
 			resolve({
 				server,
 				get collector() {

@@ -1,4 +1,4 @@
-/* Broadwatcher phone page: health verdict, the eight tiles, open items, streams into the switcher, stream paths,
+/* Broadwatch phone page: health verdict, the eight tiles, open items, streams into the switcher, stream paths,
    the Ask box and the event tape, fed by the same server-sent events as the desk. The access key arrives in the
    link once (?key=…) and lives in a cookie from then on. */
 'use strict'
@@ -114,6 +114,24 @@ fetch('/api/ai/status').then((r) => r.json()).then((st) => {
 	if (st.assessment) aiInfo = st.assessment
 }).catch(() => {})
 fetch('/api/state').then((r) => r.json()).then((s) => s.ts && render(s)).catch(() => {})
+
+// the log: errors and warnings of the last 24 h from the journal, refreshed every minute
+const fmtDur = (ms) => {
+	const m = Math.round(ms / 60000)
+	return m < 1 ? '< 1 min' : m < 60 ? `${m} min` : `${Math.floor(m / 60)} h ${String(m % 60).padStart(2, '0')} min`
+}
+async function loadJournal() {
+	try {
+		const r = await fetch('/api/journal?levels=error,warn&limit=40')
+		const j = await r.json()
+		const es = j.entries || []
+		$('journal').innerHTML = es.length
+			? es.map((e) => `<div class="${esc(e.level)}">${esc(String(e.text).replace(/^(PROBLEM|Warning|Note): /, ''))}<small>${fmtTime(e.t)}${e.kind === 'alert' ? (e.cleared ? ' · lasted ' + fmtDur(e.cleared - e.t) : ' · still open') : ''} · ${esc(e.cat)}</small></div>`).join('')
+			: '<div class="info">nothing in the last 24 hours</div>'
+	} catch {}
+}
+loadJournal()
+setInterval(loadJournal, 60000)
 connect()
 // strip the key from the address bar once the cookie is set
 if (location.search.includes('key=')) history.replaceState(null, '', location.pathname)

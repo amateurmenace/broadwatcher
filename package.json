@@ -1,8 +1,8 @@
 {
-  "name": "broadwatcher",
-  "productName": "Broadwatcher",
-  "version": "0.9.0",
-  "description": "Broadwatcher: real-time broadcast-network monitor for Brookline Interactive Group (UniFi + Blackmagic + local AI)",
+  "name": "broadwatch",
+  "productName": "Broadwatch",
+  "version": "0.10.0",
+  "description": "Broadwatch: real-time broadcast-network monitor for Brookline Interactive Group (UniFi + Blackmagic + local AI)",
   "author": "Brookline Interactive Group",
   "license": "UNLICENSED",
   "private": true,
@@ -20,9 +20,9 @@
     "electron-builder": "^26.0.12"
   },
   "build": {
-    "appId": "org.brooklineinteractive.broadwatcher",
-    "productName": "Broadwatcher",
-    "artifactName": "Broadwatcher-${version}-${os}-${arch}.${ext}",
+    "appId": "org.brooklineinteractive.broadwatch",
+    "productName": "Broadwatch",
+    "artifactName": "Broadwatch-${version}-${os}-${arch}.${ext}",
     "directories": {
       "output": "dist"
     },
@@ -75,7 +75,7 @@
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
-      "artifactName": "Broadwatcher-${version}-win-setup.${ext}"
+      "artifactName": "Broadwatch-${version}-win-setup.${ext}"
     },
     "publish": {
       "provider": "github",
@@ -84,10 +84,10 @@
       "releaseType": "release"
     },
     "portable": {
-      "artifactName": "Broadwatcher-${version}-win-portable.${ext}"
+      "artifactName": "Broadwatch-${version}-win-portable.${ext}"
     },
     "dmg": {
-      "artifactName": "Broadwatcher-${version}-mac.${ext}"
+      "artifactName": "Broadwatch-${version}-mac.${ext}"
     }
   },
   "repository": {

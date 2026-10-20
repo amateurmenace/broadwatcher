@@ -46,8 +46,10 @@ export function computeHealth(state, profile, th = {}) {
 	const slow = eq.filter((e) => e.switch?.speed && (e.min_speed ?? (['switcher', 'encoder', 'recorder', 'computer'].includes(e.role) ? 1000 : 0)) > e.switch.speed)
 	const slowUp = (state.switches || []).filter((s) => s.online && s.uplink.speed && s.uplink.speed < 1000 && s.uplink.media !== 'wireless')
 	factor('links', 'Link speeds', 5, slow.length ? 0.4 : slowUp.length ? 0.6 : 1, slow.length ? `${slow.map((e) => e.name).join(', ')} below the needed link speed` : slowUp.length ? `${slowUp.map((s) => s.name).join(', ')} uplink below 1G` : 'every broadcast link at full speed')
-	const hot = (state.switches || []).filter((s) => s.online).flatMap((s) => s.ports.filter((p) => p.up && p.util > 0.7).map((p) => ({ n: `${s.name} p${p.idx}`, u: p.util })))
-	factor('util', 'Port load', 4, hot.some((p) => p.u > 0.9) ? 0.2 : hot.length ? 0.5 : 1, hot.length ? `${hot.map((p) => `${p.n} ${pct(p.u)}%`).slice(0, 3).join(', ')}` : 'no port above 70 % of its link')
+	// a port near line rate: say who is on it and how fast the link is, since a 100M link at 100 % is a different
+	// problem (a slow negotiation or an old device) from a 1G link at 100 % (a real flood)
+	const hot = (state.switches || []).filter((s) => s.online).flatMap((s) => s.ports.filter((p) => p.up && p.util > 0.7).map((p) => ({ n: `${s.name} p${p.idx}${p.label ? ' ' + p.label : p.clients?.[0] ? ' ' + (p.clients[0].name || p.clients[0].ip) : ''}${p.speed ? ` at ${p.speed >= 1000 ? p.speed / 1000 + 'G' : p.speed + 'M'}` : ''}`, u: p.util, key: p.key }))).sort((a, b) => b.u - a.u)
+	factor('util', 'Port load', 4, hot.some((p) => p.u > 0.9) ? 0.2 : hot.length ? 0.5 : 1, hot.length ? `${hot.map((p) => `${p.n} ${pct(p.u)}%`).slice(0, 3).join(', ')}` : 'no port above 70 % of its link', hot[0]?.key ? { target: { type: 'port', id: hot[0].key } } : {})
 
 	// ---- the switcher and the roster
 	if (!hero) factor('switcher', 'Switcher', 12, 0.5, 'no main switcher in the roster', { na: true })

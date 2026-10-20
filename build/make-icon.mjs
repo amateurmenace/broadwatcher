@@ -1,4 +1,4 @@
-// Renders build/icon.png (1024x1024) without any image library: a paper-coloured rounded tile with the Broadwatcher
+// Renders build/icon.png (1024x1024) without any image library: a paper-coloured rounded tile with the Broadwatch
 // pulse line, matching ui/icon.svg. Run: node build/make-icon.mjs
 import fs from 'node:fs'
 import path from 'node:path'

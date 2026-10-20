@@ -34,7 +34,11 @@ export class UniFi {
 					res.on('end', () => {
 						const text = Buffer.concat(chunks).toString('utf8')
 						if (res.statusCode < 200 || res.statusCode >= 300) {
-							return reject(new Error(`UniFi ${method} ${path} -> HTTP ${res.statusCode} ${text.slice(0, 160)}`))
+							// the controller's 5xx pages are Tomcat HTML: keep their title, not the markup
+							const detail = /^\s*</.test(text) ? (text.match(/<title>([^<]*)<\/title>/i)?.[1] || 'HTML error page').replace(/\s+/g, ' ').trim() : text.slice(0, 160)
+							const err = new Error(`UniFi ${method} ${path} -> HTTP ${res.statusCode} ${detail}`)
+							err.status = res.statusCode
+							return reject(err)
 						}
 						try {
 							resolve(text ? JSON.parse(text) : null)

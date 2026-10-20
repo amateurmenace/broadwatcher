@@ -1,6 +1,7 @@
-# Broadwatcher — notes for Claude
+# Broadwatch — notes for Claude
 
-Broadwatcher is Steve's (Brookline Interactive Group) broadcast-network console: an Electron app for Mac and
+Broadwatch (named Broadwatcher until 0.9.0; the GitHub repositories and the folder keep the old name) is
+Steve's (Brookline Interactive Group) broadcast-network console: an Electron app for Mac and
 Windows whose Node server polls the UniFi UDM Pro Max, the switches (SNMP) and the Blackmagic gear, detects
 streams arriving at the ATEM, and asks a local AI model for a readiness verdict. Read this file end to end before
 touching anything. The roadmap for the next phase is in `docs/ROADMAP.md`.
@@ -14,7 +15,7 @@ touching anything. The roadmap for the next phase is in `docs/ROADMAP.md`.
 - Releases: bump `version` in `package.json`, commit, `git tag -a vX.Y.Z`, push the tag. `.github/workflows/release.yml`
   creates the GitHub release first (prepare job), then builds macOS (dmg + zip, universal) and Windows (nsis +
   portable) and uploads them. Watch with `gh run watch <id> --repo amateurmenace/broadwatcher`. Artifacts are
-  named `Broadwatcher-<version>-…` (nsis/portable/dmg each have their own `artifactName`).
+  named `Broadwatch-<version>-…` (nsis/portable/dmg each have their own `artifactName`).
 - Caches on the Broadcast Pix PC live on `A:` (`A:\AI\npm-cache`, `A:\AI\electron-cache`, `A:\AI\electron-builder-cache`).
   Never put installs, caches or new folders on `C:`.
 - Development: `NETWATCH_PORT=8767 node server/server.js` (the installed app owns 8766), open
@@ -87,6 +88,14 @@ touching anything. The roadmap for the next phase is in `docs/ROADMAP.md`.
   `AtemClient.wantLevels(on)` sends `SFLN` after `InCm` (re-sent every 10 s) and decodes `FDLv` / `FMLv`
   into `levelsSnapshot()`; the collector turns it on only when `atem.session === 'own'`. Untested against
   a live switcher (needs an own session), decoded as the official SDK lays the commands out.
+- `server/journal.js` (0.10.0): the log. Every collector event, alerts raised and cleared (paired, with the
+  duration), the notable UniFi events (client connect/disconnect/roam filtered out), forensics events, AI
+  and app errors (`process.on('unhandledRejection'|'uncaughtException')` → the server carries on), newest
+  first in memory (8000) and appended to `<config folder>/journal/YYYY-MM-DD.jsonl`, 30 days. `/api/journal`
+  (since, levels, cat, q, clears, open, limit → entries + facets + summary), `/api/journal/export` (CSV),
+  `/api/details?type=journal&id=` (the entry plus its entity's details); `ai.journal.summaryText()` in the
+  digest. UI: the `logBlock` (filters remembered in localStorage `bw-log`, rows open the inspector,
+  `journalSection`, "Ask the AI about this"); the phone page lists the last 24 h of errors and warnings.
 - Phone page: `ui/m.html` + `m.js` + `m.css` + `manifest.webmanifest` + `icon-512.png`, served at `/m`;
   non-loopback requests need `server.token` (`?key=` once, then the `bw_key` cookie; manifest and icons are
   public); `/api/phone` lists the LAN links; Electron menu "Open on a phone…" (switches `server.host` to
@@ -99,8 +108,8 @@ touching anything. The roadmap for the next phase is in `docs/ROADMAP.md`.
   `config.json` (private) or `config.public.json` (Community); copies it to userData on first run; single-instance
   lock (skipped with NETWATCH_PORT / --smoke); Companion autostart; menu (Settings, Open config, Restart server,
   Start Companion, Reset).
-- Two flavours per release (`.github/workflows/release.yml` matrix os × flavor): private = `Broadwatcher-…`
-  with `config.json`; public = `Broadwatcher Community` (`Broadwatcher-Community-…`, own appId/userData,
+- Two flavours per release (`.github/workflows/release.yml` matrix os × flavor): private = `Broadwatch-…`
+  with `config.json`; public = `Broadwatch Community` (`Broadwatch-Community-…`, own appId/userData,
   `config.public.json`, no keys). `scripts/embed-secrets.mjs` writes the `ANTHROPIC_API_KEY` repository secret
   into the private build's config at CI time (never commit the key).
 
@@ -109,7 +118,7 @@ touching anything. The roadmap for the next phase is in `docs/ROADMAP.md`.
 1. **Never send bare hellos or one-shot reads to an ATEM from the app, and take no slot by default.** The HD8
    keeps a dead or half-open session for ~2 minutes and has only a handful of control slots: on 2026-10-19 it
    was full with three held sessions (Companion, ATEM Software Control, the NDI Machine ATEM bridge
-   `atem-remote.exe`), and Broadwatcher's hello was refused 7 s after a power-cycle. Since 0.4.0 the switcher is
+   `atem-remote.exe`), and Broadwatch's hello was refused 7 s after a power-cycle. Since 0.4.0 the switcher is
    read **through Companion's HTTP API** (`server/companion.js`, `atem.session = "companion"`), which costs
    the switcher nothing. `AtemClient` (own session) is opt-in (`own`, or `auto` = only while Companion is
    away), pooled for the life of the process, one hello per two minutes under any failure, and it backs off
@@ -130,12 +139,12 @@ touching anything. The roadmap for the next phase is in `docs/ROADMAP.md`.
    app always wins, and so do `port_labels`, `profiles`, `active_profile` and, once the VLAN list was edited in
    Settings (`networks_edited`), `networks` (`USER_KEYS` in `server/server.js`, 0.8.1). Before 0.8.1 a version
    bump silently dropped those.
-6. **Companion is read, never written.** Broadwatcher reads Companion's HTTP API on this PC
+6. **Companion is read, never written.** Broadwatch reads Companion's HTTP API on this PC
    (`GET /api/connections`, `GET /api/variable/<label>/<name>/value`; the bmd-atem connection is labelled
    `atem` and exposes `pgm1_input`, `pvw1_input`, `stream_active`, `stream_bitrate`, `stream_cache_used`,
    `stream_duration_hms`, `record_active`, `record_duration_hms`, `record_remaining_hms`, `record_filename`,
    `record_disk_volume`, `long_N`/`short_N`, `aux1_input`). The Stream Deck config
-   (`Desktop\Town Meeting Companion`) has its own Python UniFi poller; Broadwatcher does not write into
+   (`Desktop\Town Meeting Companion`) has its own Python UniFi poller; Broadwatch does not write into
    Companion (yet, see roadmap). The Electron app starts Companion if it is not running (`companion.autostart`).
 9. **Secrets:** the UniFi key is bundled in `config.json` (private repo, private build only); the Anthropic key is
    never committed: it comes from the GitHub secret `ANTHROPIC_API_KEY` at build time (set 2026-10-19) or from
@@ -186,12 +195,14 @@ touching anything. The roadmap for the next phase is in `docs/ROADMAP.md`.
   moved to WAN 1935, internet scanners (91.230.168.233, 54.236.100.41 …) open RTMP connections to the HD8
   directly; the mirror shows them as RTMP flows that close within a second.
 - HD8 control slots (2026-10-19 07:43): after Steve's power-cycle Companion reconnected at 07:43:23, the NDI
-  Machine bridge restarted the same second, ATEM Software Control reconnected, and Broadwatcher's hello was
+  Machine bridge restarted the same second, ATEM Software Control reconnected, and Broadwatch's hello was
   refused at 07:43:30. The switcher is full with those three; its exact capacity is still unmeasured. The NDI
   Machine project (`A:\___ENGINEERING PROJECTS\NDI Machine`, `native/atem_remote.cpp`, official BMD SDK)
   keeps `atem-remote.exe <ip> --server` alive while NDI Machine runs; its launcher is a Windows startup item.
 - Not ATEM clients: 192.168.20.176 (web UI "Blackmagic Design", syncs to AWS; Cloud Store-like),
-  192.168.20.237 "BIGs-Air-2" (only TCP 9990 = Videohub protocol).
+  192.168.20.237 "BIGs-Air-2" (only TCP 9990 = Videohub protocol). BIGs-Air-2 and the audio-rack Blackmagic
+  box 192.168.5.78 left the network on 2026-10-20 and are in `retired_equipment` (0.10.0): a config upgrade
+  drops them even from a roster edited in the app.
 - Audio gear (verified 2026-10-19 from this PC, routed unicast through the UDM): X32 (Studio) 192.168.5.154 =
   "BIG_Compact-01", X32 Compact, firmware 4.09; X32 Rack 192.168.5.143 = "BIG_MBR-AudioRack", firmware
   4.06-8; both answer `/batchsubscribe` with `/meters/1` = 96 floats (32 channels, 32 gate, 32 dynamics) and

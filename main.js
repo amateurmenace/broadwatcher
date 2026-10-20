@@ -1,4 +1,4 @@
-// Electron shell: starts the Broadwatcher server in-process and shows the dashboard in a window.
+// Electron shell: starts the Broadwatch server in-process and shows the dashboard in a window.
 import { app, BrowserWindow, Menu, shell, dialog, nativeTheme } from 'electron'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url'
 import { startServer, loadConfig, saveUserConfig } from './server/server.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
-// flavour: "private" (BIG's own build, config.json with the site's keys) or "public" (Broadwatcher Community,
+// flavour: "private" (BIG's own build, config.json with the site's keys) or "public" (Broadwatch Community,
 // config.public.json without keys; scripts/build-flavor.mjs sets package.json flavor at build time)
 let FLAVOR = process.env.BW_FLAVOR || 'private'
 try {
@@ -15,10 +15,10 @@ try {
 } catch {}
 const BUNDLED_CONFIG = path.join(__dirname, FLAVOR === 'public' ? 'config.public.json' : 'config.json')
 
-app.setName(FLAVOR === 'public' ? 'Broadwatcher Community' : 'Broadwatcher')
+app.setName(FLAVOR === 'public' ? 'Broadwatch Community' : 'Broadwatch')
 nativeTheme.themeSource = 'dark'
 
-// one Broadwatcher per machine: a second copy would open a second session with every switcher it watches
+// one Broadwatch per machine: a second copy would open a second session with every switcher it watches
 // (each ATEM has only a handful of control slots) and poll the gateway twice
 // (a development copy with NETWATCH_PORT set, and the --smoke build check, may run beside the installed app)
 const DEV = !!process.env.NETWATCH_PORT || process.argv.includes('--smoke')
@@ -37,7 +37,16 @@ function ensureUserConfig() {
 	if (!fs.existsSync(p)) {
 		try {
 			fs.mkdirSync(path.dirname(p), { recursive: true })
-			fs.copyFileSync(BUNDLED_CONFIG, p)
+			// the app was called Broadwatcher until 0.9.0: the config (roster, keys, labels) and the journal left in
+			// that folder move over on the first start under the new name
+			const legacyDir = path.join(app.getPath('appData'), FLAVOR === 'public' ? 'Broadwatcher Community' : 'Broadwatcher')
+			if (fs.existsSync(path.join(legacyDir, 'config.json'))) {
+				fs.copyFileSync(path.join(legacyDir, 'config.json'), p)
+				try {
+					if (fs.existsSync(path.join(legacyDir, 'journal'))) fs.cpSync(path.join(legacyDir, 'journal'), path.join(path.dirname(p), 'journal'), { recursive: true })
+				} catch {}
+				console.log(`config migrated from ${legacyDir}`)
+			} else fs.copyFileSync(BUNDLED_CONFIG, p)
 		} catch (e) {
 			console.error('could not create user config:', e.message)
 		}
@@ -56,15 +65,15 @@ async function boot() {
 	try {
 		running = await startServer({ config, configPath: cfgPath, host, port })
 	} catch (e) {
-		// port taken (another Broadwatcher or the standalone server): fall back to a random port
+		// port taken (another Broadwatch or the standalone server): fall back to a random port
 		running = await startServer({ config, configPath: cfgPath, host, port: 0 })
 	}
 	maybeStartCompanion(config).catch(() => {})
 	return running
 }
 
-// Companion holds the control session with the switcher that Broadwatcher reads through its HTTP API, so if
-// Companion is not running when Broadwatcher starts, start it (config companion.autostart, default on)
+// Companion holds the control session with the switcher that Broadwatch reads through its HTTP API, so if
+// Companion is not running when Broadwatch starts, start it (config companion.autostart, default on)
 function companionExe() {
 	if (process.platform === 'win32') {
 		const candidates = [path.join(process.env.ProgramFiles || 'C:\\Program Files', 'Companion', 'Companion.exe'), path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Companion', 'Companion.exe')]
@@ -106,7 +115,7 @@ function createWindow(url) {
 		minWidth: 960,
 		minHeight: 640,
 		backgroundColor: '#f3f0e8',
-		title: 'Broadwatcher',
+		title: 'Broadwatch',
 		autoHideMenuBar: false,
 		webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false },
 	})
@@ -137,7 +146,7 @@ function buildMenu() {
 	const template = [
 		...(isMac ? [{ role: 'appMenu' }] : []),
 		{
-			label: 'Broadwatcher',
+			label: 'Broadwatch',
 			submenu: [
 				{ label: 'Settings…', accelerator: 'CmdOrCtrl+,', click: () => win?.webContents.executeJavaScript('window.Settings && Settings.open()').catch(() => {}) },
 				{ label: 'Reload dashboard', accelerator: 'CmdOrCtrl+R', click: () => win?.reload() },
@@ -164,7 +173,7 @@ function buildMenu() {
 					},
 				},
 				{
-					label: 'Start Companion with Broadwatcher',
+					label: 'Start Companion with Broadwatch',
 					type: 'checkbox',
 					checked: cfg.companion?.autostart !== false,
 					click: (item) => {
@@ -200,7 +209,7 @@ async function phoneDialog() {
 		return dialog.showMessageBox(win, { type: 'error', message: 'Could not ask the server: ' + e.message })
 	}
 	if (!info.lan) {
-		const r = await dialog.showMessageBox(win, { type: 'question', buttons: ['Turn on LAN access and restart', 'Cancel'], defaultId: 0, cancelId: 1, message: 'Broadwatcher only listens on this computer', detail: 'To open it on a phone it must listen on the whole LAN (Settings > Server). Windows will ask once to allow Broadwatcher through the firewall on private networks. The link carries an access key, so guests on the Wi-Fi cannot open it without it.' })
+		const r = await dialog.showMessageBox(win, { type: 'question', buttons: ['Turn on LAN access and restart', 'Cancel'], defaultId: 0, cancelId: 1, message: 'Broadwatch only listens on this computer', detail: 'To open it on a phone it must listen on the whole LAN (Settings > Server). Windows will ask once to allow Broadwatch through the firewall on private networks. The link carries an access key, so guests on the Wi-Fi cannot open it without it.' })
 		if (r.response !== 0) return
 		try {
 			await fetch(running.url + 'api/settings', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ server: { host: '0.0.0.0' } }) })

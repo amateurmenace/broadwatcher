@@ -1,4 +1,4 @@
-/* Broadwatcher on a phone: the same paper palette, one column, large tap targets. */
+/* Broadwatch on a phone: the same paper palette, one column, large tap targets. */
 :root {
 	--bg: #f3f0e9; --panel: #fbf9f4; --panel2: #efebe2; --ink: #1f1d1a; --ink2: #5d5850; --ink3: #8f887c; --line: #e0dacd; --line2: #c9c1b1;
 	--in: #c2561b; --out: #1f6f8b; --ok: #2e7d4f; --warn: #b7791f; --error: #b42318; --stream: #0e7c9c;

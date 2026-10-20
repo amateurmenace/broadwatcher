@@ -5,7 +5,7 @@
 //   GET /api/variable/<label>/<name>/value    one module variable as text (404 when it does not exist)
 // Reading the switcher through Companion costs the switcher nothing: the HD8 keeps only a handful of control
 // slots (Companion, ATEM Software Control, hardware panels and the NDI Machine bridge already take three) and a
-// second session from Broadwatcher was the fourth knock that was refused with "too many clients".
+// second session from Broadwatch was the fourth knock that was refused with "too many clients".
 const ATEM_VARS = ['pgm1_input', 'pvw1_input', 'pgm1_input_id', 'pvw1_input_id', 'stream_active', 'stream_bitrate', 'stream_cache_used', 'stream_duration_hms', 'record_active', 'record_duration_hms', 'record_remaining_hms', 'record_remaining_seconds', 'record_filename', 'record_disk_volume', 'aux1_input']
 
 export class Companion {

@@ -1,4 +1,4 @@
-/* Broadwatcher — paper console. State arrives over server-sent events; every section re-renders from it.
+/* Broadwatch — paper console. State arrives over server-sent events; every section re-renders from it.
    The inspector (right rail) shows the AI readiness view by default and the details of whatever is clicked. */
 'use strict'
 
@@ -229,7 +229,7 @@ function renderHud(s) {
 		.map((n) => `<div class="vl" title="${esc(n.name)}${n.vlan ? ' · VLAN ' + n.vlan : ''}${n.subnet ? ' · ' + esc(n.subnet) : ''} · ${n.clients} clients · orange = into the VLAN, teal = out of it, last 10 minutes"><label>${esc(vlanLabel(n.name))}${n.vlan ? `<i>vlan ${n.vlan}</i>` : ''}</label><div class="nums"><span class="dn">↓${fmtRate(n.down)}</span><span class="up">↑${fmtRate(n.up)}</span></div>${scope('vl:' + n.name, [{ data: (n.history?.down || []).slice(-60), color: 'in' }, { data: (n.history?.up || []).slice(-60), color: 'out' }], 'vspark', { bare: true })}<small>${n.clients} client${n.clients === 1 ? '' : 's'}</small></div>`)
 		.join('')
 	$('hudIssues').innerHTML = (errors ? `<span class="error" title="open problems (error-level alerts)">${errors} <i>error${errors === 1 ? '' : 's'}</i></span>` : '') + (warns ? `<span class="warn" title="open warnings">${warns} <i>warning${warns === 1 ? '' : 's'}</i></span>` : '') + (!errors && !warns ? '<span class="ok" title="no open alerts">all clear</span>' : '')
-	document.title = (errors ? '✕ ' : warns ? '! ' : '') + 'Broadwatcher'
+	document.title = (errors ? '✕ ' : warns ? '! ' : '') + 'Broadwatch'
 	drawScopes()
 }
 // VLAN names as people say them: "BIG_MOBILE_DANTE" -> "Mobile Dante"
@@ -803,10 +803,6 @@ async function setActive(ip, active) {
 
 // ------------------------------------------------------------------ tapes
 function renderTape(s) {
-	$('tape').innerHTML = s.events.length
-		? s.events.slice(0, 80).map((ev) => `<div class="tl ${esc(ev.level || 'info')}${ev.alertId || ev.entity ? ' click' : ''}" ${ev.alertId ? `data-sel="alert:${esc(ev.alertId)}"` : ev.entity?.id ? `data-sel="${esc(ev.entity.type)}:${esc(ev.entity.id)}"` : ''}><span class="t">${fmtTime(ev.t)}</span><span class="m">${esc(ev.text)}</span></div>`).join('')
-		: '<div class="empty" style="padding:12px">nothing has changed since Broadwatcher started</div>'
-	$('logNote').textContent = `${s.log.length} entries · ${s.log.filter((l) => l.severity !== 'info').length} notable`
 	$('unifiLog').innerHTML = s.log.length ? s.log.map((l) => `<div class="tl ${esc(l.severity)}"><span class="t">${fmtDateTime(l.t)}</span><span class="m">${esc(l.title)}${l.message && l.message !== l.title ? `<small>${esc(l.message)}</small>` : ''}</span></div>`).join('') : '<div class="empty" style="padding:12px">no events</div>'
 }
 
@@ -865,23 +861,25 @@ function renderInspector() {
 	}
 	const a = d.alert
 	const ent = d.entity
-	const type = a ? a.entity?.type || a.scope : d.type
-	$('inspKind').textContent = a ? `${a.level} · ${a.scope}` : type
-	$('inspTitle').textContent = a ? a.text : ent?.name || (type === 'port' ? `${ent?.switch?.name} port ${ent?.idx}` : type === 'atem' ? ent?.name : type === 'wan' ? 'WAN' : selection.id)
+	const je = d.type === 'journal' ? d.entry : null // a row of the log: the entry first, then whatever it is about
+	const type = a ? a.entity?.type || a.scope : je ? je.entity?.type || 'journal' : d.type
+	$('inspKind').textContent = a ? `${a.level} · ${a.scope}` : je ? `log · ${je.cat}` : type
+	$('inspTitle').textContent = a ? a.text : je ? je.text.replace(/^(PROBLEM|Warning|Note): /, '') : ent?.name || (type === 'port' ? `${ent?.switch?.name} port ${ent?.idx}` : type === 'atem' ? ent?.name : type === 'wan' ? 'WAN' : selection.id)
 	const parts = []
+	if (je) parts.push(journalSection(je, d.alertOpen))
 	if (a) {
 		parts.push(`<h3>What this means</h3><p class="explain">${esc(a.explain || '')}</p><div class="ai-meta">since ${fmtDateTime(a.since)} (${fmtAgo(a.since)})</div>`)
 		const diag = diagnoses.get(a.id)
 		parts.push(`<h3>AI diagnosis</h3>${diag ? diag.error ? `<p class="error">${esc(diag.error)}</p>` : `<div class="ai-text">${mdLite(diag.text)}</div><div class="ai-meta">${esc(diag.model)} · ${Math.round(diag.ms / 1000)} s · ${fmtAgo(diag.t)} ago</div>` : '<p>Ask the AI to explain this alert from the live data, related events and flows.</p>'}<div class="insp-actions"><button class="btn" data-diagnose="${esc(a.id)}" ${!aiStatus?.enabled ? 'disabled title="AI not configured"' : ''}>${diag ? 'Diagnose again' : 'Diagnose with AI'}</button></div>`)
 	}
-	if (ent) parts.push(entitySection(type, ent))
+	if (ent && type !== 'journal') parts.push(entitySection(type, ent))
 	if (type === 'equipment' && ent && ent.active && (ent.telemetry?.kind === 'atem' || ent.role === 'switcher')) parts.push(sessionSection(ent))
 	if (type === 'equipment' && ent?.audio) parts.push(audioSection(ent))
 	if (type === 'equipment' && ent) parts.push(`<div class="insp-actions">${ent.active ? `<button class="btn quiet" data-standby="${esc(ent.ip)}">Put on standby (not part of this broadcast)</button>` : `<button class="btn" data-activate="${esc(ent.ip)}">Add to this broadcast</button>`}<button class="btn quiet" id="editRosterInsp">Edit roster</button></div>`)
 	if (type === 'equipment' && ent?.history) parts.push(`<h3>Traffic · last ${Math.round((ent.history.down.length * 5) / 60)} min</h3>${scope('insp', [{ data: ent.history.down, color: 'in' }, { data: ent.history.up, color: 'out' }], 'spark')}`)
 	if (type === 'switch' && ent?.history) parts.push(`<h3>Traffic · all ports</h3>${scope('insp', [{ data: ent.history.down, color: 'in' }, { data: ent.history.up, color: 'out' }], 'spark')}`)
 	if (type === 'wan' && ent?.history) parts.push(`<h3>WAN traffic</h3>${scope('insp', [{ data: ent.history.down, color: 'in' }, { data: ent.history.up, color: 'out' }], 'spark')}`)
-	parts.push(`<h3>Broadwatcher events</h3>${tapeRows(d.events || [], (ev) => `<div class="tl ${esc(ev.level || 'info')}"><span class="t">${fmtTime(ev.t)}</span><span class="m">${esc(ev.text)}</span></div>`)}`)
+	parts.push(`<h3>Broadwatch events</h3>${tapeRows(d.events || [], (ev) => `<div class="tl ${esc(ev.level || 'info')}"><span class="t">${fmtTime(ev.t)}</span><span class="m">${esc(ev.text)}</span></div>`)}`)
 	parts.push(`<h3>UniFi events</h3>${tapeRows(d.log || [], (l) => `<div class="tl ${esc(l.severity)}"><span class="t">${fmtDateTime(l.t)}</span><span class="m">${esc(l.title)}${l.message && l.message !== l.title ? `<small>${esc(l.message)}</small>` : ''}</span></div>`)}`)
 	if (d.flows?.length) parts.push(`<h3>Flows through the gateway</h3>${tapeRows(d.flows, (f) => `<div class="tl info"><span class="t">${fmtTime(f.t)}</span><span class="m">${esc(f.srcName || f.src)} → ${esc(f.dstName || f.dst)}:${esc(f.dport)} ${esc(f.proto)}${f.service && f.service !== 'OTHER' ? ' ' + esc(f.service) : ''} · ${fmtBytes(f.bytes)}${f.action === 'blocked' ? ' · BLOCKED' : ''}</span></div>`)}`)
 	body.innerHTML = parts.join('')
@@ -976,7 +974,7 @@ function entitySection(type, e) {
 	return ''
 }
 
-// the switcher's control connection: how it is read (Companion / own session / auto / none), what Broadwatcher
+// the switcher's control connection: how it is read (Companion / own session / auto / none), what Broadwatch
 // holds right now, and which other programs are believed to hold one of the few slots
 function sessionSection(e) {
 	const at = state?.atem
@@ -990,7 +988,7 @@ function sessionSection(e) {
 	const ctl = (ses?.controllers || []).map((c) => `<li><b>${esc(c.name)}</b>${c.where ? ' · ' + esc(c.where) : ''}: ${c.held === null ? 'unknown' : c.held ? '<span class="warn">holds a slot</span>' : 'not connected'} <small>${esc(c.how)}</small></li>`).join('')
 	const levelsTxt = mode === 'own' ? (own?.levels ? `<span class="ok">live · ${own.levels.sources.length} inputs</span>` : own?.state === 'connected' ? 'asked for, waiting' : 'with the session') : 'only with an own session (Companion passes no levels)'
 	return `<h3>Control connection</h3><div class="ctl">
-		<div class="row"><span>Read the switcher</span><select id="atemMode" data-ip="${esc(e.ip)}">${[['companion', 'through Companion (no slot)'], ['auto', 'Companion, own session only if Companion is away'], ['own', 'with Broadwatcher’s own session (one slot, Fairlight levels)'], ['none', 'not at all']].map(([v, l]) => `<option value="${v}" ${mode === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+		<div class="row"><span>Read the switcher</span><select id="atemMode" data-ip="${esc(e.ip)}">${[['companion', 'through Companion (no slot)'], ['auto', 'Companion, own session only if Companion is away'], ['own', 'with Broadwatch’s own session (one slot, Fairlight levels)'], ['none', 'not at all']].map(([v, l]) => `<option value="${v}" ${mode === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
 		<div class="kv" style="margin-top:4px"><span>Companion</span><b>${compTxt || '–'}</b><span>Own session</span><b>${ownTxt}</b><span>Fairlight levels</span><b>${levelsTxt}</b></div>
 		<div class="row" style="margin-top:8px">${own && own.state === 'connected' ? `<button class="btn quiet" data-atem-session="release" data-ip="${esc(e.ip)}">Release the slot</button>` : mode === 'own' || mode === 'auto' ? `<button class="btn quiet" data-atem-session="connect" data-ip="${esc(e.ip)}">Try to connect now</button>` : ''}${own && own.captured ? `<button class="btn quiet" data-capture="${esc(e.ip)}">Show protocol capture</button>` : ''}</div>
 		<p style="margin:8px 0 2px">An ATEM keeps only a handful of control slots, and a program that was closed keeps its slot for ~${Math.round((ses?.holdMs || 120000) / 60000)} min. Known slot holders:</p><ul>${ctl || '<li>none listed (config.json → atem.controllers)</li>'}</ul></div><div id="captureOut"></div>`
@@ -1048,7 +1046,7 @@ function renderOpenItems(s) {
 function renderAiView() {
 	const ai = aiInfo
 	const parts = []
-	if (aiStatus && !aiStatus.enabled) parts.push(`<p>AI is not configured. Add an OpenAI-compatible server (LM Studio) or an Anthropic key under <b>ai</b> in config.json, then Broadwatcher &gt; Restart server.</p>`)
+	if (aiStatus && !aiStatus.enabled) parts.push(`<p>AI is not configured. Add an OpenAI-compatible server (LM Studio) or an Anthropic key under <b>ai</b> in config.json, then Broadwatch &gt; Restart server.</p>`)
 	const h = state?.health
 	parts.push(`<div class="verdict" data-sel="health:now" style="cursor:pointer"><span class="lamp ${h ? verdictClass(h.verdict) : ai ? verdictClass(ai.verdict) : aiStatus?.busy ? 'thinking' : ''}"></span><div><b>${esc(h ? nice(h.verdict) : ai ? nice(ai.verdict) : aiStatus?.busy ? 'Assessing' : 'Standby')}${h ? ` <small>${h.score}/100</small>` : ''}</b><small>${esc(h ? h.headline : ai ? ai.headline : aiStatus?.busy ? 'the model is reading the live state…' : 'the first assessment runs shortly after start')}</small></div></div>`)
 	if (h) parts.push(`<ul class="factors">${h.factors.filter((f) => f.value !== null && f.value < 1).sort((a, b) => b.weight * (1 - b.value) - a.weight * (1 - a.value)).slice(0, 6).map((f) => `<li class="${esc(f.level)}"><b>${esc(f.label)}</b><em>${Math.round(f.value * 100)}%</em><span>${esc(f.reason)}</span></li>`).join('') || '<li class="ok"><b>All factors</b><em>100%</em><span>everything the profile expects is up</span></li>'}</ul>`)
@@ -1102,7 +1100,8 @@ function render(s) {
 	if (!folded('forBlock')) renderForensics(s)
 	if (!folded('rackBlock') && !labelEdit) renderRack(s)
 	if (!folded('patchBlock')) renderPatch(s)
-	if (!folded('tapeBlock')) renderTape(s)
+	if (!folded('unifiBlock')) renderTape(s)
+	if (!folded('logBlock') && !logView.loaded) loadLog()
 	if (!selection) renderOpenItems(s)
 	drawScopes()
 	if (hover) showTip(hover.key, hover.x, hover.y)
@@ -1123,6 +1122,7 @@ function connect() {
 	})
 	es.addEventListener('event', () => {
 		if (selection) refreshInspector()
+		scheduleLog(1500)
 	})
 	es.addEventListener('meters', (e) => applyMeters(JSON.parse(e.data)))
 	es.onerror = () => {
@@ -1160,6 +1160,14 @@ document.addEventListener('click', (e) => {
 	if (t.id === 'editRoster' || t.id === 'editRosterInsp') return openRoster()
 	if (t.closest?.('[data-standby]')) return setActive(t.closest('[data-standby]').getAttribute('data-standby'), false)
 	if (t.closest?.('[data-activate]')) return setActive(t.closest('[data-activate]').getAttribute('data-activate'), true)
+	const askEl = t.closest?.('[data-ask]')
+	if (askEl) {
+		// a question prepared by a log row or an alert: back to the readiness view and ask it there
+		const q = askEl.getAttribute('data-ask')
+		closeInspector()
+		if ($('askInput')) $('askInput').value = q
+		return ask(q)
+	}
 	const alertEl = t.closest?.('[data-alert]')
 	if (alertEl) return select('alert', alertEl.getAttribute('data-alert'))
 	const selEl = t.closest?.('[data-sel]')
@@ -1313,5 +1321,158 @@ fetch('/api/ai/status').then((r) => r.json()).then((st) => {
 fetch('/api/settings').then((r) => r.json()).then((s) => {
 	if (s && s.firstRun) Settings.open('gateway', { welcome: true, onSaved: refreshAiStatus })
 }).catch(() => {})
+// ------------------------------------------------------------------ the log: the journal with filters, a table and export
+const logView = { levels: new Set(['error', 'warn']), range: 86400000, cat: '', q: '', open: false, entries: [], facets: null, summary: null, timer: null, loading: false, again: false, loaded: false }
+const LOG_WORD = { error: 'errors', warn: 'warnings', info: 'notes', clear: 'cleared' }
+const LOG_MARK = { error: 'error', warn: 'warning', info: 'note', clear: 'cleared' }
+const plainText = (t) => String(t || '').replace(/^(PROBLEM|Warning|Note): /, '')
+function fmtDur(ms) {
+	if (ms === null || ms === undefined) return ''
+	const m = Math.round(ms / 60000)
+	if (m < 1) return '< 1 min'
+	if (m < 60) return `${m} min`
+	const h = Math.floor(m / 60)
+	if (h < 24) return `${h} h ${String(m % 60).padStart(2, '0')} min`
+	return `${Math.floor(h / 24)} d ${h % 24} h`
+}
+function dayLabel(d) {
+	const today = new Date()
+	const yesterday = new Date(today)
+	yesterday.setDate(today.getDate() - 1)
+	return d.toDateString() === today.toDateString() ? 'Today' : d.toDateString() === yesterday.toDateString() ? 'Yesterday' : d.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })
+}
+function logParams(limit) {
+	const p = new URLSearchParams()
+	p.set('since', String(Date.now() - logView.range))
+	const lv = [...logView.levels].filter((l) => l !== 'clear')
+	p.set('levels', lv.length ? lv.join(',') : 'none')
+	if (logView.levels.has('clear')) p.set('clears', '1')
+	if (logView.cat) p.set('cat', logView.cat)
+	if (logView.q) p.set('q', logView.q)
+	if (logView.open) p.set('open', '1')
+	if (limit) p.set('limit', String(limit))
+	return p
+}
+async function loadLog() {
+	const block = $('logBlock')
+	if (!block || block.classList.contains('folded')) return
+	if (logView.loading) {
+		logView.again = true
+		return
+	}
+	logView.loading = true
+	try {
+		const r = await fetch('/api/journal?' + logParams(600))
+		const j = await r.json()
+		logView.entries = j.entries || []
+		logView.facets = j.facets || null
+		logView.summary = j.summary || null
+		logView.loaded = true
+		renderLog()
+	} catch (e) {
+		$('logNote').textContent = 'log unavailable: ' + e.message
+	} finally {
+		logView.loading = false
+		if (logView.again) {
+			logView.again = false
+			scheduleLog(500)
+		}
+	}
+}
+function scheduleLog(ms = 800) {
+	clearTimeout(logView.timer)
+	logView.timer = setTimeout(loadLog, ms)
+}
+function renderLog() {
+	const body = $('logBody')
+	if (!body) return
+	const f = logView.facets
+	// the category list follows what the window holds; the level buttons carry their counts
+	const sel = $('logCat')
+	const cats = f ? Object.entries(f.cats).sort((a, b) => b[1] - a[1]) : []
+	sel.innerHTML = '<option value="">every category</option>' + cats.map(([c, n]) => `<option value="${esc(c)}" ${c === logView.cat ? 'selected' : ''}>${esc(c)} · ${n}</option>`).join('')
+	if (logView.cat && !cats.some(([c]) => c === logView.cat)) sel.insertAdjacentHTML('beforeend', `<option value="${esc(logView.cat)}" selected>${esc(logView.cat)} · 0</option>`)
+	for (const b of $('logLevels').querySelectorAll('button')) {
+		const l = b.getAttribute('data-level')
+		const n = l === 'clear' ? f?.clears : f?.levels?.[l]
+		b.textContent = `${LOG_WORD[l]}${n ? ' · ' + n : ''}`
+		b.classList.toggle('on', logView.levels.has(l))
+	}
+	const es = logView.entries
+	$('logEmpty').hidden = es.length > 0
+	const s = logView.summary
+	$('logNote').textContent = `${es.length} row${es.length === 1 ? '' : 's'}${s ? ` · last 24 h: ${s.levels.error} errors, ${s.levels.warn} warnings · ${s.open} open now` : ''}${f?.oldest ? ` · kept since ${fmtDateTime(f.oldest)}` : ''}`
+	let day = ''
+	const rows = []
+	for (const e of es) {
+		const d = new Date(e.t)
+		if (d.toDateString() !== day) {
+			day = d.toDateString()
+			rows.push(`<tr class="day"><td colspan="5">${esc(dayLabel(d))}</td></tr>`)
+		}
+		const lasted = e.kind === 'alert' ? (e.cleared ? fmtDur(e.cleared - e.t) : '<span class="open">still open</span>') : e.kind === 'clear' && e.duration !== null && e.duration !== undefined ? fmtDur(e.duration) : ''
+		const mark = e.kind === 'clear' ? 'clear' : e.level
+		rows.push(`<tr class="click lv-${esc(e.level)} k-${esc(e.kind)}${e.cleared ? ' done' : ''}" data-sel="journal:${esc(e.id)}"><td class="when">${fmtTime(e.t)}</td><td class="lv"><i class="mark ${esc(mark)}" title="${esc(LOG_MARK[mark] || mark)}"></i></td><td class="cat">${esc(e.cat)}</td><td>${esc(plainText(e.text))}${e.device ? `<small>${esc(e.device)}</small>` : ''}</td><td class="num dur">${lasted}</td></tr>`)
+	}
+	body.innerHTML = rows.join('')
+	$('logCsv').href = '/api/journal/export?' + logParams(20000)
+}
+function logCopy() {
+	const lines = logView.entries.map((e) => `${fmtDateTime(e.t)}\t${e.kind === 'clear' ? 'cleared' : e.level}\t${e.cat}\t${plainText(e.text)}${e.cleared ? `\t(lasted ${fmtDur(e.cleared - e.t)})` : ''}`)
+	navigator.clipboard?.writeText(lines.join('\n')).then(() => ($('logNote').textContent = `${lines.length} rows copied`)).catch(() => {})
+}
+function saveLogPrefs() {
+	try {
+		localStorage.setItem('bw-log', JSON.stringify({ levels: [...logView.levels], range: logView.range }))
+	} catch {}
+}
+// a row of the log in the inspector: when, how long, the explanation, and a question ready for the AI
+function journalSection(e, open) {
+	const when = `${fmtDateTime(e.t)}${e.cleared ? ` → ${fmtDateTime(e.cleared)} · lasted ${fmtDur(e.cleared - e.t)}` : e.kind === 'alert' ? (open ? ' · still open' : '') : e.kind === 'clear' && e.duration ? ` · after ${fmtDur(e.duration)}` : ''}`
+	const q = `At ${fmtDateTime(e.t)} the log recorded: "${plainText(e.text)}". What does it mean for the broadcast, and what should I check?`
+	return `<div class="kv"><span>When</span><b>${esc(when)}</b><span>Level</span><b class="${esc(e.level)}">${esc(e.kind === 'clear' ? 'cleared' : e.level)}</b><span>Category</span><b>${esc(e.cat)}</b>${e.device ? `<span>Device</span><b>${esc(e.device)}</b>` : ''}${e.alertId ? `<span>Alert</span><b class="mono">${esc(e.alertId)}</b>` : ''}</div>${e.explain ? `<h3>What this means</h3><p class="explain">${esc(e.explain)}</p>` : ''}<div class="insp-actions">${open && e.alertId ? `<button class="btn" data-alert="${esc(e.alertId)}">Open the live alert</button>` : ''}<button class="btn quiet" data-ask="${esc(q)}" ${!aiStatus?.enabled ? 'disabled title="AI not configured"' : ''}>Ask the AI about this</button></div>`
+}
+function initLog() {
+	if (!$('logBar')) return
+	try {
+		const saved = JSON.parse(localStorage.getItem('bw-log') || 'null')
+		if (saved) {
+			logView.levels = new Set(saved.levels || ['error', 'warn'])
+			logView.range = saved.range || logView.range
+		}
+	} catch {}
+	$('logRange').value = String(logView.range)
+	$('logLevels').addEventListener('click', (e) => {
+		const b = e.target.closest('button')
+		if (!b) return
+		const l = b.getAttribute('data-level')
+		if (logView.levels.has(l)) logView.levels.delete(l)
+		else logView.levels.add(l)
+		saveLogPrefs()
+		scheduleLog(0)
+	})
+	$('logRange').addEventListener('change', (e) => {
+		logView.range = Number(e.target.value)
+		saveLogPrefs()
+		scheduleLog(0)
+	})
+	$('logCat').addEventListener('change', (e) => {
+		logView.cat = e.target.value
+		scheduleLog(0)
+	})
+	$('logFind').addEventListener('input', (e) => {
+		logView.q = e.target.value.trim()
+		scheduleLog(250)
+	})
+	$('logOpen').addEventListener('change', (e) => {
+		logView.open = e.target.checked
+		scheduleLog(0)
+	})
+	$('logCopy').addEventListener('click', logCopy)
+	setInterval(() => scheduleLog(0), 60000) // the window slides and "still open" ages
+	loadLog()
+}
+
 fetch('/api/state').then((r) => r.json()).then((s) => s.ts && render(s)).catch(() => {})
 connect()
+initLog()

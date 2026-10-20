@@ -1,4 +1,4 @@
-# Broadwatcher roadmap: from network monitor to broadcast console
+# Broadwatch roadmap: from network monitor to broadcast console
 
 Written 2026-10-19 after the 0.3.x releases. Steve's ask: monitor the Dante and NDI networks the way Dante
 Controller and NDI Tools do (clocking, latency, sources, routing), show live stream and switcher statistics,
@@ -33,7 +33,7 @@ Three things follow:
    port, swap the forwards (give 1935 to the HD8 while the Mini is on standby).
 2. **No firewall block is involved.** The last 24 h of blocked inbound flows contain ports 6690, 23, 3389,
    8080 … but nothing on 1935–1937.
-3. **Broadwatcher could not see a forwarded stream until now.** UniFi logs an inbound forwarded flow against
+3. **Broadwatch could not see a forwarded stream until now.** UniFi logs an inbound forwarded flow against
    the WAN address and WAN port, not the LAN target. Since 0.3.2 the collector reads the forward table and
    maps `WAN:1937` to `HD8:1935`, so such a stream shows under *Connections to the switcher* as
    "via WAN port 1937". If it still never appears while the remote side is sending, the packets are not
@@ -66,7 +66,7 @@ Yes, for diagnosis; not as the day-to-day data source.
 - **How:** in UniFi, on LIGHTHOUSE, set a spare port's profile to *Mirror* with port 15 as the source (UniFi
   Network > Devices > LIGHTHOUSE > Ports > spare port > Port Profile: Mirroring / Mirror port 15). Plug the
   Broadcast Pix PC's second NIC (or a laptop) into it. The mirror port carries both directions.
-- **Software:** `tshark` (Wireshark CLI) as a sidecar process started by Broadwatcher on the PC only:
+- **Software:** `tshark` (Wireshark CLI) as a sidecar process started by Broadwatch on the PC only:
   `tshark -i <nic> -f "host 192.168.20.79" -T ek` (JSON lines). A small parser turns it into per-flow pps/bps,
   RTMP `connect`/`publish` commands (stream name, app), SRT handshake state (control packet type 0 =
   handshake, with the SRT version and latency negotiation), and TCP resets. The UI gets a "Stream forensics"
@@ -113,7 +113,7 @@ X32 Dante card .122, Sennheiser EW-DX .11/.12/.13, a Blackmagic device .78) and 
 2. Or enable **mDNS reflection** between Default and the Dante VLANs in UniFi (Settings > Networks >
    Multicast DNS) so discovery works from the PC; PTP still needs a foot in the VLAN.
 3. Or a tiny probe agent (the same Node code) on a box that lives in the VLAN (a Pi or the Zoom Mac if it had a
-   Dante interface) reporting to Broadwatcher over HTTP.
+   Dante interface) reporting to Broadwatch over HTTP.
 
 **What the panel shows:** device list (name, IP, model, sample rate, latency setting, clock role), the
 subscription grid (RX channel → TX source with status: OK, unresolved, no device, bundle mismatch), the
@@ -128,7 +128,7 @@ Size: 4–6 days (mDNS + ARC port, PTP listener, UI), plus the VLAN setup.
 **Sources of truth**
 - Discovery: NDI sources advertise `_ndi._tcp.local` over mDNS on the NDI VLAN (name "MACHINE (source)",
   TXT with capabilities); NDI 5/6 can also use a Discovery Server (TCP 5959). The PC **is** on BIG_NDI
-  (10.56.20.33), so discovery works from Broadwatcher as is.
+  (10.56.20.33), so discovery works from Broadwatch as is.
 - Statistics (resolution, frame rate, bitrate, dropped frames, latency, who is receiving): only through the NDI
   SDK (`NDIlib_find`, `NDIlib_recv` with `NDIlib_recv_get_performance`/`get_queue`). The NDI 6 SDK is already
   on this PC (it was used for the Community Captioner build), so a small native sidecar (`ndi-probe`, C++ or the
@@ -245,14 +245,17 @@ and the *Open on a phone…* menu (no QR code yet: the menu copies the link inst
 
 ## 8. Foundations: stability, strength, power
 
-1. **One server, many viewers.** Run Broadwatcher's server once on the Broadcast Pix PC (as a logon task or a
+1. **One server, many viewers.** Run Broadwatch's server once on the Broadcast Pix PC (as a logon task or a
    Windows service via NSSM, with `0.0.0.0` + token) and let the Mac app, phones and browsers be *viewers* of
    it ("Connect to a server" in the app). This removes double polling, double ATEM slots and double AI runs.
-2. **Replace the Companion poller.** Broadwatcher already has every value `unifi/unifi-poller.py` computes;
+2. **Replace the Companion poller.** Broadwatch already has every value `unifi/unifi-poller.py` computes;
    push them into Companion's custom variables (`POST /api/custom-variable/<name>/value`) from the collector
    and retire the Python poller. One source of truth for the Stream Deck health pages.
 3. **History on disk** (SQLite via `better-sqlite3` prebuilds, or JSON ring files): 24 h of rates, levels and
-   events for post-show review and "what happened at 7:42?" questions to the AI.
+   events for post-show review and "what happened at 7:42?" questions to the AI. *Done in 0.10.0 for events:*
+   `server/journal.js` keeps alerts (raised, cleared, duration), events, notable UniFi events and AI/app errors
+   in JSONL files per day (30 days) with the filterable Log block, CSV export and a 24 h summary in the AI
+   digest. Rates and levels history is still to do.
 4. **Notifications:** desktop notifications for error-level alerts; optional e-mail/SMS/Slack for show nights;
    a visible "show mode" that raises polling rates and makes alerts louder.
 5. **Tests and replay:** record raw API/protocol responses once and replay them so the UI can be developed
@@ -261,10 +264,12 @@ and the *Open on a phone…* menu (no QR code yet: the menu copies the link inst
    the Gatekeeper/SmartScreen warnings; `electron-updater` with the `latest*.yml` the builds already produce
    gives one-click updates.
 7. **Resilience:** watchdog restart on crash, log file with rotation, memory caps, a `/api/health` the Companion
-   HEALTH page can watch, and a visible "data freshness" per source.
+   HEALTH page can watch, and a visible "data freshness" per source. *0.10.0:* unhandled errors are written to
+   the log and the server carries on; a controller 5xx / timeout is a note on the first miss and an alert on
+   the second; the AI timer stops knocking on a key or workspace error until the settings change.
 8. **Config UI** for thresholds, polling, the AI endpoint and the SNMP community, not only the roster; a
    "test" button next to each. *Done in 0.5.0:* the Settings screen (AI local/Claude toggle with keys, gateway,
-   SNMP, Companion, server, thresholds, each with Test), plus the public "Broadwatcher Community" flavour.
+   SNMP, Companion, server, thresholds, each with Test), plus the public "Broadwatch Community" flavour.
 9. **Security:** the embedded UniFi key is read-only for most things but can read client lists; keep the repo
    private, rotate the key if the laptop is ever lost, add the LAN token before exposing the server.
 
@@ -284,7 +289,7 @@ and the *Open on a phone…* menu (no QR code yet: the menu copies the link inst
 
 ## Prompt for the next session
 
-> Read `CLAUDE.md` and `docs/ROADMAP.md` in `A:\___ENGINEERING PROJECTS\BIG NetWatch\broadwatcher` (the Broadwatcher
+> Read `CLAUDE.md` and `docs/ROADMAP.md` in `A:\___ENGINEERING PROJECTS\BIG NetWatch\broadwatcher` (the Broadwatch
 > repo, github amateurmenace/broadwatcher) end to end, then the hand-over notes in
 > `C:\Users\Broadcast Pix\AppData\Roaming\Claude\side-session-notes\local_d99bd98d-7561-426c-a7b3-233b5080f0ea\netwatch.md`.
 > Then implement roadmap items in the suggested order, releasing a tagged version after each milestone and

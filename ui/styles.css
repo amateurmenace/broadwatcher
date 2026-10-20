@@ -1,4 +1,4 @@
-/* Broadwatcher — "paper console": a warm light engineering sheet by default (dark on request), serif headings,
+/* Broadwatch — "paper console": a warm light engineering sheet by default (dark on request), serif headings,
    plain sans text with tabular figures, hairline rules, two traffic colours (orange = into a device, teal = out).
    Everything sits on an 8 px rhythm; panels are flat with hairlines, no card grids, no neon. */
 :root {
@@ -625,3 +625,31 @@ table.mics tr.off .hbar i { opacity: .3; }
 .vmic em { font-size: 8px; color: var(--ink3); line-height: 1; margin-top: 1px; white-space: nowrap; overflow: hidden; max-width: 26px; }
 @media (max-width: 1500px) { .mcols { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 1100px) { .mcols { grid-template-columns: 1fr; } }
+
+/* ---------------------------------------------------------------- the log: filter bar and the table */
+.logbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; margin: 0 0 12px; }
+.logbar .seg { margin: 0; }
+.logbar select { padding: 4px 8px; font-size: 12px; }
+.logbar .find { width: 300px; }
+.logbar .chk { font-size: 12px; color: var(--ink2); display: inline-flex; align-items: center; gap: 6px; }
+.logbar-right { margin-left: auto; display: inline-flex; gap: 8px; }
+.logwrap { border: 1px solid var(--line); background: var(--panel); border-radius: var(--radius); max-height: 560px; overflow: auto; }
+table.log { font-variant-numeric: tabular-nums; }
+table.log th { position: sticky; top: 0; background: var(--panel); z-index: 1; }
+table.log th.when, table.log td.when { width: 72px; white-space: nowrap; color: var(--ink3); }
+table.log th.lv, table.log td.lv { width: 18px; padding-left: 4px; padding-right: 4px; }
+table.log th.cat, table.log td.cat { width: 96px; color: var(--ink2); white-space: nowrap; }
+table.log td.dur { width: 92px; white-space: nowrap; color: var(--ink2); }
+table.log td.dur .open { color: var(--warn); }
+table.log tr.day td { padding: 10px 8px 4px; font-family: var(--serif); font-style: italic; font-size: 13px; color: var(--ink2); border-bottom: 1px solid var(--line2); background: var(--bg); }
+table.log tr.lv-error td:nth-child(4) { color: var(--ink); }
+table.log tr.done td, table.log tr.k-clear td { color: var(--ink3); }
+table.log tr.done td:nth-child(4) { color: var(--ink2); }
+table.log .mark { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--line2); vertical-align: middle; }
+table.log .mark.error { background: var(--error); }
+table.log .mark.warn { background: var(--warn); }
+table.log .mark.info { background: var(--ink3); opacity: .6; }
+table.log .mark.clear { background: transparent; border: 1px solid var(--ok); }
+table.log td small { color: var(--ink3); }
+#logEmpty { padding: 18px; }
+@media (max-width: 1250px) { .logbar .find { width: 200px; } table.log th.cat, table.log td.cat { display: none; } }

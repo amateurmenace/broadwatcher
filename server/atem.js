@@ -3,7 +3,7 @@
 //    program/preview, input names and the streaming state (StRS/SRSS/SRSU), then lets the session time out.
 //    Test scripts only: the switcher keeps the abandoned session for ~2 minutes.
 //  - AtemClient: a persistent session that keeps acknowledging the switcher's packets, so it uses exactly
-//    ONE of the switcher's control-connection slots for as long as Broadwatcher runs (a new hello every few
+//    ONE of the switcher's control-connection slots for as long as Broadwatch runs (a new hello every few
 //    seconds would leave abandoned sessions behind until the switcher expires them, and the HD8 / Minis
 //    only have a handful of slots that Companion and ATEM Software Control need).
 //
@@ -27,7 +27,7 @@ const REFUSED_BACKOFF_MS = [120000, 240000, 480000, 900000]
 const LEVELS_RESEND_MS = 10000 // the switcher stops streaming levels after a while unless asked again
 const LEVELS_STALE_MS = 3000
 // Fairlight audio input ids that are not video inputs (best effort: the official SDK numbers; the names of the
-// SDI/HDMI inputs come from InPr). Only used when Broadwatcher holds its own session (atem.session = "own").
+// SDI/HDMI inputs come from InPr). Only used when Broadwatch holds its own session (atem.session = "own").
 const AUDIO_INPUT_NAMES = { 1001: 'XLR 1', 1002: 'XLR 2', 1101: 'AES/EBU', 1201: 'RCA', 1301: 'Mic 1', 1302: 'Mic 2', 1401: 'MADI', 1501: 'TRS', 2001: 'Media Player 1', 2002: 'Media Player 2', 2003: 'Media Player 3', 2004: 'Media Player 4', 3001: 'Talkback' }
 // Fairlight level values are int16 hundredths of a dB; -10000 and below mean silence
 const lvlDb = (b, off) => (b.length >= off + 2 ? Math.max(-100, b.readInt16BE(off) / 100) : null)

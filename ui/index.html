@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Broadwatcher</title>
+<title>Broadwatch</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="styles.css">
@@ -11,9 +11,9 @@
 <body>
 <!-- HUD: the strip that is always on screen -->
 <header class="hud" id="hud">
-	<div class="hud-brand" id="brand" title="Broadwatcher">
+	<div class="hud-brand" id="brand" title="Broadwatch">
 		<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M2 15h4l3-9 4 14 3-8 2 3h4" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/></svg>
-		<span>Broad<b>watcher</b></span>
+		<span>Broad<b>watch</b></span>
 	</div>
 	<button class="hud-ready" id="hudReady" title="Broadcast readiness — click for the reasoning">
 		<span class="lamp" id="readyLamp"></span>
@@ -50,7 +50,7 @@
 <div class="shell" id="shell">
 	<main class="main" id="main">
 		<nav class="secnav" id="secnav">
-			<a href="#homeBlock">Health</a><a href="#gwBlock">Gateway</a><a href="#mapBlock">Signal map</a><a href="#atemBlock">Streams</a><a href="#pathBlock">Stream paths</a><a href="#audioBlock">Audio</a><a href="#forBlock">Forensics</a><a href="#rackBlock">Switches</a><a href="#patchBlock">Equipment</a><a href="#tapeBlock">Events</a>
+			<a href="#homeBlock">Health</a><a href="#gwBlock">Gateway</a><a href="#mapBlock">Signal map</a><a href="#atemBlock">Streams</a><a href="#pathBlock">Stream paths</a><a href="#audioBlock">Audio</a><a href="#forBlock">Forensics</a><a href="#rackBlock">Switches</a><a href="#patchBlock">Equipment</a><a href="#logBlock">Log</a><a href="#unifiBlock">UniFi</a>
 			<span class="spacer"></span><small id="freshness"></small>
 		</nav>
 
@@ -101,14 +101,26 @@
 			<div class="bb"><div id="patch"></div></div>
 		</section>
 
-		<section class="block two" id="tapeBlock">
-			<header class="bh"><h2>Events</h2><span class="bh-note" id="logNote"></span><button class="fold" data-fold="tapeBlock" title="collapse / expand"></button></header>
+		<section class="block" id="logBlock">
+			<header class="bh"><h2>Log</h2><div class="bh-tools"><span class="bh-note" id="logNote"></span></div><button class="fold" data-fold="logBlock" title="collapse / expand"></button></header>
 			<div class="bb">
-				<div><div class="lbl" style="margin-bottom:6px">What changed · Broadwatcher event tape</div><div class="tape" id="tape"></div></div>
-				<div><div class="lbl" style="margin-bottom:6px">UniFi events</div><div class="tape" id="unifiLog"></div></div>
+				<div class="logbar" id="logBar">
+					<div class="seg mini" id="logLevels" role="group" aria-label="levels"><button type="button" class="on" data-level="error">errors</button><button type="button" class="on" data-level="warn">warnings</button><button type="button" data-level="info">notes</button><button type="button" data-level="clear">cleared</button></div>
+					<select id="logRange" title="how far back"><option value="3600000">last hour</option><option value="21600000">last 6 hours</option><option value="86400000" selected>last 24 hours</option><option value="604800000">last 7 days</option><option value="2592000000">last 30 days</option></select>
+					<select id="logCat" title="category"><option value="">every category</option></select>
+					<input class="find" id="logFind" placeholder="find in the log… (port load, flap, offline, a device)">
+					<label class="chk"><input type="checkbox" id="logOpen"> only still open</label>
+					<span class="logbar-right"><button class="btn mini" id="logCopy" title="copy the visible rows as text">Copy</button><a class="btn mini" id="logCsv" href="/api/journal/export" download="broadwatch-log.csv" title="download the visible rows as CSV">CSV</a></span>
+				</div>
+				<div class="logwrap"><table class="log" id="logTable"><thead><tr><th class="when">When</th><th class="lv"></th><th class="cat">Category</th><th>What happened</th><th class="num dur">Lasted</th></tr></thead><tbody id="logBody"></tbody></table><div class="empty" id="logEmpty" hidden>nothing in this window</div></div>
 			</div>
 		</section>
-		<footer class="foot">Broadwatcher · Brookline Interactive Group · UniFi Network API and SNMP · Blackmagic REST and ATEM protocol · Companion · local or Claude AI</footer>
+
+		<section class="block" id="unifiBlock">
+			<header class="bh"><h2>UniFi events</h2><span class="bh-note">the controller's own log, newest first</span><button class="fold" data-fold="unifiBlock" title="collapse / expand"></button></header>
+			<div class="bb"><div class="tape" id="unifiLog"></div><div class="tape" id="tape" hidden></div></div>
+		</section>
+		<footer class="foot">Broadwatch · Brookline Interactive Group · UniFi Network API and SNMP · Blackmagic REST and ATEM protocol · Companion · local or Claude AI</footer>
 	</main>
 
 	<aside class="inspector" id="inspector">

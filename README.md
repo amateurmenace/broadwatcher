@@ -1,4 +1,4 @@
-# Broadwatcher
+# Broadwatch
 
 A broadcast-network console for Brookline Interactive Group, for Mac and Windows. It reads the UniFi
 Network API and SNMP on the UDM Pro Max and switches, talks to the Blackmagic gear directly (REST on the
@@ -31,7 +31,7 @@ broadcast readiness and explain problems.
   creates a profile, sets its expectations, ticks the roster (unticked devices go on standby), runs *Test
   every probe* and saves; the profile menu in the header switches profiles without touching the roster.
 - **Issues strip**: every open alert as a chip. Click one and the inspector explains what it means, shows
-  the device/port it is about, the related UniFi events, flows and Broadwatcher events, and offers
+  the device/port it is about, the related UniFi events, flows and Broadwatch events, and offers
   **Diagnose with AI**.
 - **Gateway at a glance**: WAN in/out with a 10-minute graph, the VLAN table (clients, in, out, sparkline),
   the console's CPU/memory/temperature gauges with uptime, switch and AP counts, storage and SNMP coverage,
@@ -66,11 +66,11 @@ broadcast readiness and explain problems.
   battery with the minutes left, the RF quality (RSQI, with the RSSI and the antenna in use), the audio
   level, mutes and the receiver's own warnings. A roster audio device that has neither (the field X32
   Dante card) is listed with "nothing to read". The switcher's own Fairlight levels appear here only when
-  Broadwatcher holds its own session with it (Settings > Switcher: *own session*); read through Companion,
+  Broadwatch holds its own session with it (Settings > Switcher: *own session*); read through Companion,
   the switcher sends no levels. Alerts: a transmitter below 20 % battery (error below 10 %), RF quality
   below 30 %, and, when the show profile expects mics, a mic that is muted or off.
 - **Stream forensics**: with a switch port mirrored from the switcher's port into a spare network adapter of
-  this computer, Broadwatcher runs tshark on it and shows the switcher's traffic as the switcher sees it:
+  this computer, Broadwatch runs tshark on it and shows the switcher's traffic as the switcher sees it:
   every **control session** (who holds one, since when, how many packets a second; two programs on one
   computer show as two sessions) and every hello the switcher **refused** with "too many clients"; every
   **flow** at its port (RTMP with the app name, a masked stream key, the encoder and the switcher's answer;
@@ -95,15 +95,20 @@ broadcast readiness and explain problems.
   broadcast*, renamed, regrouped, given a probe/telemetry/minimum link speed, added or removed. Unticked
   devices sit in a collapsed *standby* list: still shown, never probed, never an alert. The inspector of
   any device also has *Put on standby* / *Add to this broadcast*.
-- **What changed** / **UniFi events**: Broadwatcher's own event tape (streams starting and stopping, ports
-  up/down, devices leaving or returning, alerts raised and cleared, record and stream state) and the
-  controller log.
+- **Log**: everything that went wrong, and right again, in one filterable table that survives restarts:
+  alerts raised and cleared (with how long each lasted and "still open"), port load, flapping links,
+  devices leaving and returning, streams, the notable controller events, AI and app errors. Filter by
+  level (errors / warnings / notes / cleared), category, free text and time window (last hour to 30 days),
+  or "only still open"; click a row for the explanation, the device behind it and an "Ask the AI about
+  this" button; *Copy* puts the visible rows on the clipboard, *CSV* downloads them. Kept 30 days in
+  `journal/` beside the config file, one file per day.
+- **UniFi events**: the controller's own log, newest first.
 - **Inspector / AI**: the right rail. With nothing selected it shows the AI verdict (Ready / Degraded /
   At risk / Down), why, what to do now, a *Reassess* button and **Ask the engineer**, a chat box that
   answers from the live state.
-- **Control connection** (in the switcher's inspector): how the switcher is read. By default Broadwatcher
-  reads the HD8 **through Bitfocus Companion**, which already holds a control session, so Broadwatcher takes
-  none of the switcher's few slots. The section shows Companion's connection state, Broadwatcher's own
+- **Control connection** (in the switcher's inspector): how the switcher is read. By default Broadwatch
+  reads the HD8 **through Bitfocus Companion**, which already holds a control session, so Broadwatch takes
+  none of the switcher's few slots. The section shows Companion's connection state, Broadwatch's own
   session (none, held, refused with the next attempt time, or released), the list of programs believed to
   hold a slot (Companion and the NDI Machine bridge are detected on this PC; ATEM Software Control on the Mac
   cannot be seen from here), and the switch to *own session* for the raw protocol capture.
@@ -111,7 +116,7 @@ broadcast readiness and explain problems.
 ## How the stream detection works
 
 The UniFi controller only refreshes a switch's port counters when that switch *informs* it (every 30–90 s),
-so Broadwatcher reads the counters straight from the switches over **SNMP every 3 s**, reads the encoders
+so Broadwatch reads the counters straight from the switches over **SNMP every 3 s**, reads the encoders
 directly every 10–20 s (the field ATEM's stream state, bitrate and destination URL over the ATEM protocol;
 the Web Presenters' status and bitrate over REST), and lists gateway flows aimed at the ATEM with their
 source and destination port. A stream from a device on the same VLAN as the ATEM never passes the gateway,
@@ -121,8 +126,8 @@ so it is detected from the intake counters and attributed from the encoder telem
 
 Downloads are on the **Releases** page of this private repository.
 
-**Mac**: open the `.dmg` (universal) and drag *Broadwatcher* to Applications. The app is not notarised, so
-the first launch needs **right-click > Open > Open** (or `xattr -d com.apple.quarantine "/Applications/Broadwatcher.app"`).
+**Mac**: open the `.dmg` (universal) and drag *Broadwatch* to Applications. The app is not notarised, so
+the first launch needs **right-click > Open > Open** (or `xattr -d com.apple.quarantine "/Applications/Broadwatch.app"`).
 
 **Windows**: run the installer or the portable exe. SmartScreen will say "Windows protected your PC":
 **More info > Run anyway** (not code-signed). The earlier *BIG NetWatch* app is a separate program; uninstall
@@ -133,7 +138,7 @@ on the BIG network (or over VPN). Nothing leaves the LAN unless the AI is pointe
 
 ## Settings and the AI toggle
 
-The gear button in the top bar (or **Broadwatcher > Settings…**, Ctrl/Cmd+,) opens the Settings screen:
+The gear button in the top bar (or **Broadwatch > Settings…**, Ctrl/Cmd+,) opens the Settings screen:
 
 - **AI**: a two-way switch between a **local AI server** (LM Studio, Ollama, vLLM, anything OpenAI-compatible:
   URL, model, optional key) and **Claude** (your Anthropic API key, model Opus 5.5 / Sonnet 5.5 / Haiku 5.5,
@@ -144,44 +149,45 @@ The gear button in the top bar (or **Broadwatcher > Settings…**, Ctrl/Cmd+,) o
 - **UniFi gateway** (URL, Integrations API key, site), **Switcher** (name, IP and how it is read: through
   Companion, an own session, or not at all; the help text says why Fairlight audio levels need an own
   session), **SNMP** (community, interval), **Companion** (API address, ATEM connection label, start with
-  Broadwatcher), **Server** (listen on this computer only or on the LAN, port; applies after a restart) and
+  Broadwatch), **Server** (listen on this computer only or on the LAN, port; applies after a restart) and
   the alert **thresholds**, including the mic battery and RF quality levels. Gateway, SNMP and poll changes
   restart the polling in place; AI, thresholds, Companion and the switcher mode apply immediately.
 
 ## On a phone
 
-**Broadwatcher > Open on a phone…** shows the link to the phone page (`/m`): the health verdict and score,
+**Broadwatch > Open on a phone…** shows the link to the phone page (`/m`): the health verdict and score,
 the eight tiles, open items, streams into the switcher, the stream paths, the wireless mics (one row per
-receiver channel with battery, RF and audio bars), the Ask box and the event tape, in one column, live over
+receiver channel with battery, RF and audio bars), the Ask box, the log (errors and warnings of the last
+24 hours) and the event tape, in one column, live over
 the same server-sent events as the desk. The server must listen on the LAN (the menu
-offers to switch *Settings > Server* to the whole LAN and restart; Windows asks once to allow Broadwatcher
+offers to switch *Settings > Server* to the whole LAN and restart; Windows asks once to allow Broadwatch
 through the firewall). The link carries an access key generated once per install (`server.token` in the
 config file); the phone keeps it in a cookie, and anything on the LAN without the key gets a 401. Open the
 link in Safari or Chrome and *Add to Home Screen*: the page has a manifest and an icon.
 
-## Two builds: Broadwatcher and Broadwatcher Community
+## Two builds: Broadwatch and Broadwatch Community
 
 Every release carries two flavours built from the same code:
 
-- **Broadwatcher** (`Broadwatcher-<version>-…`): BIG's own build. `config.json` is bundled with the UniFi key,
+- **Broadwatch** (`Broadwatch-<version>-…`): BIG's own build. `config.json` is bundled with the UniFi key,
   the roster, the VLANs and, when the repository secret `ANTHROPIC_API_KEY` is set in GitHub (Settings >
   Secrets and variables > Actions), the Claude key, embedded at build time by `scripts/embed-secrets.mjs`
   (then Claude is the default AI). The key never enters git.
-- **Broadwatcher Community** (`Broadwatcher-Community-<version>-…`): the public build. `config.public.json`
+- **Broadwatch Community** (`Broadwatch-Community-<version>-…`): the public build. `config.public.json`
   is bundled instead: no keys, no devices, Claude selected but without a key. On first start the Settings
   screen opens with a welcome note; enter the gateway URL and key, the SNMP community and either a local AI
   server or an Anthropic key, then add devices with *Edit roster*. It installs beside the BIG build (its own
-  app id and user-data folder, `Broadwatcher Community`).
+  app id and user-data folder, `Broadwatch Community`).
 
 Build one locally with `node scripts/build-flavor.mjs public --win` (or `private`, `--mac`); the script writes
 the electron-builder configuration to `dist/builder-<flavour>.json` and runs it.
 
 ## Configuration file
 
-On first run the bundled config is copied to the app's user-data folder (**Broadwatcher > Open config
-file**; macOS `~/Library/Application Support/Broadwatcher/config.json`, Windows `%APPDATA%\Broadwatcher\config.json`).
+On first run the bundled config is copied to the app's user-data folder (**Broadwatch > Open config
+file**; macOS `~/Library/Application Support/Broadwatch/config.json`, Windows `%APPDATA%\Broadwatch\config.json`).
 The roster and the Settings screen write there; anything else can be edited in the file, then
-**Broadwatcher > Restart server**. Updates keep your edits: the bundled file carries a `config_version`, and a
+**Broadwatch > Restart server**. Updates keep your edits: the bundled file carries a `config_version`, and a
 roster edited in the app always wins over the bundled list (new bundled devices are appended on standby).
 
 - `gateway`: URL, Integrations API key, site.
@@ -208,6 +214,13 @@ roster edited in the app always wins over the bundled list (new bundled devices 
 - `networks[]`: VLANs in the HUD, in that order (Settings > UniFi gateway > *VLANs in the top bar*; once
   edited there, `networks_edited` keeps your list across upgrades). `poll`: intervals. `thresholds`: alert
   levels incl. `stream_min_mbps`.
+- `retired_equipment[]`: IPs of devices that left the building; a config upgrade removes them even from a
+  roster edited in the app.
+- `ai.anthropic_workspace_id`: only for an Anthropic key that is not scoped to a workspace (the API then
+  answers 400 "must include the anthropic-workspace-id header"); the id is under console.anthropic.com >
+  Settings > Workspaces. The private build takes it from the `ANTHROPIC_WORKSPACE_ID` repository secret.
+- The log lives in `journal/` beside the config file: one JSON-lines file per day, 30 days, readable with
+  any text tool.
 - `snmp.community`: the SNMP v2c community (`netwatch`, enabled in UniFi on 2026-10-18).
 - `ai`: `base_url` of any OpenAI-compatible server (default LM Studio on the Broadcast Pix PC,
   `http://192.168.20.75:1234/v1`, model `gemma-flash`), or Anthropic's API for use away from the studio or for a
@@ -233,9 +246,9 @@ Without Electron (Node 22+): `node server/server.js [config.json]`, then open `h
    for about two minutes before freeing its slot. On this network three programs hold a slot all the time:
    Companion, ATEM Software Control and the NDI Machine ATEM bridge (`atem-remote.exe`, started with NDI
    Machine), and that already fills the HD8: the fourth knock is refused with "too many clients". So
-   Broadwatcher takes **no slot**: it reads the switcher through Companion (the default), and only opens a
+   Broadwatch takes **no slot**: it reads the switcher through Companion (the default), and only opens a
    session of its own when switched to *own session* (one slot, never more than one hello per two minutes,
-   backing off 2, 4, 8 then 15 minutes when refused). A second copy of Broadwatcher on the Mac reads nothing
+   backing off 2, 4, 8 then 15 minutes when refused). A second copy of Broadwatch on the Mac reads nothing
    from the switcher until Companion's API is reachable from there. If the switcher refuses even with those
    three closed, something else is opening sessions in a loop; a power-cycle of the switcher clears phantoms.
 

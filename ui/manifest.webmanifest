@@ -1,6 +1,6 @@
 {
-  "name": "Broadwatcher",
-  "short_name": "Broadwatcher",
+  "name": "Broadwatch",
+  "short_name": "Broadwatch",
   "start_url": "/m",
   "display": "standalone",
   "background_color": "#f3f0e9",

@@ -14,13 +14,13 @@ Blackmagic Web Presenters that push the programme to the internet, HyperDeck rec
 Dante audio (VLANs BIG_DANTE, BIG_MOBILE_DANTE) with X32 consoles and Sennheiser EW-DX mics, an NDI VLAN (BIG_NDI),
 Zoom running on a Mac, Tightrope playout servers, and a field kit (ATEM Mini Extreme ISO G2, Web Presenter 4K).
 Remote streams reach the HD8 from the internet through UDM port forwards (WAN 1937 -> HD8 1935; WAN 1935 goes to the
-field Mini instead); Broadwatcher reads the HD8's state through Bitfocus Companion, which holds the control session.
+field Mini instead); Broadwatch reads the HD8's state through Bitfocus Companion, which holds the control session.
 Town Meeting nights are the critical events. Be concrete, terse and practical, like a senior broadcast engineer
 talking to a colleague: name devices, ports and numbers, say what is fine, what is risky and what to check first.
 
 Rules of judgement:
 - Quote numbers exactly as they appear in the data. Never invent devices, ports or numbers. If data is missing, say so.
-- The ALERTS list is Broadwatcher's own threshold check and is authoritative for what is wrong. With no alerts, the network is
+- The ALERTS list is Broadwatch's own threshold check and is authoritative for what is wrong. With no alerts, the network is
   normally READY; only call out something else if the data itself shows it clearly.
 - Low traffic is normal, not a problem: a 1 Gb/s link carrying 1 Mb/s is healthy. Only utilisation near the link speed matters.
 - UniFi switches idle at 40-70 % CPU; only CPU above 85 %, temperature above 70 °C, or memory above 90 % is a concern.
@@ -29,11 +29,11 @@ Rules of judgement:
 - Devices listed as STANDBY are deliberately not part of this broadcast: never mention them as a problem.
 - A stream "arriving" at the ATEM is good news during a show, not a problem; "stopped" during a show is a problem.
 - An ATEM has only a handful of control slots (Companion, ATEM Software Control, hardware panels, the NDI Machine bridge
-  each hold one). "too many clients" means the slots are full, not that the switcher is down; Broadwatcher holds none by default.
+  each hold one). "too many clients" means the slots are full, not that the switcher is down; Broadwatch holds none by default.
 - STREAM PATHS show the internet -> port forward -> device route of remote streams. A sender on WAN port 1935 lands on the
   field Mini (usually on standby), not on the HD8, which listens on WAN 1937: say so plainly when a RED path shows it.`
 
-export const AI_DEFAULTS = { enabled: true, provider: 'openai', base_url: '', model: '', api_key: '', anthropic_api_key: '', anthropic_model: 'claude-opus-5-5', anthropic_effort: 'medium', timeout_ms: 90000, assess_every_s: 180 }
+export const AI_DEFAULTS = { enabled: true, provider: 'openai', base_url: '', model: '', api_key: '', anthropic_api_key: '', anthropic_workspace_id: '', anthropic_model: 'claude-opus-5-5', anthropic_effort: 'medium', timeout_ms: 90000, assess_every_s: 180 }
 export const ANTHROPIC_MODELS = [
 	{ id: 'claude-opus-5-5', label: 'Claude Opus 5.5 (best judgement)', price: '$4 / $20 per M tokens' },
 	{ id: 'claude-sonnet-5-5', label: 'Claude Sonnet 5.5 (fast)', price: '$2 / $10 per M tokens' },
@@ -66,7 +66,7 @@ export class AI {
 	}
 
 	status() {
-		return { enabled: this.enabled, provider: this.provider, model: this.modelName, endpoint: this.provider === 'anthropic' ? 'api.anthropic.com' : this.cfg.base_url, busy: this.busy, lastError: this.lastError, assessment: this.assessment, providers: this.providers() }
+		return { enabled: this.enabled, provider: this.provider, model: this.modelName, endpoint: this.provider === 'anthropic' ? 'api.anthropic.com' : this.cfg.base_url, busy: this.busy, lastError: this.lastError, configError: !!this.configError, assessment: this.assessment, providers: this.providers() }
 	}
 
 	// which providers are set up (the local/cloud toggle in the UI switches between the usable ones)
@@ -82,6 +82,7 @@ export class AI {
 		this.assessment = null
 		this.diagnoses.clear()
 		this.lastError = null
+		this.configError = false // a key or workspace problem: the timer stops knocking until the settings change
 	}
 
 	// try a provider with the given (unsaved) settings: one tiny request
@@ -100,7 +101,9 @@ export class AI {
 			if (this.provider === 'anthropic') {
 				// official SDK; adaptive thinking is on by default on Claude Opus 5.5 (depth via output_config.effort),
 				// sampling parameters are not sent, and a safety decline is re-run on a fallback model server-side
-				const client = this.anthropic || (this.anthropic = new Anthropic({ apiKey: this.cfg.anthropic_api_key || undefined, timeout: this.cfg.timeout_ms, maxRetries: 2 }))
+				// a key that is not scoped to a workspace must name one on every request (anthropic-workspace-id)
+				const workspace = String(this.cfg.anthropic_workspace_id || process.env.ANTHROPIC_WORKSPACE_ID || '').trim()
+				const client = this.anthropic || (this.anthropic = new Anthropic({ apiKey: this.cfg.anthropic_api_key || undefined, timeout: this.cfg.timeout_ms, maxRetries: 2, ...(workspace ? { defaultHeaders: { 'anthropic-workspace-id': workspace } } : {}) }))
 				const sys = messages.filter((m) => m.role === 'system').map((m) => m.content).join('\n\n')
 				let r
 				try {
@@ -114,13 +117,21 @@ export class AI {
 						messages: messages.filter((m) => m.role !== 'system'),
 					})
 				} catch (e) {
-					if (e instanceof Anthropic.BadRequestError && /fallback|beta|output_config|effort/i.test(e.message)) {
+					const msg = String(e?.message || e)
+					if (e instanceof Anthropic.BadRequestError && /workspace/i.test(msg)) {
+						// "This API key is not scoped to a workspace, so this request must include the anthropic-workspace-id header"
+						this.configError = true
+						throw new Error('Anthropic: this API key is not scoped to a workspace, so every request must name one. Paste the workspace id (console.anthropic.com > Settings > Workspaces, it starts with wrkspc_) into Settings > AI > Claude > Workspace id, or make a key inside a workspace.')
+					}
+					if (e instanceof Anthropic.BadRequestError && /fallback|beta|output_config|effort/i.test(msg)) {
 						// an account or model that does not take the fallback / effort parameters: plain request
 						r = await client.messages.create({ model: this.cfg.anthropic_model, max_tokens: Math.max(maxTokens, 4000), system: sys, messages: messages.filter((m) => m.role !== 'system') })
-					} else if (e instanceof Anthropic.AuthenticationError) throw new Error('Anthropic API key rejected (check ai.anthropic_api_key)')
-					if (e instanceof Anthropic.RateLimitError) throw new Error('Anthropic rate limit, try again in a minute')
-					if (e instanceof Anthropic.APIError) throw new Error(`Anthropic API error ${e.status}: ${e.message}`)
-					throw e
+					} else if (e instanceof Anthropic.AuthenticationError || e instanceof Anthropic.PermissionDeniedError) {
+						this.configError = true
+						throw new Error(`Anthropic rejected the API key (HTTP ${e.status}): check it under Settings > AI > Claude${process.env.ANTHROPIC_API_KEY ? ' (the ANTHROPIC_API_KEY environment variable is set on this machine too)' : ''}`)
+					} else if (e instanceof Anthropic.RateLimitError) throw new Error('Anthropic rate limit, try again in a minute')
+					else if (e instanceof Anthropic.APIError) throw new Error(`Anthropic API error ${e.status}: ${msg.slice(0, 300)}`)
+					else throw e
 				}
 				if (r.stop_reason === 'refusal') throw new Error('the model declined this request' + (r.stop_details?.explanation ? ': ' + r.stop_details.explanation : ''))
 				text = r.content.filter((b) => b.type === 'text').map((b) => b.text).join('')
@@ -136,6 +147,7 @@ export class AI {
 				text = j.choices?.[0]?.message?.content || ''
 			}
 			this.lastError = null
+			this.configError = false
 			return { text: String(text).trim(), ms: Date.now() - t0 }
 		} catch (e) {
 			this.lastError = `${new Date().toLocaleTimeString()} ${e.message}`
@@ -177,7 +189,7 @@ export class AI {
 			L.push(`  STREAM INTAKE: ${st.state || 'unknown'}${st.state === 'arriving' ? ` ~${rate(st.rate || 0)} above baseline ${rate(st.baseline || 0)} since ${new Date(st.since).toLocaleTimeString()}` : ` (baseline ${rate(st.baseline || 0)})`}; sources: ${(st.sources || []).map((x) => `${x.name} [${x.confidence}] ${x.detail || ''}`).join('; ') || 'none identified'}`)
 			if (at.incoming?.length) L.push('  flows into ATEM (last hour): ' + at.incoming.slice(0, 6).map((x) => `${x.srcName || x.src}${x.region ? '/' + x.region : ''} -> ${x.proto}:${x.dport} ${x.service || ''} ${(x.bytes / 1e6).toFixed(1)}MB ${x.live ? 'LIVE' : x.ageS + 's ago'}${x.action === 'blocked' ? ' BLOCKED' : ''}`).join('; '))
 			const ses = at.session
-			if (ses) L.push(`  switcher data source: ${ses.mode === 'companion' ? 'Companion (Broadwatcher holds no control slot)' : ses.mode}; Broadwatcher's own session: ${ses.own ? ses.own.state + (ses.own.error ? ' (' + ses.own.error + ')' : '') : 'none'}; Companion: ${ses.companion ? (ses.companion.ok ? (ses.companion.connected ? 'connected to the switcher' : 'NOT connected to the switcher') : ses.companion.error) : 'not used'}; slot holders: ${(ses.controllers || []).map((c) => `${c.name} ${c.held === null ? 'unknown' : c.held ? 'YES' : 'no'}`).join(', ') || 'unknown'}`)
+			if (ses) L.push(`  switcher data source: ${ses.mode === 'companion' ? 'Companion (Broadwatch holds no control slot)' : ses.mode}; Broadwatch's own session: ${ses.own ? ses.own.state + (ses.own.error ? ' (' + ses.own.error + ')' : '') : 'none'}; Companion: ${ses.companion ? (ses.companion.ok ? (ses.companion.connected ? 'connected to the switcher' : 'NOT connected to the switcher') : ses.companion.error) : 'not used'}; slot holders: ${(ses.controllers || []).map((c) => `${c.name} ${c.held === null ? 'unknown' : c.held ? 'YES' : 'no'}`).join(', ') || 'unknown'}`)
 		}
 		const au = state.audio
 		if (au && (au.consoles.length || au.mics.length || au.others.length)) {
@@ -208,6 +220,7 @@ export class AI {
 		for (const a of state.alerts) L.push(`  [${a.level}] (${a.id}) ${a.text}${a.since ? ` since ${new Date(a.since).toLocaleTimeString()}` : ''}`)
 		const ev = (state.events || []).slice(0, 12)
 		if (ev.length) L.push('BROADWATCHER EVENTS (newest first): ' + ev.map((x) => `${new Date(x.t).toLocaleTimeString()} ${x.text}`).join(' | '))
+		if (this.journal) L.push(this.journal.summaryText(state.ts || Date.now()))
 		const log = (state.log || []).filter((l) => l.severity !== 'info').slice(0, 12)
 		if (log.length) L.push('UNIFI EVENTS (notable, newest first): ' + log.map((l) => `${new Date(l.t).toLocaleTimeString()} ${l.title}`).join(' | '))
 		const pfs = (state.portForwards || []).filter((f) => state.equipment.some((e) => e.ip === f.to) || /atem|ndi|rtmp|srt|stream/i.test(f.name))
@@ -224,7 +237,7 @@ export class AI {
 		if (fresh && !force) return this.assessment
 		if (this.busy) return this.assessment
 		const h = state.health
-		const prompt = `Here is the live state of the network:\n\n${this.digest(state)}\n\n${h ? `Broadwatcher's health score has already set the verdict: ${h.verdict} (${h.score}/100). Keep that verdict and explain it: ` : 'Assess broadcast readiness right now. '}Reply with ONE JSON object and nothing else, in this shape:
+		const prompt = `Here is the live state of the network:\n\n${this.digest(state)}\n\n${h ? `Broadwatch's health score has already set the verdict: ${h.verdict} (${h.score}/100). Keep that verdict and explain it: ` : 'Assess broadcast readiness right now. '}Reply with ONE JSON object and nothing else, in this shape:
 {"verdict":"READY"|"DEGRADED"|"AT RISK"|"DOWN","headline":"one sentence, max 18 words","reasons":["3 to 6 short bullets: what matters most, each naming the device/port/number"],"actions":["0 to 4 concrete things to check or do now, most urgent first"],"confidence":"high"|"medium"|"low"}
 Rules: READY = every broadcast path is healthy; DEGRADED = something is wrong but a show can run; AT RISK = a failure is likely to hit a show; DOWN = a broadcast path is broken now. Offline portable kit and spares are normal, not a problem. Unnamed or unidentified devices are low priority.`
 		const { text, ms } = await this.chat([{ role: 'system', content: SYSTEM }, { role: 'user', content: prompt }], { maxTokens: 700, temperature: 0.1 })
@@ -243,7 +256,7 @@ Rules: READY = every broadcast path is healthy; DEGRADED = something is wrong bu
 Entity details: ${JSON.stringify(details.entity || {}).slice(0, 3000)}
 Related UniFi events: ${(details.log || []).slice(0, 10).map((l) => `${new Date(l.t).toLocaleTimeString()} ${l.title}`).join(' | ') || 'none'}
 Related flows: ${(details.flows || []).slice(0, 8).map((f) => `${f.srcName || f.src} -> ${f.dstName || f.dst}:${f.dport} ${f.proto} ${(f.bytes / 1e6).toFixed(1)}MB`).join('; ') || 'none'}
-Related Broadwatcher events: ${(details.events || []).slice(0, 8).map((x) => `${new Date(x.t).toLocaleTimeString()} ${x.text}`).join(' | ') || 'none'}
+Related Broadwatch events: ${(details.events || []).slice(0, 8).map((x) => `${new Date(x.t).toLocaleTimeString()} ${x.text}`).join(' | ') || 'none'}
 
 Explain in plain language, as 3 short sections with these exact headings: "What this means", "Likely causes" (most likely first, say how you know), "What to check now" (numbered, concrete: which device, port, cable, setting). Max 170 words. Mention how it affects a live broadcast.`
 		const { text, ms } = await this.chat([{ role: 'system', content: SYSTEM }, { role: 'user', content: prompt }], { maxTokens: 600, temperature: 0.2 })

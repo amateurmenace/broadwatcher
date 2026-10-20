@@ -1,6 +1,6 @@
 // Build one flavour of the app with electron-builder.
 //   node scripts/build-flavor.mjs private [electron-builder args…]   the BIG build (bundled config.json with the site's keys)
-//   node scripts/build-flavor.mjs public  [electron-builder args…]   "Broadwatcher Community": no keys, no site devices;
+//   node scripts/build-flavor.mjs public  [electron-builder args…]   "Broadwatch Community": no keys, no site devices;
 //                                                                     config.public.json is bundled instead of config.json
 // The builder configuration is package.json's "build" section with the flavour's overrides, written to
 // dist/builder-<flavour>.json and passed with --config (which replaces the package.json section entirely).
@@ -21,13 +21,13 @@ const build = JSON.parse(JSON.stringify(pkg.build))
 build.files = build.files.filter((f) => f !== 'config.json' && f !== 'config.public.json')
 if (flavor === 'public') {
 	build.files.push('config.public.json')
-	build.productName = 'Broadwatcher Community'
+	build.productName = 'Broadwatch Community'
 	build.appId = pkg.build.appId + '.community'
-	build.artifactName = 'Broadwatcher-Community-${version}-${os}-${arch}.${ext}'
-	build.nsis = { ...(build.nsis || {}), artifactName: 'Broadwatcher-Community-${version}-win-setup.${ext}' }
-	build.portable = { ...(build.portable || {}), artifactName: 'Broadwatcher-Community-${version}-win-portable.${ext}' }
-	build.dmg = { ...(build.dmg || {}), artifactName: 'Broadwatcher-Community-${version}-mac.${ext}' }
-	build.extraMetadata = { name: 'broadwatcher-community', productName: 'Broadwatcher Community', flavor: 'public', description: 'Broadwatcher Community: real-time broadcast-network monitor (UniFi + Blackmagic + your own AI)' }
+	build.artifactName = 'Broadwatch-Community-${version}-${os}-${arch}.${ext}'
+	build.nsis = { ...(build.nsis || {}), artifactName: 'Broadwatch-Community-${version}-win-setup.${ext}' }
+	build.portable = { ...(build.portable || {}), artifactName: 'Broadwatch-Community-${version}-win-portable.${ext}' }
+	build.dmg = { ...(build.dmg || {}), artifactName: 'Broadwatch-Community-${version}-mac.${ext}' }
+	build.extraMetadata = { name: 'broadwatch-community', productName: 'Broadwatch Community', flavor: 'public', description: 'Broadwatch Community: real-time broadcast-network monitor (UniFi + Blackmagic + your own AI)' }
 	build.directories = { ...(build.directories || {}), output: 'dist/public' }
 	// the public build publishes to the public repository when CI has a token for it (BW_PUBLIC_REPO is set
 	// together with GH_TOKEN = the PUBLIC_RELEASE_TOKEN secret); otherwise it lands in the private release
