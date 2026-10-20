@@ -36,7 +36,7 @@ const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; cha
 const DEEP_KEYS = ['gateway', 'poll', 'thresholds', 'ai', 'snmp', 'server', 'atem', 'companion', 'capture']
 // what the user made in the app and a newer bundle must never take away: port labels, show profiles, the
 // VLAN list once it was edited in Settings (networks_edited), the roster (handled below)
-const USER_KEYS = ['port_labels', 'profiles', 'active_profile', 'networks_edited', 'equipment_edited']
+const USER_KEYS = ['port_labels', 'profiles', 'active_profile', 'networks_edited', 'equipment_edited', 'map_labels', 'roster_switches_edited']
 const BUNDLED_SECRETS = { ai: ['anthropic_api_key', 'anthropic_workspace_id', 'api_key'], gateway: ['api_key'], snmp: ['community'] }
 
 // The bundled config is the source of truth for the equipment list, the ATEM, SNMP and AI defaults; the user's
@@ -54,6 +54,7 @@ export function loadConfig(bundledPath, userPath) {
 		const deepKeys = Object.fromEntries(DEEP_KEYS.map((k) => [k, deep(k)]))
 		const kept = Object.fromEntries(USER_KEYS.filter((k) => user[k] !== undefined).map((k) => [k, user[k]]))
 		if (user.networks_edited && Array.isArray(user.networks)) kept.networks = user.networks
+		if (user.roster_switches_edited && Array.isArray(user.roster_switches)) kept.roster_switches = user.roster_switches
 		const merged = outdated ? { ...base, ...kept, ...deepKeys } : { ...base, ...user, ...deepKeys }
 		// a secret the bundle carries (the Anthropic key embedded at build time, the UniFi key, the SNMP community)
 		// fills a field the user's copy has empty: an empty field is "never set", not a choice
@@ -451,17 +452,59 @@ export function startServer({ config, configPath = null, host = '127.0.0.1', por
 				}
 				return sendJson(res, collector.details(q.get('type'), q.get('id')))
 			}
-			if (p === '/api/equipment' && req.method === 'GET') return sendJson(res, { equipment: config.equipment, groups: [...new Set(config.equipment.map((e) => e.group))], configPath })
+			if (p === '/api/equipment' && req.method === 'GET') {
+				return sendJson(res, {
+					equipment: config.equipment,
+					groups: [...new Set(config.equipment.map((e) => e.group))],
+					configPath,
+					roster_switches: collector.rosterSwitches,
+					switches: collector.state.switches.map((s) => ({ name: s.name, mac: s.mac, online: s.online, model: s.modelName, clients: s.ports.reduce((n, p) => n + (p.clientCount || 0), 0) })),
+					auto: collector.state.equipment.filter((e) => e.auto).map((e) => ({ name: e.name, ip: e.ip, group: e.group, role: e.role, online: e.online })),
+				})
+			}
 			if (p === '/api/equipment' && req.method === 'POST') {
 				const body = await readBody(req)
 				const clean = collector.setEquipment(body.equipment)
+				const patch = { equipment: clean, equipment_edited: true, config_version: config.config_version || 0 }
+				if (Array.isArray(body.roster_switches)) {
+					config.roster_switches = collector.setRosterSwitches(body.roster_switches)
+					config.roster_switches_edited = true
+					patch.roster_switches = config.roster_switches
+					patch.roster_switches_edited = true
+				}
 				let saved = false
 				try {
-					saved = saveUserConfig(configPath, { equipment: clean, equipment_edited: true, config_version: config.config_version || 0 })
+					saved = saveUserConfig(configPath, patch)
 				} catch (e) {
 					log('[config] could not save: ' + e.message)
 				}
-				return sendJson(res, { equipment: clean, saved, configPath })
+				return sendJson(res, { equipment: clean, roster_switches: collector.rosterSwitches, saved, configPath })
+			}
+			if (p === '/api/roster/add' && req.method === 'POST') {
+				// one device from a port or a client straight into the roster
+				const body = await readBody(req)
+				const r = collector.addEquipment(body)
+				if (r.error) return sendJson(res, r, 400)
+				let saved = false
+				try {
+					saved = saveUserConfig(configPath, { equipment: r.equipment, equipment_edited: true, config_version: config.config_version || 0 })
+				} catch (e) {
+					log('[config] could not save: ' + e.message)
+				}
+				return sendJson(res, { ok: true, entry: r.entry, saved })
+			}
+			if (p === '/api/maplabel' && req.method === 'POST') {
+				const body = await readBody(req)
+				const r = collector.setMapLabel(body.id, body.label)
+				if (r.error) return sendJson(res, r, 400)
+				config.map_labels = collector.mapLabels
+				let saved = false
+				try {
+					saved = saveUserConfig(configPath, { map_labels: config.map_labels, config_version: config.config_version || 0 })
+				} catch (e) {
+					log('[config] could not save: ' + e.message)
+				}
+				return sendJson(res, { ...r, saved })
 			}
 			if (p === '/api/portlabel' && req.method === 'POST') {
 				const body = await readBody(req)
@@ -548,10 +591,16 @@ export function startServer({ config, configPath = null, host = '127.0.0.1', por
 				return sendJson(res, r || { error: 'busy' })
 			}
 			if (p === '/api/ai/diagnose') {
-				if (!ai.enabled) return sendJson(res, { error: 'AI is not configured' }, 503)
+				// provider=anthropic|openai: the diagnose buttons let the user pick Claude or the local model each time
+				const provider = ['anthropic', 'openai'].includes(q.get('provider')) ? q.get('provider') : null
+				if (!ai.enabled && !provider) return sendJson(res, { error: 'AI is not configured' }, 503)
 				const d = collector.details('alert', q.get('id'))
 				if (d.error) return sendJson(res, d, 404)
-				return sendJson(res, await ai.diagnose(collector.state, d.alert, d, { force: q.get('refresh') === '1' }))
+				try {
+					return sendJson(res, await ai.diagnose(collector.state, d.alert, d, { force: q.get('refresh') === '1', provider }))
+				} catch (e) {
+					return sendJson(res, { error: e.message }, 502)
+				}
 			}
 			if (p === '/api/ai/ask' && req.method === 'POST') {
 				if (!ai.enabled) return sendJson(res, { error: 'AI is not configured' }, 503)

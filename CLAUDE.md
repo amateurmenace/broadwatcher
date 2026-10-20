@@ -96,6 +96,20 @@ touching anything. The roadmap for the next phase is in `docs/ROADMAP.md`.
   `/api/details?type=journal&id=` (the entry plus its entity's details); `ai.journal.summaryText()` in the
   digest. UI: the `logBlock` (filters remembered in localStorage `bw-log`, rows open the inspector,
   `journalSection`, "Ask the AI about this"); the phone page lists the last 24 h of errors and warnings.
+- 0.11.0: the top bar is 84 px with a spelled-out Settings button and the Theme / Panel switches under the
+  clock; sections run Health, Open items, Signal map, Gateway, Audio, Streams, …; the port objects carry
+  `err` (10-min deltas of rx_errors/tx_errors/rx_dropped/tx_dropped/link_down_count with `cause`
+  errors|drops|rxdrops|flaps and `window_s`), `errTotals`, `sfp` (part, compliance, rx/tx power, temp,
+  faults), `autoneg`, `flowctrl`, `storm` (broadcast+multicast pps) and `errDetail` (the EtherLike/RMON
+  breakdown over SNMP, `SnmpSwitch.errorDetail`, once a minute for ports with damaged frames); the port
+  alerts are `port:errors` / `port:drops` / `port:flaps` with the far end and, for congestion, the busiest
+  port of the downstream switch. `roster_switches` (config, Edit roster > Whole switches, default LIGHTHOUSE,
+  AUDIO RACK, BHS Auditorium - 48-PoE): wired clients on those switches become `auto` roster entries (no row,
+  no probe, alert only once seen online; `guessRole`). `/api/roster/add` (the inspector's "+ device" buttons
+  on ports and auto entries). `map_labels` (config) = hand-written names on the signal map, `/api/maplabel`,
+  double-click a node; USER_KEYS keeps them. The AI diagnosis buttons pick Claude or the local model per
+  call (`/api/ai/diagnose?provider=`, `ai.chat({provider})`); `ui/localai.js` is the local AI guide (LM
+  Studio / Ollama). Roles gained `playback` (Tightrope Flex 4).
 - Phone page: `ui/m.html` + `m.js` + `m.css` + `manifest.webmanifest` + `icon-512.png`, served at `/m`;
   non-loopback requests need `server.token` (`?key=` once, then the `bw_key` cookie; manifest and icons are
   public); `/api/phone` lists the LAN links; Electron menu "Open on a phone…" (switches `server.host` to

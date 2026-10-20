@@ -11,7 +11,8 @@ broadcast readiness and explain problems.
   the switcher, with its quiet level marked), WAN in/out and latency, console CPU/temperature, one cell per
   broadcast VLAN (name, VLAN number, in/out and a 10-minute sparkline, client count; which VLANs and in what
   order is a Settings field), the open-alert count ("2 warnings", "1 error" or "all clear"), the clock,
-  Settings, the light/dark switch and the readiness-rail toggle (or the `R` key). The clock and the controls
+  a **Settings** button and, under it, the Theme and Panel switches (the `R` key also toggles the side
+  panel). The clock and the controls
   always fit; the cells drop off whole on narrow windows instead of being cut (console under 1700 px, then
   the VLANs one by one).
 - **Section bar**: Health · Gateway · Signal map · Streams · Stream paths · Audio · Forensics · Switches ·
@@ -30,9 +31,12 @@ broadcast readiness and explain problems.
   actions) but never changes the verdict; the HUD lamp is the score. **Prepare a broadcast…** picks or
   creates a profile, sets its expectations, ticks the roster (unticked devices go on standby), runs *Test
   every probe* and saves; the profile menu in the header switches profiles without touching the roster.
-- **Issues strip**: every open alert as a chip. Click one and the inspector explains what it means, shows
-  the device/port it is about, the related UniFi events, flows and Broadwatch events, and offers
-  **Diagnose with AI**.
+- **Open items**: every open alert as a row, problems first, then warnings. Click one and the inspector
+  explains what it means, shows the device or port it is about, the related UniFi events, flows and
+  Broadwatch events, and offers **Diagnose with Claude** or **Diagnose with local AI**: the choice is
+  yours every time; a local model that is not set up yet opens a four-step guide (LM Studio or Ollama).
+- **Names on the map**: double-click any node of the signal map, or open it in the inspector, and write a
+  name of your own; it replaces the UniFi name on the map (violet corner), and it stays after a restart.
 - **Gateway at a glance**: WAN in/out with a 10-minute graph, the VLAN table (clients, in, out, sparkline),
   the console's CPU/memory/temperature gauges with uptime, switch and AP counts, storage and SNMP coverage,
   and the biggest flows of the last poll.
@@ -40,7 +44,8 @@ broadcast readiness and explain problems.
   hairlines with two thin flowing strands, orange towards the device (traffic into it) and teal back out
   of it; brighter and faster means more traffic, every node shows its live in/out numbers and trunk links
   are labelled. A stream arriving at the ATEM turns its link cyan. The map pans with the wheel or by
-  dragging, zooms with ctrl/⌘ + wheel or the −/+ buttons, fits with *fit* or a double-click, and its
+  dragging, zooms with ctrl/⌘ + wheel or the −/+ buttons (in the header and on the map itself), fits
+  with *fit* or a double-click on empty space, and its
   height is dragged at the bottom-right corner; the view is remembered. Click anything for details;
   "every switch" also shows switches that carry no broadcast gear.
 - **Streams into the switcher**: the intake readout with a 10-minute scope, the stream state (quiet /
@@ -80,6 +85,14 @@ broadcast readiness and explain problems.
   (wrong key or app, a format it will not take, the remote source switched off). Start/stop in the section
   header; the interface and tshark path live in Settings > Capture. Mirroring copies packets in the switch's
   hardware and does not touch the switcher's own traffic; a 2.5G mirror port never drops copies of a 1G link.
+- **Port errors, told apart**: the controller keeps four counters per port and Broadwatch reads them
+  separately over a ten-minute window: *damaged frames in* (the cable, the connector, the SFP, a duplex
+  mismatch or the far end), *dropped on the way out* (congestion: something behind the port receives more
+  than its link carries; the alert names the device at the far end and the busiest port of the downstream
+  switch), *received then refused* (VLAN, storm control, ingress buffer) and *link went down* (a flapping
+  cable or SFP). Fiber ports add their optics (receive and transmit power, temperature, fault flags), and
+  switches that keep the standard error tables answer over SNMP which kind of damage it was (CRC,
+  alignment, symbol, fragments, jabbers). The port inspector shows the table.
 - **Switches**: one row per switch with its ports (top bar = link speed, line = activity, dot = PoE,
   outline = uplink, red = new errors, violet corner = labelled by hand), uptime, CPU, temperature, PoE
   budget, uplink and totals; "live" means the counters are read straight from the switch over SNMP every
@@ -89,6 +102,11 @@ broadcast readiness and explain problems.
   patch-panel positions. Labels are also edited in the port's inspector and are saved in the config file.
   The **find** box above the switches highlights every port (and map node) whose device, IP or label
   matches, and opens the lists that contain a match.
+- **Whole switches in the roster**: Edit roster starts with a tick list of every switch; every wired
+  device on a ticked switch is part of the broadcast, listed under the switch's name, with no row to keep
+  (LIGHTHOUSE, AUDIO RACK and the BHS Auditorium switch by default). Such a device alerts once it has been
+  seen online. Any port or device in the inspector has a one-click **add to the roster** button, and a
+  device that came in through its switch can be given a row of its own for a probe, telemetry or a role.
 - **Broadcast equipment**: the roster, grouped by location, with a tally lamp, link, the device's own
   status (Web Presenter *Streaming 5.8 Mb/s*, HyperDeck *Record*, ATEM *program Camera 2*), traffic and
   probe round trip. **Edit roster** opens the table where devices are ticked in or out of *this
@@ -137,6 +155,11 @@ The app talks to the UDM at `https://192.168.20.1` with the embedded Integration
 on the BIG network (or over VPN). Nothing leaves the LAN unless the AI is pointed at Anthropic.
 
 ## Settings and the AI toggle
+
+**Claude or a local model, per question.** The readiness verdict uses the provider selected below; every
+*Diagnose* button offers both, and the readiness view's Local / Claude switch flips the default. A local
+model that is not set up yet opens the guide: pick LM Studio or Ollama, install it and a model, start the
+server, enter the address, test, done.
 
 The gear button in the top bar (or **Broadwatch > Settings…**, Ctrl/Cmd+,) opens the Settings screen:
 

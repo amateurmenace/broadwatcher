@@ -41,8 +41,11 @@ export function computeHealth(state, profile, th = {}) {
 	if (offGear.length) factor('switches', 'Switches', 14, 0, `${offGear.map((s) => s.name).join(', ')} offline with broadcast gear on it`, { critical: true, target: { type: 'switch', id: offGear[0].mac } })
 	else if (offOther.length) factor('switches', 'Switches', 14, 0.7, `${offOther.length} switch${offOther.length === 1 ? '' : 'es'} seen today now offline (no broadcast gear on them)`, { target: { type: 'switch', id: offOther[0].mac } })
 	else factor('switches', 'Switches', 14, 1, `${sw.filter((s) => s.online).length} switches online`)
-	const errPorts = (state.switches || []).filter((s) => s.online).flatMap((s) => s.ports.filter((p) => p.errorsRecent && (p.uplink || p.clients.some((c) => eq.some((e) => e.ip === c.ip)))).map((p) => `${s.name} p${p.idx}`))
-	factor('errors', 'Port errors', 5, errPorts.length ? 0.4 : 1, errPorts.length ? `new errors on ${errPorts.slice(0, 3).join(', ')}${errPorts.length > 3 ? '…' : ''}` : 'no new errors on broadcast or uplink ports')
+	// damaged frames and flapping links on broadcast or uplink ports weigh more than frames dropped for congestion
+	const errPorts = (state.switches || []).filter((s) => s.online).flatMap((s) => s.ports.filter((p) => p.errorsRecent && (p.uplink || p.clients.some((c) => eq.some((e) => e.ip === c.ip)))).map((p) => ({ n: `${s.name} p${p.idx}`, cause: p.err?.cause || 'errors', key: p.key })))
+	const damaged = errPorts.filter((p) => p.cause === 'errors' || p.cause === 'flaps')
+	const congested = errPorts.filter((p) => p.cause === 'drops' || p.cause === 'rxdrops')
+	factor('errors', 'Port errors', 5, damaged.length ? 0.3 : congested.length ? 0.6 : 1, damaged.length ? `damaged frames or a flapping link on ${damaged.map((p) => p.n).slice(0, 3).join(', ')}${damaged.length > 3 ? '…' : ''}` : congested.length ? `frames dropped for congestion on ${congested.map((p) => p.n).slice(0, 3).join(', ')}${congested.length > 3 ? '…' : ''}` : 'no new errors on broadcast or uplink ports', errPorts[0] ? { target: { type: 'port', id: errPorts[0].key } } : {})
 	const slow = eq.filter((e) => e.switch?.speed && (e.min_speed ?? (['switcher', 'encoder', 'recorder', 'computer'].includes(e.role) ? 1000 : 0)) > e.switch.speed)
 	const slowUp = (state.switches || []).filter((s) => s.online && s.uplink.speed && s.uplink.speed < 1000 && s.uplink.media !== 'wireless')
 	factor('links', 'Link speeds', 5, slow.length ? 0.4 : slowUp.length ? 0.6 : 1, slow.length ? `${slow.map((e) => e.name).join(', ')} below the needed link speed` : slowUp.length ? `${slowUp.map((s) => s.name).join(', ')} uplink below 1G` : 'every broadcast link at full speed')

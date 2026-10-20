@@ -202,12 +202,55 @@ export class SnmpSwitch {
 			let m
 			if ((m = /^(\d+)\/(\d+)$/.exec(name))) n = Number(m[2]) // UniFi switches: "0/15" = port 15
 			else if ((m = /^eth(\d+)$/i.exec(name))) n = Number(m[1]) + 1 // UDM / gateways: eth0 = port 1
+			else if ((m = /^Slot:\s*\d+\s*Port:\s*(\d+)/i.exec(name))) n = Number(m[1]) // Pro Aggregation: "Slot: 0 Port: 25 10G - Level"
 			else if ((m = /^(?:port|ge|xe|swp)[^\d]*(\d+)$/i.exec(name))) n = Number(m[1])
 			if (n === null || map.has(n)) continue
 			map.set(n, ifIndex)
 		}
+		// a switch whose ifName says nothing useful may still describe its ports in ifDescr
+		if (!map.size) {
+			for (const vb of await snmpWalk(this.ip, this.community, OID.ifDescr)) {
+				const m = /(?:^|[^0-9])(?:Port:?\s*|0\/)(\d+)(?:\s|$)/i.exec(String(vb.value))
+				if (m && !map.has(Number(m[1]))) map.set(Number(m[1]), Number(vb.oid.split('.').pop()))
+			}
+		}
 		this.ifIndexByPort = map
 		return map
+	}
+
+	// what kind of errors a port counts, from the standard tables where the switch keeps them (the Pro Aggregation
+	// answers all three, the small USL8A only IF-MIB): null = the switch has no such counter
+	async errorDetail(port) {
+		if (!this.ifIndexByPort) await this.discover()
+		const i = this.ifIndexByPort.get(port)
+		if (!i) return null
+		const cols = {
+			inDiscards: `1.3.6.1.2.1.2.2.1.13.${i}`,
+			inErrors: `1.3.6.1.2.1.2.2.1.14.${i}`,
+			outDiscards: `1.3.6.1.2.1.2.2.1.19.${i}`,
+			outErrors: `1.3.6.1.2.1.2.2.1.20.${i}`,
+			align: `1.3.6.1.2.1.10.7.2.1.2.${i}`,
+			fcs: `1.3.6.1.2.1.10.7.2.1.3.${i}`,
+			lateColl: `1.3.6.1.2.1.10.7.2.1.8.${i}`,
+			tooLong: `1.3.6.1.2.1.10.7.2.1.13.${i}`,
+			macRx: `1.3.6.1.2.1.10.7.2.1.16.${i}`,
+			symbol: `1.3.6.1.2.1.10.7.2.1.18.${i}`,
+			crcAlign: `1.3.6.1.2.1.16.1.1.1.8.${i}`,
+			undersize: `1.3.6.1.2.1.16.1.1.1.9.${i}`,
+			oversize: `1.3.6.1.2.1.16.1.1.1.10.${i}`,
+			fragments: `1.3.6.1.2.1.16.1.1.1.11.${i}`,
+			jabbers: `1.3.6.1.2.1.16.1.1.1.12.${i}`,
+			collisions: `1.3.6.1.2.1.16.1.1.1.13.${i}`,
+		}
+		const keys = Object.keys(cols)
+		const vbs = await snmpGet(this.ip, this.community, keys.map((k) => cols[k]))
+		const out = {}
+		keys.forEach((k, n) => {
+			const v = vbs[n]
+			out[k] = v && v.tag !== 0x80 && v.tag !== 0x81 && v.tag !== 0x82 && Number.isFinite(Number(v.value)) ? Number(v.value) : null
+		})
+		out.tables = { etherlike: out.fcs !== null, rmon: out.crcAlign !== null }
+		return out
 	}
 
 	// returns Map(port -> {rx: bytes/s from the device, tx: bytes/s to the device, in, out, t})

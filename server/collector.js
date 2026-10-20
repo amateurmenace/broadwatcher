@@ -55,6 +55,18 @@ const isPdu = (d) => /^USPPDU|PDU/i.test(d.model || '') || d.type === 'usp'
 const STREAM_HIT_BYTES = 50000 // a forwarded flow below this is a port scan or a handshake that went nowhere, not a stream
 const mbps = (bytesPerS) => Math.round((num(bytesPerS) * 8) / 1e5) / 10 // Mb/s with one decimal
 const lower = (s) => String(s || '').toLowerCase()
+// a roster role for a client that joined through a roster switch, from its UniFi name, hostname and vendor
+function guessRole(c) {
+	const n = `${c._name || ''} ${c.hostname || ''} ${c.name || ''} ${c.oui || ''}`.toLowerCase()
+	if (/hyperdeck|recorder/.test(n)) return 'recorder'
+	if (/videohub|router/.test(n)) return 'router'
+	if (/atem|switcher/.test(n)) return 'switcher'
+	if (/presenter|encoder|livestream|streaming|teradek|haivision|vmix/.test(n)) return 'encoder'
+	if (/tightrope|cablecast|playback/.test(n)) return 'playback'
+	if (/audinate|dante|behringer|sennheiser|shure|x32|x-touch|prism|focusrite|yamaha|allen|audio/.test(n)) return 'audio'
+	if (/bpix|pix\b|\bmac|macbook|imac|\bpc\b|laptop|desktop|super micro|supermicro|apple|dell|hewlett|lenovo|intel|realtek|asus|computer|workstation/.test(n)) return 'computer'
+	return 'unknown'
+}
 
 class Ring {
 	constructor(n) {
@@ -112,6 +124,11 @@ export class Collector extends EventEmitter {
 		this.forwardHits = new Map() // port-forward name -> [{t, src, srcName, region, bytes, action, wanPort}] last hour
 		this.processes = { t: 0, names: new Set() } // process census for the switcher slot list (refreshed every minute)
 		this.counters = new Map() // "mac:port" -> {rx, tx, t, down, up, tRate, errors}
+		this.errWin = new Map() // "mac:port" -> samples of the four error counters, broadcast packets and link flaps, last 10 min
+		this.errDetail = new Map() // "mac:port" -> {t, ...the SNMP error breakdown} for ports with damaged frames
+		this.everOnline = new Set() // ips seen on the network this session (auto-roster devices alert only after that)
+		this.mapLabels = config.map_labels || {} // topology node id -> hand-written label on the signal map
+		this.rosterSwitches = Array.isArray(config.roster_switches) ? config.roster_switches.map(String) : [] // switches whose wired clients join the roster
 		this.hist = new Map() // key -> {down: Ring, up: Ring}
 		this.aliases = new Map() // mac -> name from rest/user
 		this.lastSeen = new Map() // mac -> last_seen (s) from rest/user
@@ -215,10 +232,17 @@ export class Collector extends EventEmitter {
 			jobs.push(
 				s
 					.poll(ports)
-					.then((m) => {
+					.then(async (m) => {
 						for (const [idx, r] of m) this.snmp.rates.set(`${sw.mac}:${idx}`, r)
 						s.failedAt = 0
 						this.snmp.status[sw.name] = `ok · ${m.size} ports`
+						// a port receiving damaged frames: ask the switch what kind (CRC, alignment, symbol, jabbers…), once a minute
+						for (const p of sw.ports.filter((q) => q.err?.rxErr > 0 && now - (this.errDetail.get(q.key)?.t || 0) > 60000).slice(0, 3)) {
+							try {
+								const d = await s.errorDetail(p.idx)
+								if (d) this.errDetail.set(p.key, { t: now, ...d })
+							} catch {}
+						}
 					})
 					.catch((e) => {
 						s.failedAt = now
@@ -739,6 +763,20 @@ export class Collector extends EventEmitter {
 				const errDelta = c.errors === undefined ? 0 : Math.max(0, errs - c.errors)
 				c.errors = errs
 				c.errSeen = errDelta > 0 ? now : c.errSeen || 0
+				// the four counters kept apart over a ten-minute window, plus link flaps and broadcast/multicast arrivals:
+				// damaged frames (rx errors) are a cable/SFP/duplex story, frames dropped on the way out are congestion
+				const sample = { t: now, rxErr: num(p.rx_errors), txErr: num(p.tx_errors), rxDrop: num(p.rx_dropped), txDrop: num(p.tx_dropped), flaps: num(p.link_down_count), bc: num(p.rx_broadcast) + num(p.rx_multicast) }
+				let win = this.errWin.get(key)
+				if (!win) this.errWin.set(key, (win = []))
+				if (!win.length || now - win[win.length - 1].t >= 4000) win.push(sample)
+				while (win.length > 2 && now - win[1].t > 600000) win.shift()
+				const base = win[0]
+				const d = (k) => Math.max(0, sample[k] - base[k])
+				const winS = Math.max(1, Math.round((now - base.t) / 1000))
+				const err = { rxErr: d('rxErr'), txErr: d('txErr'), rxDrop: d('rxDrop'), txDrop: d('txDrop'), flaps: d('flaps'), window_s: winS }
+				err.cause = err.rxErr > 0 ? 'errors' : err.txDrop > 0 ? 'drops' : err.rxDrop > 0 ? 'rxdrops' : err.flaps > 0 ? 'flaps' : err.txErr > 0 ? 'errors' : null
+				const storm = winS >= 30 ? Math.round(d('bc') / winS) : null
+				const sfp = p.sfp_found ? { part: p.sfp_part || null, vendor: p.sfp_vendor || null, compliance: p.sfp_compliance || null, rxPower: Number.isFinite(Number(p.sfp_rxpower)) ? Number(p.sfp_rxpower) : null, txPower: Number.isFinite(Number(p.sfp_txpower)) ? Number(p.sfp_txpower) : null, temp: Number.isFinite(Number(p.sfp_temperature)) ? Math.round(Number(p.sfp_temperature)) : null, voltage: Number.isFinite(Number(p.sfp_voltage)) ? Number(p.sfp_voltage) : null, rxFault: !!p.sfp_rxfault, txFault: !!p.sfp_txfault } : null
 				const cl = clientsByPort.get(key) || []
 				const dd = devicesByPort.get(key) || []
 				const up = !!p.up
@@ -775,6 +813,14 @@ export class Collector extends EventEmitter {
 					util: p.speed ? Math.min(1, (Math.max(r.down, r.up) * 8) / (num(p.speed) * 1e6)) : 0,
 					errors: errs,
 					errorsRecent: now - (c.errSeen || 0) < 600000,
+					err,
+					errTotals: { rxErr: sample.rxErr, txErr: sample.txErr, rxDrop: sample.rxDrop, txDrop: sample.txDrop, flaps: sample.flaps },
+					errDetail: this.errDetail.get(key) || null,
+					sfp,
+					autoneg: p.autoneg !== false,
+					flowctrl: !!(p.flowctrl_rx || p.flowctrl_tx),
+					storm,
+					satisfaction: p.satisfaction ?? null,
 					clients: cl.slice(0, 6).map((x) => ({ name: x._name, ip: x.ip, mac: x.mac })),
 					clientCount: cl.length,
 					devices: dd.map((x) => ({ name: x.name, ip: x.ip, type: x.type, mac: lower(x.mac) })),
@@ -887,8 +933,22 @@ export class Collector extends EventEmitter {
 		this.state.others = others
 		this.state.networks = gateway?.networks || []
 
-		// equipment: config entries + auto-discovered broadcast vendors
+		// equipment: config entries + whole switches in the roster + auto-discovered broadcast vendors
 		const known = new Set(this.cfg.equipment.map((e) => e.ip))
+		// roster_switches: every wired client on those switches is part of the broadcast ("auto" entries: no probe,
+		// no telemetry, grouped under the switch; they alert only once they have been seen online this session)
+		const rosterSw = new Set(this.rosterSwitches.map(lower))
+		const autos = []
+		if (rosterSw.size) {
+			for (const c of clients) {
+				if (!c.ip || !c.is_wired || known.has(c.ip)) continue
+				const sw = devByMac.get(lower(c.sw_mac))
+				if (!sw || !(rosterSw.has(lower(sw.mac)) || rosterSw.has(lower(sw.name)))) continue
+				known.add(c.ip)
+				autos.push({ name: c._name || `${String(c.oui || 'unknown').split(/\s+/)[0]} device`, ip: c.ip, group: sw.name, role: guessRole(c), auto: true, active: true })
+			}
+			autos.sort((a, b) => a.group.localeCompare(b.group) || a.name.localeCompare(b.name))
+		}
 		const discovered = []
 		const ouis = (this.cfg.auto_discover_ouis || []).map(lower)
 		for (const c of clients) {
@@ -898,8 +958,9 @@ export class Collector extends EventEmitter {
 		}
 		const allDevs = [...switches, gateway, ...aps].filter(Boolean)
 		const equipment = []
-		for (const e of [...this.cfg.equipment, ...discovered]) {
+		for (const e of [...this.cfg.equipment, ...autos, ...discovered]) {
 			const c = clientByIp.get(e.ip)
+			if (c) this.everOnline.add(e.ip)
 			const sw = c ? devByMac.get(lower(c.sw_mac || c.ap_mac)) : null
 			const swEntry = sw ? allDevs.find((s) => s.mac === lower(sw.mac)) : null
 			const port = swEntry && c?.is_wired ? swEntry.ports.find((p) => p.idx === c.sw_port) : null
@@ -953,6 +1014,7 @@ export class Collector extends EventEmitter {
 			})
 		}
 		this.state.equipment = equipment
+		this.state.rosterSwitches = this.rosterSwitches
 
 		// the mirror-port view of the switcher's traffic (when tshark runs on this machine)
 		this.state.forensics = this.forensics ? this.forensics.snapshot({ flows: 30, events: 40 }) : null
@@ -1245,6 +1307,7 @@ export class Collector extends EventEmitter {
 		const add = (n) => {
 			if (seen.has(n.id)) return
 			seen.add(n.id)
+			n.label = this.mapLabels[n.id] || null // a hand-written name on the signal map
 			nodes.push(n)
 		}
 		add({ id: 'internet', kind: 'internet', name: gateway?.wan?.isp || 'Internet', status: gateway?.wan?.status === 'ok' ? 'online' : 'offline', depth: -1 })
@@ -1273,10 +1336,11 @@ export class Collector extends EventEmitter {
 
 	// replace the equipment roster at runtime (from the in-app editor); returns the cleaned list
 	setEquipment(list) {
-		const roles = ['switcher', 'router', 'recorder', 'encoder', 'computer', 'audio', 'unknown']
+		const roles = ['switcher', 'router', 'recorder', 'encoder', 'playback', 'computer', 'audio', 'unknown']
 		const clean = []
 		const seen = new Set()
 		for (const raw of Array.isArray(list) ? list : []) {
+			if (raw.auto) continue // devices that come from a roster switch are never written down
 			const ip = String(raw.ip || '').trim()
 			const name = String(raw.name || '').trim()
 			if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(ip) || !name || seen.has(ip)) continue
@@ -1309,6 +1373,37 @@ export class Collector extends EventEmitter {
 		this.pollProbes().catch(() => {})
 		this.pollTelemetry().catch(() => {})
 		return clean
+	}
+
+	// one more device for the roster (from a port or client in the inspector): name, ip, group, role, probe
+	addEquipment(raw) {
+		const ip = String(raw?.ip || '').trim()
+		if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) return { error: 'no IP address' }
+		const rest = this.cfg.equipment.filter((e) => e.ip !== ip)
+		const entry = { active: true, name: String(raw.name || '').trim() || `Device ${ip}`, ip, group: String(raw.group || 'Studio A').trim() || 'Studio A', role: raw.role || 'unknown', probe: raw.probe || undefined }
+		return { ok: true, equipment: this.setEquipment([...rest, entry]), entry }
+	}
+	// which switches put every wired client of theirs into the roster
+	setRosterSwitches(list) {
+		this.rosterSwitches = (Array.isArray(list) ? list : []).map((s) => String(s).trim()).filter(Boolean).slice(0, 40)
+		if (this.rawDevices.length) {
+			this.rebuild()
+			this.emit('state', this.state)
+		}
+		return this.rosterSwitches
+	}
+	// a hand-written name for a node of the signal map (equipment "eq:<ip>", a switch/AP/gateway by mac); empty removes it
+	setMapLabel(id, text) {
+		const k = String(id || '').trim().slice(0, 80)
+		if (!k) return { error: 'no node' }
+		const v = String(text || '').trim().slice(0, 60)
+		if (v) this.mapLabels[k] = v
+		else delete this.mapLabels[k]
+		if (this.rawDevices.length) {
+			this.rebuild()
+			this.emit('state', this.state)
+		}
+		return { ok: true, id: k, label: v || null }
 	}
 
 	lastSeenByIp(ip) {
@@ -1363,13 +1458,39 @@ export class Collector extends EventEmitter {
 			} else {
 				if (s.cpu !== null && s.cpu > this.th.cpu_pct) push('warn', 'switch', 'cpu', { type: 'switch', id: s.mac }, `${s.name} CPU ${s.cpu}%`, 'Switch CPU is high; usually a broadcast/multicast storm (Dante, NDI or mDNS flooding) or STP churn. Look for a port with runaway traffic.')
 				if (s.overheating || (s.temp !== null && s.temp > this.th.temp_c)) push('warn', 'switch', 'temp', { type: 'switch', id: s.mac }, `${s.name} ${s.temp} °C`, 'The switch is hot. Check airflow, dust filters and that the fans run.')
-				for (const p of s.ports) if (p.errorsRecent) push('warn', 'port', 'errors', { type: 'port', id: p.key }, `${s.name} port ${p.idx} errors/drops`, `Port ${p.idx} on ${s.name} has counted new errors or dropped packets in the last 10 minutes. On a video or Dante link that means glitches: suspect the cable, the SFP, a duplex mismatch or a device sending more than the link can carry.`)
+				for (const p of s.ports) {
+					if (!p.errorsRecent) continue
+					// which counter grew says what it is: damaged frames in (cable, SFP, duplex, far end), frames dropped on
+					// the way out (congestion behind the port), received frames refused (VLAN / storm control), link flaps
+					const er = p.err || {}
+					const mins = Math.max(1, Math.round((er.window_s || 600) / 60))
+					const far = p.devices?.[0]?.name || p.label?.name || p.clients?.[0]?.name || p.clients?.[0]?.ip || null
+					const link = `${s.name} port ${p.idx}${far ? ' (' + far + ')' : ''}`
+					const ent = { type: 'port', id: p.key }
+					const sfpTxt = p.sfp ? ` The optics read rx ${p.sfp.rxPower ?? '?'} dBm, tx ${p.sfp.txPower ?? '?'} dBm, ${p.sfp.temp ?? '?'} °C${p.sfp.rxFault || p.sfp.txFault ? ', FAULT flagged' : ', no fault flagged'}${p.sfp.rxPower !== null && p.sfp.rxPower < -14 ? ' (receive power is low: a dirty or kinked fiber, or a weak transmitter at the far end)' : ''}.` : ''
+					if (er.rxErr > 0 || (er.txErr > 0 && !er.txDrop)) {
+						const dd = p.errDetail
+						const kinds = dd ? [['CRC', dd.fcs ?? dd.crcAlign], ['alignment', dd.align], ['symbol', dd.symbol], ['fragments', dd.fragments], ['jabbers', dd.jabbers], ['oversize', dd.oversize], ['late collisions', dd.lateColl]].filter(([, v]) => v > 0).map(([k, v]) => `${k} ${v}`).join(', ') : ''
+						const n = er.rxErr || er.txErr
+						push('warn', 'port', 'errors', ent, `${link}: ${n} damaged frame${n === 1 ? '' : 's'} in ${mins} min`, `Frames ${er.rxErr > 0 ? 'arrived at' : 'left'} ${s.name} port ${p.idx} with errors: ${n} in the last ${mins} min, ${(p.errTotals?.rxErr || 0) + (p.errTotals?.txErr || 0)} since the switch booted${kinds ? ` (by kind since boot: ${kinds})` : ''}. Damaged frames come from the cable, the connector or the SFP, a duplex mismatch (this port runs ${p.fullDuplex ? 'full' : 'HALF'} duplex${p.autoneg === false ? ', auto-negotiation off' : ''}) or the device at the far end${far ? ' (' + far + ')' : ''}.${sfpTxt} On a video or Dante link every damaged frame is a glitch: reseat or swap the cable${p.sfp ? ', clean the fiber, try another SFP' : ''}, and check the far end's link settings.`)
+					} else if (er.txDrop > 0) {
+						const down = p.devices?.[0] ? st.switches.find((x) => x.mac === p.devices[0].mac) : null
+						const hot = down ? down.ports.filter((q) => q.up && !q.uplink && q.util > 0.3).sort((a, b) => b.util - a.util)[0] : null
+						const hotTxt = hot ? ` The busiest port there right now is port ${hot.idx} (${hot.label?.name || hot.clients?.[0]?.name || hot.devices?.[0]?.name || hot.clients?.[0]?.ip || 'unlabelled'}) at ${Math.round(hot.util * 100)} % of its ${hot.speed >= 1000 ? hot.speed / 1000 + 'G' : hot.speed + 'M'} link.` : ''
+						push('warn', 'port', 'drops', ent, `${link}: ${er.txDrop} frames dropped on the way out in ${mins} min`, `${s.name} had frames queued for port ${p.idx}${far ? ' towards ' + far : ''} that the link could not take and dropped ${er.txDrop} of them in the last ${mins} min (${p.errTotals?.txDrop ?? '?'} since the switch booted). That is congestion, not a bad cable: something behind this port receives more than its link carries, typically a 1G device fed from a 10G source${p.flowctrl ? ', and with flow control on, the far end pauses this link whenever it fills up' : ''}.${hotTxt}${sfpTxt} Find the device being flooded and slow the sender (NDI bandwidth, a file copy, multicast flooding without IGMP snooping).`)
+					} else if (er.rxDrop > 0) {
+						push('warn', 'port', 'drops', ent, `${link}: ${er.rxDrop} received frames refused in ${mins} min`, `${s.name} received frames on port ${p.idx} and then dropped them: ${er.rxDrop} in the last ${mins} min. The switch refused them, so the cable is probably fine: a VLAN this port does not carry, storm control, or an ingress buffer full under a burst${p.storm ? ` (broadcast and multicast arrive at about ${p.storm} packets/s on this port)` : ''}. Look at the port's VLAN settings and at what the device sends.`)
+					} else if (er.flaps > 0) {
+						push('warn', 'port', 'flaps', ent, `${link}: link went down ${er.flaps} time${er.flaps === 1 ? '' : 's'} in ${mins} min`, `The link on ${s.name} port ${p.idx}${far ? ' to ' + far : ''} dropped and came back ${er.flaps} time${er.flaps === 1 ? '' : 's'} in the last ${mins} min (${p.errTotals?.flaps ?? '?'} times since the switch booted). A flapping link is a loose or damaged cable or connector, a failing SFP, a device rebooting, or a PoE budget problem.${sfpTxt}`)
+					} else push('warn', 'port', 'errors', ent, `${link}: new errors or drops`, `Port ${p.idx} on ${s.name} counted new errors or dropped packets in the last 10 minutes; the counters are being watched and the next poll will say which kind. Open the port for the four counters.`)
+				}
 				if (s.uplink.speed && s.uplink.speed < 1000 && s.uplink.media !== 'wireless') push('warn', 'switch', 'uplink', { type: 'switch', id: s.mac }, `${s.name} uplink at ${s.uplink.speed} Mb/s`, 'The uplink negotiated below gigabit; a bad cable or port. Everything behind this switch shares that slow link.')
 			}
 		}
 		for (const e of st.equipment) {
 			if (e.discovered || !e.active) continue
-			const minSpeed = e.min_speed ?? (['switcher', 'encoder', 'recorder', 'computer'].includes(e.role) ? 1000 : 0)
+			if (e.auto && !e.online && !this.everOnline.has(e.ip)) continue // a roster-switch device never seen this session is not an alert
+			const minSpeed = e.min_speed ?? (['switcher', 'encoder', 'recorder', 'playback', 'computer'].includes(e.role) ? 1000 : 0)
 			const ent = { type: 'equipment', id: e.ip }
 			if (!e.online) push(e.hero ? 'error' : 'warn', 'equipment', 'offline', ent, `${e.name} not on the network`, `UniFi does not see ${e.name} (${e.ip}) on any switch port or access point${e.lastSeen ? `; it was last seen ${Math.round((now - e.lastSeen) / 60000)} min ago` : ''}. Powered off, unplugged, or its link is down.`)
 			else if (e.reachable === false) push(e.hero ? 'error' : 'warn', 'equipment', 'unresponsive', ent, `${e.name} not answering (${e.probeSpec}: ${e.probe?.error || 'no reply'})`, `${e.name} is on the network but its control port does not answer. The device may be booting, frozen, or a firewall/VLAN rule is in the way. Control from Companion and ATEM/HyperDeck software will fail until it answers.`)

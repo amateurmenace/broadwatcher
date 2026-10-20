@@ -466,7 +466,7 @@ function toggleFold(id) {
 function setRail(on) {
 	$('shell').classList.toggle('rail-hidden', !on)
 	$('railToggle').classList.toggle('on', on)
-	$('railToggle').textContent = on ? '▸' : '◂'
+	$('railToggle').textContent = (on ? '▸' : '◂') + ' Panel'
 	try {
 		localStorage.setItem('bw-rail', on ? 'on' : 'off')
 	} catch {}
@@ -475,8 +475,14 @@ function setRail(on) {
 
 // ------------------------------------------------------------------ issues
 function renderIssues(s) {
-	$('issues').innerHTML = s.alerts
-		.map((a) => `<div class="issue ${a.level}${selection?.type === 'alert' && selection.id === a.id ? ' sel' : ''}" data-alert="${esc(a.id)}"><span class="k">${esc(a.scope)}</span><span>${esc(a.text)}</span><span class="since">${fmtAgo(a.since)}</span></div>`)
+	const block = $('issuesBlock')
+	if (block) block.hidden = !s.alerts.length
+	const row = (a) => `<div class="issue ${a.level}${selection?.type === 'alert' && selection.id === a.id ? ' sel' : ''}" data-alert="${esc(a.id)}"><i class="mark"></i><span class="k">${esc(a.scope)}</span><span>${esc(a.text)}</span><span class="since">${fmtAgo(a.since)}</span><span class="go">what it means · diagnose ▸</span></div>`
+	$('issues').innerHTML = [['error', 'Problems'], ['warn', 'Warnings'], ['info', 'Notes']]
+		.map(([lv, title]) => {
+			const items = s.alerts.filter((a) => a.level === lv)
+			return items.length ? `<h4 class="${lv}">${title} · ${items.length}</h4>${items.map(row).join('')}` : ''
+		})
 		.join('')
 }
 
@@ -485,7 +491,7 @@ function renderMap(s) {
 	const topo = s.topology || { nodes: [], links: [] }
 	for (const n of topo.nodes) {
 		const t = n.telemetry
-		tips.set('node:' + n.id, `<b>${esc(n.name)}</b><div class="kv">${n.model ? `<span>Model</span><b>${esc(n.model)}</b>` : ''}${n.ip ? `<span>IP</span><b>${esc(n.ip)}</b>` : ''}<span>Status</span><b>${esc(n.status)}</b>${n.rate ? `<span>In / out</span><b>${fmtRate(n.rate.in)} / ${fmtRate(n.rate.out)}</b>` : ''}${n.portsTotal ? `<span>Ports</span><b>${n.portsUp}/${n.portsTotal} up</b>` : ''}${n.cpu !== undefined && n.cpu !== null ? `<span>CPU / temp</span><b>${n.cpu}% / ${n.temp ?? '–'}°</b>` : ''}${t?.summary ? `<span>Device</span><b>${esc(t.summary)}</b>` : ''}</div><small>click for details</small>`)
+		tips.set('node:' + n.id, `<b>${esc(n.label || n.name)}</b><div class="kv">${n.label ? `<span>UniFi name</span><b>${esc(n.name)}</b>` : ''}${n.model ? `<span>Model</span><b>${esc(n.model)}</b>` : ''}${n.ip ? `<span>IP</span><b>${esc(n.ip)}</b>` : ''}<span>Status</span><b>${esc(n.status)}</b>${n.rate ? `<span>In / out</span><b>${fmtRate(n.rate.in)} / ${fmtRate(n.rate.out)}</b>` : ''}${n.portsTotal ? `<span>Ports</span><b>${n.portsUp}/${n.portsTotal} up</b>` : ''}${n.cpu !== undefined && n.cpu !== null ? `<span>CPU / temp</span><b>${n.cpu}% / ${n.temp ?? '–'}°</b>` : ''}${t?.summary ? `<span>Device</span><b>${esc(t.summary)}</b>` : ''}</div><small>click for details</small>`)
 	}
 	if ($('mapBlock').classList.contains('folded')) return
 	const q = rackFilter
@@ -725,20 +731,32 @@ function renderPatch(s) {
 }
 
 // ------------------------------------------------------------------ roster editor
-const ROLES = ['switcher', 'router', 'recorder', 'encoder', 'computer', 'audio', 'unknown']
+const ROLES = ['switcher', 'router', 'recorder', 'encoder', 'playback', 'computer', 'audio', 'unknown']
+let rosterSwitches = [] // names/macs of the switches whose wired clients are in the roster
+let rosterSwitchList = [] // every switch UniFi knows, for the tick list
+let rosterAuto = [] // devices that come from those switches right now
 async function openRoster() {
 	try {
 		const r = await fetch('/api/equipment')
 		const j = await r.json()
 		roster = (j.equipment || []).map((e) => ({ ...e }))
+		rosterSwitches = j.roster_switches || []
+		rosterSwitchList = (j.switches || []).slice().sort((a, b) => Number(b.online) - Number(a.online) || b.clients - a.clients || a.name.localeCompare(b.name))
+		rosterAuto = j.auto || []
 	} catch (e) {
 		roster = []
 	}
 	$('rosterOverlay').hidden = false
 	renderRoster()
 }
+function rosterSwitchesHtml() {
+	const on = (s) => rosterSwitches.some((x) => String(x).toLowerCase() === s.name.toLowerCase() || String(x).toLowerCase() === s.mac)
+	return `<h3 class="rh">Whole switches <small>every wired device on a ticked switch is in the broadcast, listed under the switch's name, with no row of its own to keep</small></h3>
+		<div class="roster-sw">${rosterSwitchList.map((s) => `<label><input type="checkbox" data-sw="${esc(s.name)}" ${on(s) ? 'checked' : ''}><span>${esc(s.name)}</span><small>${esc(s.model)} · ${s.clients} wired${s.online ? '' : ' · offline'}</small></label>`).join('') || '<small>no switches seen yet</small>'}</div>
+		${rosterAuto.length ? `<div class="roster-auto">${rosterAuto.length} device${rosterAuto.length === 1 ? '' : 's'} come from those switches right now: ${rosterAuto.slice(0, 14).map((a) => esc(a.name)).join(', ')}${rosterAuto.length > 14 ? '…' : ''}. To give one a probe, telemetry or a role, open it in the inspector and choose "Give it a roster row".</div>` : ''}`
+}
 function renderRoster(msg = '') {
-	const groups = [...new Set([...(roster || []).map((e) => e.group), 'Studio A', 'Field', 'Town Hall', 'Video rack', 'Audio rack'])]
+	const groups = [...new Set([...(roster || []).map((e) => e.group), 'Studio A', 'Field', 'Town Hall', 'Video rack', 'Audio rack', 'Master control'])]
 	const rows = (roster || [])
 		.map(
 			(e, i) => `<tr class="${e.active === false ? 'off' : ''}" data-i="${i}">
@@ -758,7 +776,9 @@ function renderRoster(msg = '') {
 		.join('')
 	$('rosterEditor').innerHTML = `<header><h2>Broadcast equipment roster</h2><small>tick what is part of this broadcast; unticked devices stay on standby (no alerts, no probes) and can be switched on later</small></header>
 		<div class="body">
-			<div class="help">Probe: <b>tcp:&lt;port&gt;</b> (HyperDeck 9993, Videohub 9990, Web Presenter 9977), <b>atem</b> (ATEM protocol), <b>x32</b> (OSC). Telemetry reads the device itself: Web Presenter stream status, HyperDeck transport, ATEM program/stream. Min speed in Mb/s raises a warning when the link is slower (video gear defaults to 1000).</div>
+			${rosterSwitchesHtml()}
+			<h3 class="rh">Devices <small>one row each; the probe says how reachability is checked, the telemetry what is read from the device. Any port or device in the inspector has an "add to the roster" button too.</small></h3>
+			<div class="help">Probe: <b>tcp:&lt;port&gt;</b> (HyperDeck 9993, Videohub 9990, Web Presenter 9977, a web UI 80), <b>atem</b> (ATEM protocol), <b>x32</b> (OSC). Telemetry reads the device itself: Web Presenter stream status, HyperDeck transport, ATEM program/stream. Min speed in Mb/s raises a warning when the link is slower (video gear defaults to 1000).</div>
 			<table><thead><tr><th>In</th><th>Name</th><th>IP</th><th>Group</th><th>Role</th><th>Probe</th><th>Telemetry</th><th>Companion</th><th>Min speed</th><th>Main</th><th></th></tr></thead><tbody>${rows}</tbody></table>
 			<datalist id="groupList">${groups.map((g) => `<option value="${esc(g)}">`).join('')}</datalist>
 		</div>
@@ -773,11 +793,12 @@ function readRoster() {
 }
 async function saveRoster() {
 	const list = readRoster()
+	const sws = [...$('rosterEditor').querySelectorAll('[data-sw]')].filter((c) => c.checked).map((c) => c.getAttribute('data-sw'))
 	const btn = $('rosterSave')
 	btn.disabled = true
 	btn.textContent = 'Saving…'
 	try {
-		const r = await fetch('/api/equipment', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ equipment: list }) })
+		const r = await fetch('/api/equipment', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ equipment: list, roster_switches: sws }) })
 		const j = await r.json()
 		if (j.error) throw new Error(j.error)
 		$('rosterOverlay').hidden = true
@@ -870,12 +891,14 @@ function renderInspector() {
 	if (a) {
 		parts.push(`<h3>What this means</h3><p class="explain">${esc(a.explain || '')}</p><div class="ai-meta">since ${fmtDateTime(a.since)} (${fmtAgo(a.since)})</div>`)
 		const diag = diagnoses.get(a.id)
-		parts.push(`<h3>AI diagnosis</h3>${diag ? diag.error ? `<p class="error">${esc(diag.error)}</p>` : `<div class="ai-text">${mdLite(diag.text)}</div><div class="ai-meta">${esc(diag.model)} · ${Math.round(diag.ms / 1000)} s · ${fmtAgo(diag.t)} ago</div>` : '<p>Ask the AI to explain this alert from the live data, related events and flows.</p>'}<div class="insp-actions"><button class="btn" data-diagnose="${esc(a.id)}" ${!aiStatus?.enabled ? 'disabled title="AI not configured"' : ''}>${diag ? 'Diagnose again' : 'Diagnose with AI'}</button></div>`)
+		const pv = aiStatus?.providers || {}
+		parts.push(`<h3>AI diagnosis</h3>${diag ? diag.error ? `<p class="error">${esc(diag.error)}</p>` : `<div class="ai-text">${mdLite(diag.text)}</div><div class="ai-meta">${esc(diag.model)}${diag.provider ? ' · ' + (diag.provider === 'anthropic' ? 'Claude' : 'local model') : ''} · ${Math.round(diag.ms / 1000)} s · ${fmtAgo(diag.t)} ago</div>` : '<p>Have the AI read the live data, the related events and the flows, and explain this item: what it means, the likely causes, what to check now. Claude answers from the cloud; a local model runs on this computer and needs a one-time setup.</p>'}<div class="insp-actions"><button class="btn diagnose" data-diagnose="${esc(a.id)}" data-provider="anthropic" title="${esc(pv.anthropic ? 'Claude · ' + (pv.anthropicModel || '') : 'no Anthropic key yet: opens Settings')}">✦ ${diag?.provider === 'anthropic' ? 'Again with Claude' : 'Diagnose with Claude'}</button><button class="btn diagnose local" data-diagnose="${esc(a.id)}" data-provider="openai" title="${esc(pv.local ? 'local server · ' + (pv.localUrl || '') : 'no local AI yet: opens the setup guide')}">✦ ${diag?.provider === 'openai' ? 'Again with local AI' : 'Diagnose with local AI'}</button></div>`)
 	}
 	if (ent && type !== 'journal') parts.push(entitySection(type, ent))
 	if (type === 'equipment' && ent && ent.active && (ent.telemetry?.kind === 'atem' || ent.role === 'switcher')) parts.push(sessionSection(ent))
 	if (type === 'equipment' && ent?.audio) parts.push(audioSection(ent))
-	if (type === 'equipment' && ent) parts.push(`<div class="insp-actions">${ent.active ? `<button class="btn quiet" data-standby="${esc(ent.ip)}">Put on standby (not part of this broadcast)</button>` : `<button class="btn" data-activate="${esc(ent.ip)}">Add to this broadcast</button>`}<button class="btn quiet" id="editRosterInsp">Edit roster</button></div>`)
+	if (type === 'equipment' && ent) parts.push(ent.auto ? `<div class="insp-actions"><button class="btn" data-add-roster="${esc(ent.ip)}" data-add-name="${esc(ent.name)}" data-add-group="${esc(ent.group)}" data-add-role="${esc(ent.role)}">Give it a roster row</button><small>in the broadcast through its switch (${esc(ent.group)}); a row of its own lets you set a probe, telemetry and a role</small></div>` : `<div class="insp-actions">${ent.active ? `<button class="btn quiet" data-standby="${esc(ent.ip)}">Put on standby (not part of this broadcast)</button>` : `<button class="btn" data-activate="${esc(ent.ip)}">Add to this broadcast</button>`}<button class="btn quiet" id="editRosterInsp">Edit roster</button></div>`)
+	if (['equipment', 'switch', 'ap', 'gateway', 'pdu'].includes(type) && ent) parts.push(mapLabelForm(type === 'equipment' ? 'eq:' + ent.ip : ent.mac))
 	if (type === 'equipment' && ent?.history) parts.push(`<h3>Traffic · last ${Math.round((ent.history.down.length * 5) / 60)} min</h3>${scope('insp', [{ data: ent.history.down, color: 'in' }, { data: ent.history.up, color: 'out' }], 'spark')}`)
 	if (type === 'switch' && ent?.history) parts.push(`<h3>Traffic · all ports</h3>${scope('insp', [{ data: ent.history.down, color: 'in' }, { data: ent.history.up, color: 'out' }], 'spark')}`)
 	if (type === 'wan' && ent?.history) parts.push(`<h3>WAN traffic</h3>${scope('insp', [{ data: ent.history.down, color: 'in' }, { data: ent.history.up, color: 'out' }], 'spark')}`)
@@ -904,6 +927,26 @@ function entitySection(type, e) {
 		])}`
 	}
 	if (type === 'port') {
+		const er = e.err || {}
+		const tot = e.errTotals || {}
+		const mins = Math.max(1, Math.round((er.window_s || 600) / 60))
+		const errTab = `<h3>Errors and drops</h3><table class="errtab"><thead><tr><th>Counter</th><th class="num">last ${mins} min</th><th class="num">since boot</th><th>what it points at</th></tr></thead><tbody>${[
+			['Damaged frames in', er.rxErr, tot.rxErr, 'cable, connector, SFP, duplex, the far end'],
+			['Transmit errors', er.txErr, tot.txErr, 'rare: collisions or the switch itself'],
+			['Received, then refused', er.rxDrop, tot.rxDrop, 'VLAN not carried, storm control, ingress buffer'],
+			['Dropped on the way out', er.txDrop, tot.txDrop, 'congestion behind this port'],
+			['Link went down', er.flaps, tot.flaps, 'loose cable, SFP, a reboot, PoE budget'],
+		]
+			.map(([k, a, b, why]) => `<tr class="${a > 0 ? 'hot' : ''}"><td>${k}</td><td class="num">${a ?? '–'}</td><td class="num">${b ?? '–'}</td><td><small>${why}</small></td></tr>`)
+			.join('')}</tbody></table>`
+		const dd = e.errDetail
+		const kinds = dd ? [['CRC', dd.fcs ?? dd.crcAlign], ['alignment', dd.align], ['symbol', dd.symbol], ['fragments', dd.fragments], ['jabbers', dd.jabbers], ['oversize', dd.oversize], ['undersize', dd.undersize], ['collisions', dd.collisions], ['late collisions', dd.lateColl]].filter(([, v]) => v !== null && v !== undefined) : []
+		const detail = dd ? `<p><small>The switch's own error tables over SNMP${kinds.length ? ' (since boot): ' + kinds.map(([k, v]) => `${k} ${v}`).join(' · ') : ': this switch keeps no per-kind error counters'}</small></p>` : ''
+		const sfp = e.sfp ? `<p><small>Optics: ${esc([e.sfp.compliance, e.sfp.vendor, e.sfp.part].filter(Boolean).join(' · '))} · rx ${e.sfp.rxPower ?? '?'} dBm · tx ${e.sfp.txPower ?? '?'} dBm · ${e.sfp.temp ?? '?'} °C${e.sfp.rxFault || e.sfp.txFault ? ' · <span class="error">fault flagged</span>' : ' · no fault'}${e.sfp.rxPower !== null && e.sfp.rxPower !== undefined && e.sfp.rxPower < -14 ? ' · <span class="warn">receive power is low</span>' : ''}</small></p>` : ''
+		const linkLine = `<p><small>${e.fullDuplex ? 'full duplex' : '<span class="warn">HALF duplex</span>'} · auto-negotiation ${e.autoneg === false ? '<span class="warn">off</span>' : 'on'} · flow control ${e.flowctrl ? 'on' : 'off'}${e.storm ? ` · broadcast and multicast in: about ${e.storm} packets/s` : ''}</small></p>`
+		const rosterIps = new Set((state?.equipment || []).filter((x) => !x.auto && !x.discovered).map((x) => x.ip))
+		const cands = [...(e.clients || []).map((c) => ({ ip: c.ip, name: c.name || c.ip })), ...(e.label?.ip && !(e.clients || []).some((c) => c.ip === e.label.ip) ? [{ ip: e.label.ip, name: e.label.name || e.label.ip }] : [])].filter((c) => c.ip && !rosterIps.has(c.ip))
+		const addBtns = cands.length ? `<h3>Add to the broadcast roster</h3><p>One click puts the device on this port into the roster, under "${esc(e.switch?.name || 'Studio A')}"; the roster editor can then give it a probe and a role.</p><div class="insp-actions">${cands.map((c) => `<button class="btn" data-add-roster="${esc(c.ip)}" data-add-name="${esc(c.name)}" data-add-group="${esc(e.switch?.name || 'Studio A')}">+ ${esc(c.name)}</button>`).join('')}</div>` : ''
 		return `<h3>${esc(e.switch?.name)} · port ${e.idx}</h3>${kv([
 			['Name', esc(e.name)],
 			['Link', e.up ? `${speedTxt(e.speed)} ${e.fullDuplex ? 'full duplex' : 'HALF duplex'} ${esc(e.media || '')}` : e.enabled ? 'down' : 'disabled', e.up ? 'ok' : 'bad'],
@@ -912,11 +955,11 @@ function entitySection(type, e) {
 			['Utilisation', Math.round(e.util * 100) + '%'],
 			e.poe ? ['PoE', `${e.poeW} W ${esc(e.poeMode || '')}`] : null,
 			e.lag ? ['LAG', esc(e.lag)] : null,
-			['Errors + drops', `${e.errors}${e.errorsRecent ? ' <span class="error">new in the last 10 min</span>' : ''}`],
+			['Errors + drops', `${e.errors}${e.errorsRecent ? ` <span class="error">new in the last ${mins} min${er.cause ? ' · ' + { errors: 'damaged frames', drops: 'congestion', rxdrops: 'refused frames', flaps: 'link flapping' }[er.cause] : ''}</span>` : ' · none new'}`],
 			['Counters', `${e.live ? 'live (SNMP) · ' : ''}${e.age} s old`],
 			['Attached', [...(e.devices || []).map((d) => `${esc(d.name)} (${esc(d.type)})`), ...(e.clients || []).map((c) => `${esc(c.name || c.ip || c.mac)}${c.ip && c.name ? ' · ' + esc(c.ip) : ''}`)].join('<br>') + (e.clientCount > (e.clients || []).length ? `<br>+${e.clientCount - e.clients.length} more` : '')],
 			e.label ? ['Label', esc([e.label.name, e.label.ip, e.label.note].filter(Boolean).join(' · '))] : null,
-		])}<h3>Label this port</h3><p>Write what is really plugged in when UniFi cannot tell (SDI gear behind a small switch, a static device, a patch-panel position). Empty fields remove the label.</p><div class="lblform" data-label-form="${esc(e.key)}"><input class="lbl-name" value="${esc(e.label?.name || '')}" placeholder="device name"><input class="lbl-ip" value="${esc(e.label?.ip || '')}" placeholder="IP address"><input class="lbl-note" value="${esc(e.label?.note || '')}" placeholder="note"></div><div class="insp-actions"><button class="btn" data-label-save-insp="${esc(e.key)}">Save label</button></div>`
+		])}${linkLine}${errTab}${detail}${sfp}${addBtns}<h3>Label this port</h3><p>Write what is really plugged in when UniFi cannot tell (SDI gear behind a small switch, a static device, a patch-panel position). Empty fields remove the label.</p><div class="lblform" data-label-form="${esc(e.key)}"><input class="lbl-name" value="${esc(e.label?.name || '')}" placeholder="device name"><input class="lbl-ip" value="${esc(e.label?.ip || '')}" placeholder="IP address"><input class="lbl-note" value="${esc(e.label?.note || '')}" placeholder="note"></div><div class="insp-actions"><button class="btn" data-label-save-insp="${esc(e.key)}">Save label</button></div>`
 	}
 	if (type === 'switch' || type === 'ap' || type === 'gateway' || type === 'pdu') {
 		return `<h3>${esc(e.name)}</h3>${kv([
@@ -1018,19 +1061,54 @@ async function atemSession(ip, action, mode) {
 	setTimeout(refreshInspector, 600)
 }
 
-async function diagnose(id) {
-	const btn = document.querySelector(`[data-diagnose="${CSS.escape(id)}"]`)
+// the diagnosis with the provider the user picked; a provider that is not set up opens Settings (Claude) or the
+// local AI guide, and the diagnosis runs by itself once that is done
+async function diagnose(id, provider) {
+	const pv = aiStatus?.providers || {}
+	if (provider === 'anthropic' && !pv.anthropic) return Settings.open('ai', { onSaved: () => refreshAiStatus() })
+	if (provider === 'openai' && !pv.local) return LocalAI.open({ onDone: () => setTimeout(() => refreshAiStatus() || diagnose(id, 'openai'), 300) })
+	const btn = document.querySelector(`[data-diagnose="${CSS.escape(id)}"][data-provider="${provider}"]`)
 	if (btn) {
 		btn.disabled = true
 		btn.textContent = 'Thinking…'
 	}
 	try {
-		const r = await fetch(`/api/ai/diagnose?id=${encodeURIComponent(id)}&refresh=${diagnoses.has(id) ? 1 : 0}`)
-		diagnoses.set(id, await r.json())
+		const r = await fetch(`/api/ai/diagnose?id=${encodeURIComponent(id)}&refresh=1&provider=${encodeURIComponent(provider)}`)
+		const j = await r.json()
+		diagnoses.set(id, j && !j.error && j.text ? j : { error: j?.error || 'no answer from the model' })
 	} catch (e) {
 		diagnoses.set(id, { error: e.message })
 	}
 	renderInspector()
+}
+// a hand-written name for a node of the signal map, saved in the config (map_labels)
+function mapLabelForm(nodeId) {
+	const n = state?.topology?.nodes.find((x) => x.id === nodeId)
+	return `<h3>Name on the signal map</h3><p>A name of your own shown on the map instead of the UniFi name; it stays after a restart. Empty removes it. Double-clicking a node on the map opens this field.</p><div class="lblform one"><input class="map-label" id="mapLabelInput" data-node-id="${esc(nodeId)}" value="${esc(n?.label || '')}" placeholder="${esc(n?.name || 'name on the map')}"><button class="btn" data-maplabel-save="${esc(nodeId)}">Save</button></div>`
+}
+async function saveMapLabel(nodeId) {
+	const inp = document.querySelector(`input.map-label[data-node-id="${CSS.escape(nodeId)}"]`)
+	try {
+		const r = await fetch('/api/maplabel', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: nodeId, label: inp?.value || '' }) })
+		const j = await r.json()
+		if (j.error) throw new Error(j.error)
+	} catch (e) {
+		alert('could not save the name: ' + e.message)
+	}
+	setTimeout(refreshInspector, 400)
+}
+async function addToRoster(el) {
+	const body = { ip: el.getAttribute('data-add-ip') || el.getAttribute('data-add-roster'), name: el.getAttribute('data-add-name') || '', group: el.getAttribute('data-add-group') || 'Studio A', role: el.getAttribute('data-add-role') || 'unknown' }
+	el.disabled = true
+	el.textContent = 'Adding…'
+	try {
+		const r = await fetch('/api/roster/add', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+		const j = await r.json()
+		if (j.error) throw new Error(j.error)
+	} catch (e) {
+		alert('could not add the device: ' + e.message)
+	}
+	setTimeout(refreshInspector, 500)
 }
 
 function openItemsHtml(s) {
@@ -1046,7 +1124,7 @@ function renderOpenItems(s) {
 function renderAiView() {
 	const ai = aiInfo
 	const parts = []
-	if (aiStatus && !aiStatus.enabled) parts.push(`<p>AI is not configured. Add an OpenAI-compatible server (LM Studio) or an Anthropic key under <b>ai</b> in config.json, then Broadwatch &gt; Restart server.</p>`)
+	if (aiStatus && !aiStatus.enabled) parts.push(`<p>No AI is set up yet. Claude needs an Anthropic key (Settings &gt; AI); a local model runs on this computer for free after a short setup.</p><div class="insp-actions"><button class="btn" id="aiSettings">Set up Claude</button><button class="btn" id="localAiGuide">Set up a local AI</button></div>`)
 	const h = state?.health
 	parts.push(`<div class="verdict" data-sel="health:now" style="cursor:pointer"><span class="lamp ${h ? verdictClass(h.verdict) : ai ? verdictClass(ai.verdict) : aiStatus?.busy ? 'thinking' : ''}"></span><div><b>${esc(h ? nice(h.verdict) : ai ? nice(ai.verdict) : aiStatus?.busy ? 'Assessing' : 'Standby')}${h ? ` <small>${h.score}/100</small>` : ''}</b><small>${esc(h ? h.headline : ai ? ai.headline : aiStatus?.busy ? 'the model is reading the live state…' : 'the first assessment runs shortly after start')}</small></div></div>`)
 	if (h) parts.push(`<ul class="factors">${h.factors.filter((f) => f.value !== null && f.value < 1).sort((a, b) => b.weight * (1 - b.value) - a.weight * (1 - a.value)).slice(0, 6).map((f) => `<li class="${esc(f.level)}"><b>${esc(f.label)}</b><em>${Math.round(f.value * 100)}%</em><span>${esc(f.reason)}</span></li>`).join('') || '<li class="ok"><b>All factors</b><em>100%</em><span>everything the profile expects is up</span></li>'}</ul>`)
@@ -1184,7 +1262,17 @@ document.addEventListener('click', (e) => {
 		const n = state?.topology.nodes.find((x) => x.id === id)
 		return select(n?.kind === 'ap' ? 'ap' : n?.kind === 'pdu' ? 'pdu' : n?.kind === 'gateway' ? 'gateway' : 'switch', id)
 	}
-	if (t.closest?.('[data-diagnose]')) return diagnose(t.closest('[data-diagnose]').getAttribute('data-diagnose'))
+	if (t.closest?.('[data-diagnose]')) {
+		const el = t.closest('[data-diagnose]')
+		return diagnose(el.getAttribute('data-diagnose'), el.getAttribute('data-provider') || aiStatus?.provider || 'anthropic')
+	}
+	if (t.closest?.('[data-add-roster]')) return addToRoster(t.closest('[data-add-roster]'))
+	if (t.closest?.('[data-maplabel-save]')) return saveMapLabel(t.closest('[data-maplabel-save]').getAttribute('data-maplabel-save'))
+	const zoomBtn = t.closest?.('[data-zoom]')
+	if (zoomBtn) {
+		const z = zoomBtn.getAttribute('data-zoom')
+		return z === 'in' ? NetMap.zoom(1.25) : z === 'out' ? NetMap.zoom(1 / 1.25) : NetMap.fit()
+	}
 	if (t.closest?.('[data-atem-session]')) return atemSession(t.closest('[data-atem-session]').getAttribute('data-ip'), t.closest('[data-atem-session]').getAttribute('data-atem-session'))
 	if (t.closest?.('[data-capture]')) return showCapture(t.closest('[data-capture]').getAttribute('data-capture'))
 	if (t.id === 'reassess') {
@@ -1238,13 +1326,15 @@ document.addEventListener('click', (e) => {
 	if (t.closest?.('#themeToggle')) return applyTheme(document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark')
 	if (t.closest?.('#settingsBtn')) return Settings.open('', { onSaved: refreshAiStatus })
 	if (t.id === 'aiSettings') return Settings.open('ai', { onSaved: refreshAiStatus })
+	if (t.id === 'localAiGuide') return LocalAI.open({ onDone: refreshAiStatus })
 	const prov = t.closest?.('[data-ai-provider]')
 	if (prov) return switchAiProvider(prov.getAttribute('data-ai-provider'))
 })
 // the one-click local/cloud switch: only between providers that are set up; otherwise open Settings
 async function switchAiProvider(provider) {
 	const pv = aiStatus?.providers || {}
-	if ((provider === 'anthropic' && !pv.anthropic) || (provider === 'openai' && !pv.local)) return Settings.open('ai', { onSaved: refreshAiStatus })
+	if (provider === 'openai' && !pv.local) return LocalAI.open({ onDone: refreshAiStatus })
+	if (provider === 'anthropic' && !pv.anthropic) return Settings.open('ai', { onSaved: refreshAiStatus })
 	if (pv.active === provider) return
 	try {
 		await fetch('/api/settings', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ai: { provider } }) })
@@ -1269,6 +1359,7 @@ document.addEventListener('change', (e) => {
 document.addEventListener('keydown', (e) => {
 	if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') {
 		if (e.key === 'Enter' && e.target.id === 'askInput') ask(e.target.value)
+		if (e.key === 'Enter' && e.target.id === 'mapLabelInput') saveMapLabel(e.target.getAttribute('data-node-id'))
 		if (e.key === 'Enter' && e.target.closest('.lbl-edit')) savePortLabel(e.target.closest('tr')?.querySelector('[data-label-save]')?.getAttribute('data-label-save'))
 		if (e.key === 'Escape' && e.target.id === 'portFind') {
 			e.target.value = ''
@@ -1289,6 +1380,23 @@ document.addEventListener('keydown', (e) => {
 $('mapAll').addEventListener('change', (e) => {
 	mapAll = e.target.checked
 	if (state) renderMap(state)
+})
+// double-click a node on the map: open it in the inspector with the map-name field ready to type into
+document.addEventListener('dblclick', (e) => {
+	const node = e.target.closest?.('[data-node]')
+	if (!node) return
+	const id = node.getAttribute('data-node')
+	if (id === 'internet') return
+	const n = state?.topology.nodes.find((x) => x.id === id)
+	const type = id.startsWith('eq:') ? 'equipment' : n?.kind === 'ap' ? 'ap' : n?.kind === 'pdu' ? 'pdu' : n?.kind === 'gateway' ? 'gateway' : 'switch'
+	setRail(true)
+	select(type, id.startsWith('eq:') ? id.slice(3) : id).then(() => {
+		const i = $('mapLabelInput')
+		if (i) {
+			i.focus()
+			i.select()
+		}
+	})
 })
 $('portFind').addEventListener('input', (e) => {
 	rackFilter = e.target.value.trim().toLowerCase()

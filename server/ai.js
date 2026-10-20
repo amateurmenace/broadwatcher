@@ -93,12 +93,21 @@ export class AI {
 		return { ok: true, provider: probe.provider, model: probe.modelName, endpoint: probe.provider === 'anthropic' ? 'api.anthropic.com' : probe.cfg.base_url, ms: r.ms, reply: r.text.slice(0, 60) }
 	}
 
-	async chat(messages, { maxTokens = 900, temperature = 0.2 } = {}) {
+	// the model a provider would answer with (the active one by default)
+	modelFor(provider) {
+		return (provider || this.provider) === 'anthropic' ? this.cfg.anthropic_model : this.cfg.model || '(server default)'
+	}
+
+	// provider: "anthropic" | "openai" overrides the active choice for this one request (the diagnose buttons)
+	async chat(messages, { maxTokens = 900, temperature = 0.2, provider = null } = {}) {
 		const t0 = Date.now()
 		this.busy = true
 		try {
 			let text
-			if (this.provider === 'anthropic') {
+			const prov = provider || this.provider
+			if (prov === 'anthropic' && !this.hasAnthropicKey) throw new Error('no Anthropic API key yet: Settings > AI > Claude')
+			if (prov !== 'anthropic' && !this.cfg.base_url) throw new Error('no local AI server set up yet: Settings > AI > Local AI server')
+			if (prov === 'anthropic') {
 				// official SDK; adaptive thinking is on by default on Claude Opus 5.5 (depth via output_config.effort),
 				// sampling parameters are not sent, and a safety decline is re-run on a fallback model server-side
 				// a key that is not scoped to a workspace must name one on every request (anthropic-workspace-id)
@@ -248,10 +257,10 @@ Rules: READY = every broadcast path is healthy; DEGRADED = something is wrong bu
 		return this.assessment
 	}
 
-	async diagnose(state, alert, details, { force = false } = {}) {
-		if (!this.enabled) return null
+	async diagnose(state, alert, details, { force = false, provider = null } = {}) {
+		if (!this.enabled && !provider) return null
 		const c = this.diagnoses.get(alert.id)
-		if (c && !force && Date.now() - c.t < 300000) return c
+		if (c && !force && Date.now() - c.t < 300000 && (!provider || c.provider === provider)) return c
 		const prompt = `Network state:\n\n${this.digest(state)}\n\nALERT TO DIAGNOSE: [${alert.level}] ${alert.text}\nscope ${alert.scope}, kind ${alert.kind}, since ${alert.since ? new Date(alert.since).toLocaleTimeString() : '?'}
 Entity details: ${JSON.stringify(details.entity || {}).slice(0, 3000)}
 Related UniFi events: ${(details.log || []).slice(0, 10).map((l) => `${new Date(l.t).toLocaleTimeString()} ${l.title}`).join(' | ') || 'none'}
@@ -259,8 +268,8 @@ Related flows: ${(details.flows || []).slice(0, 8).map((f) => `${f.srcName || f.
 Related Broadwatch events: ${(details.events || []).slice(0, 8).map((x) => `${new Date(x.t).toLocaleTimeString()} ${x.text}`).join(' | ') || 'none'}
 
 Explain in plain language, as 3 short sections with these exact headings: "What this means", "Likely causes" (most likely first, say how you know), "What to check now" (numbered, concrete: which device, port, cable, setting). Max 170 words. Mention how it affects a live broadcast.`
-		const { text, ms } = await this.chat([{ role: 'system', content: SYSTEM }, { role: 'user', content: prompt }], { maxTokens: 600, temperature: 0.2 })
-		const d = { id: alert.id, text, model: this.modelName, t: Date.now(), ms }
+		const { text, ms } = await this.chat([{ role: 'system', content: SYSTEM }, { role: 'user', content: prompt }], { maxTokens: 600, temperature: 0.2, provider })
+		const d = { id: alert.id, text, model: this.modelFor(provider), provider: provider || this.provider, t: Date.now(), ms }
 		this.diagnoses.set(alert.id, d)
 		return d
 	}

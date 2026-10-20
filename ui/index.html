@@ -41,16 +41,17 @@
 	<div class="hud-right">
 		<div class="hud-issues" id="hudIssues"></div>
 		<div class="clock" id="clock">00:00:00</div>
-		<button class="icon-btn" id="settingsBtn" title="Settings (AI, gateway, SNMP, Companion, server)">⚙</button>
-		<button class="icon-btn" id="themeToggle" title="Light / dark">◐</button>
-		<button class="icon-btn on" id="railToggle" title="Show or hide the readiness rail (R)">▸</button>
+		<div class="hud-ctl">
+			<button class="btn settings" id="settingsBtn" title="Settings: AI, UniFi gateway, switcher, SNMP, Companion, capture, server, thresholds"><span class="gear">⚙</span> Settings</button>
+			<div class="hud-ctl-row"><button class="icon-btn" id="themeToggle" title="Light / dark">◐ Theme</button><button class="icon-btn on" id="railToggle" title="Show or hide the side panel (R)">▸ Panel</button></div>
+		</div>
 	</div>
 </header>
 
 <div class="shell" id="shell">
 	<main class="main" id="main">
 		<nav class="secnav" id="secnav">
-			<a href="#homeBlock">Health</a><a href="#gwBlock">Gateway</a><a href="#mapBlock">Signal map</a><a href="#atemBlock">Streams</a><a href="#pathBlock">Stream paths</a><a href="#audioBlock">Audio</a><a href="#forBlock">Forensics</a><a href="#rackBlock">Switches</a><a href="#patchBlock">Equipment</a><a href="#logBlock">Log</a><a href="#unifiBlock">UniFi</a>
+			<a href="#homeBlock">Health</a><a href="#mapBlock">Signal map</a><a href="#gwBlock">Gateway</a><a href="#audioBlock">Audio</a><a href="#atemBlock">Streams</a><a href="#pathBlock">Stream paths</a><a href="#forBlock">Forensics</a><a href="#rackBlock">Switches</a><a href="#patchBlock">Equipment</a><a href="#logBlock">Log</a><a href="#unifiBlock">UniFi</a>
 			<span class="spacer"></span><small id="freshness"></small>
 		</nav>
 
@@ -59,16 +60,24 @@
 			<div class="bb"><div class="home" id="home"></div></div>
 		</section>
 
-		<section class="issues" id="issues"></section>
+		<section class="block issues-block" id="issuesBlock" hidden>
+			<header class="bh"><h2>Open items</h2><span class="bh-note">click an item to read what it means and to have the AI diagnose it, with Claude or a local model</span></header>
+			<div class="issues" id="issues"></div>
+		</section>
+
+		<section class="block" id="mapBlock">
+			<header class="bh"><h2>Signal map</h2><div class="bh-tools"><span class="zoom"><button id="mapOut" title="zoom out">−</button><span id="mapZoom">100%</span><button id="mapIn" title="zoom in">+</button><button id="mapFit" title="fit the whole map">fit</button></span><label class="chk"><input type="checkbox" id="mapAll"> every switch</label><span class="bh-note" id="mapNote"></span></div><button class="fold" data-fold="mapBlock" title="collapse / expand"></button></header>
+			<div class="bb"><div class="map-wrap" id="mapWrap"><svg id="map" xmlns="http://www.w3.org/2000/svg"></svg><div class="map-tools"><button data-zoom="in" title="zoom in (ctrl + wheel)">+</button><button data-zoom="out" title="zoom out">−</button><button class="fit" data-zoom="fit" title="fit the whole map (double-click)">FIT</button></div></div></div>
+		</section>
 
 		<section class="block" id="gwBlock">
 			<header class="bh"><h2>Gateway at a glance</h2><span class="bh-note" id="gwNote"></span><button class="fold" data-fold="gwBlock" title="collapse / expand"></button></header>
 			<div class="bb"><div class="gw" id="gw"></div></div>
 		</section>
 
-		<section class="block" id="mapBlock">
-			<header class="bh"><h2>Signal map</h2><div class="bh-tools"><span class="zoom"><button id="mapOut" title="zoom out">−</button><span id="mapZoom">100%</span><button id="mapIn" title="zoom in">+</button><button id="mapFit" title="fit the whole map">fit</button></span><label class="chk"><input type="checkbox" id="mapAll"> every switch</label><span class="bh-note" id="mapNote"></span></div><button class="fold" data-fold="mapBlock" title="collapse / expand"></button></header>
-			<div class="bb"><div class="map-wrap" id="mapWrap"><svg id="map" xmlns="http://www.w3.org/2000/svg"></svg></div></div>
+		<section class="block" id="audioBlock">
+			<header class="bh"><h2>Audio</h2><span class="bh-note" id="audioNote"></span><button class="fold" data-fold="audioBlock" title="collapse / expand"></button></header>
+			<div class="bb"><div class="audio" id="audioPanel"></div></div>
 		</section>
 
 		<section class="block" id="atemBlock">
@@ -79,11 +88,6 @@
 		<section class="block" id="pathBlock">
 			<header class="bh"><h2>Stream path check</h2><span class="bh-note" id="pathNote"></span><button class="fold" data-fold="pathBlock" title="collapse / expand"></button></header>
 			<div class="bb"><div id="pathPanel"></div></div>
-		</section>
-
-		<section class="block" id="audioBlock">
-			<header class="bh"><h2>Audio</h2><span class="bh-note" id="audioNote"></span><button class="fold" data-fold="audioBlock" title="collapse / expand"></button></header>
-			<div class="bb"><div class="audio" id="audioPanel"></div></div>
 		</section>
 
 		<section class="block" id="forBlock">
@@ -120,7 +124,7 @@
 			<header class="bh"><h2>UniFi events</h2><span class="bh-note">the controller's own log, newest first</span><button class="fold" data-fold="unifiBlock" title="collapse / expand"></button></header>
 			<div class="bb"><div class="tape" id="unifiLog"></div><div class="tape" id="tape" hidden></div></div>
 		</section>
-		<footer class="foot">Broadwatch · Brookline Interactive Group · UniFi Network API and SNMP · Blackmagic REST and ATEM protocol · Companion · local or Claude AI</footer>
+		<footer class="foot"><b>Designed and developed by Stephen Walter + AI for Brookline Interactive Group, 2026.</b><br>Broadwatch reads the UniFi Network API and SNMP, Blackmagic REST and the ATEM protocol, Companion, OSC and Sennheiser Sound Control, with a local model or Claude for the narrative.</footer>
 	</main>
 
 	<aside class="inspector" id="inspector">
@@ -141,11 +145,15 @@
 <div class="overlay" id="prepareOverlay" hidden>
 	<div class="editor" id="prepareEditor"></div>
 </div>
+<div class="overlay" id="wizardOverlay" hidden>
+	<div class="editor wiz" id="wizardEditor"></div>
+</div>
 
 <div id="tip" class="tip" hidden></div>
 <script src="map.js"></script>
 <script src="settings.js"></script>
 <script src="prepare.js"></script>
+<script src="localai.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

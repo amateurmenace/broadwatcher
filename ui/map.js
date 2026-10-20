@@ -278,10 +278,12 @@ window.NetMap = (function () {
 		vp.appendChild(gn)
 		for (const n of nodes) {
 			const { x, y, w, h } = pos(n)
-			const cls = ['node', n.kind, n.status || '', n.hero ? 'hero' : '', n.hero && opts.stream?.state === 'arriving' ? 'stream' : '', opts.selected && opts.selected === n.id ? 'sel' : '', opts.match && opts.match(n) ? 'match' : ''].join(' ')
+			const cls = ['node', n.kind, n.status || '', n.hero ? 'hero' : '', n.hero && opts.stream?.state === 'arriving' ? 'stream' : '', opts.selected && opts.selected === n.id ? 'sel' : '', opts.match && opts.match(n) ? 'match' : '', n.label ? 'labelled' : ''].join(' ')
 			const g = el('g', { class: cls, transform: `translate(${x} ${y})`, 'data-node': n.id, 'data-tip': 'node:' + n.id })
 			g.appendChild(el('rect', { class: 'box', width: w, height: h, rx: 3 }))
 			if (n.hero) g.appendChild(el('rect', { class: 'accent', x: 0, y: 0, width: 3, height: h, rx: 1 }))
+			if (n.label) g.appendChild(el('rect', { class: 'tag', x: w - 6, y: 0, width: 6, height: 6 })) // a hand-written name: violet corner, like a labelled port
+			const nm = n.label || n.name
 			g.appendChild(el('circle', { cx: 12, cy: h / 2, r: 3.2, class: 'tally ' + (n.kind === 'internet' ? (n.status === 'online' ? 'online' : 'offline') : n.status || '') }))
 			const rate = n.rate || {}
 			const rates = () => {
@@ -290,24 +292,24 @@ window.NetMap = (function () {
 				t.appendChild(el('tspan', { class: 'o', dx: 5 }, `↑${fmtRate(rate.out)}`))
 				g.appendChild(t)
 			}
-			if (n.kind === 'internet') g.appendChild(el('text', { x: 22, y: 16, class: 'name' }, trunc(n.name, 13)))
+			if (n.kind === 'internet') g.appendChild(el('text', { x: 22, y: 16, class: 'name' }, trunc(nm,13)))
 			else if (n.kind === 'equipment') {
 				const t = n.telemetry
 				const badge = t && (t.recording || t.streaming) ? (t.recording ? 'REC' : 'STREAM') : null
 				const bw = badge ? badge.length * 6 + 8 : 0
-				g.appendChild(el('text', { x: 22, y: 16, class: 'name' }, trunc(n.name, badge ? 12 : 16)))
+				g.appendChild(el('text', { x: 22, y: 16, class: 'name' }, trunc(nm,badge ? 12 : 16)))
 				if (badge) {
 					g.appendChild(el('rect', { x: w - 88 - bw, y: 6, width: bw, height: 12, rx: 2, class: 'badge-bg ' + (t.recording ? 'rec' : 'stream') }))
 					g.appendChild(el('text', { x: w - 88 - bw / 2, y: 15.2, 'text-anchor': 'middle', class: 'badge' }, badge))
 				}
 				rates()
 			} else if (n.kind === 'switch' || n.kind === 'gateway') {
-				g.appendChild(el('text', { x: 22, y: 16, class: 'name' }, trunc(n.name, 14)))
+				g.appendChild(el('text', { x: 22, y: 16, class: 'name' }, trunc(nm,14)))
 				rates()
 			} else if (n.kind === 'ap') {
-				g.appendChild(el('text', { x: 22, y: 16, class: 'name' }, trunc(n.name, 17)))
+				g.appendChild(el('text', { x: 22, y: 16, class: 'name' }, trunc(nm,17)))
 				g.appendChild(el('text', { x: w - 7, y: 16, 'text-anchor': 'end', class: 'rate' }, `${n.clients ?? 0} wifi`))
-			} else g.appendChild(el('text', { x: 22, y: 16, class: 'name' }, trunc(n.name, 19)))
+			} else g.appendChild(el('text', { x: 22, y: 16, class: 'name' }, trunc(nm,19)))
 			gn.appendChild(g)
 		}
 		if (view.auto || sizeChanged) {

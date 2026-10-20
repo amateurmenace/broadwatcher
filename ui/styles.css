@@ -24,7 +24,7 @@
 	--serif: "Iowan Old Style", Georgia, "Palatino Linotype", "Book Antiqua", "Times New Roman", serif;
 	--sans: "Segoe UI", -apple-system, "Helvetica Neue", Helvetica, Arial, sans-serif;
 	--mono: "SF Mono", Consolas, Menlo, "Liberation Mono", monospace;
-	--hud-h: 66px;
+	--hud-h: 84px;
 	--insp-w: 400px;
 	--radius: 3px;
 	--shadow-pop: 0 14px 34px rgba(40, 32, 20, 0.18);
@@ -112,9 +112,16 @@ input:focus, select:focus { outline: none; border-color: var(--out); box-shadow:
 .vl label { margin-bottom: 1px; overflow: hidden; text-overflow: ellipsis; }
 .vl label i { font-style: normal; color: var(--ink3); opacity: .85; margin-left: 5px; font-size: 10px; }
 .vl .nums { display: flex; gap: 8px; font-size: 11.5px; font-weight: 500; line-height: 1.1; white-space: nowrap; overflow: hidden; }
-.vl .vspark { width: 100%; height: 13px; display: block; margin: 3px 0 1px; }
+.vl .vspark { width: 100%; height: 18px; display: block; margin: 4px 0 2px; }
 .vl small { font-size: 10px; }
-.hud-right { display: flex; align-items: center; gap: 10px; padding: 0 14px 0 16px; border-left: 1px solid var(--line); white-space: nowrap; }
+.hud-right { display: flex; align-items: center; gap: 14px; padding: 0 14px 0 16px; border-left: 1px solid var(--line); white-space: nowrap; }
+/* the controls: Settings spelled out, the theme and panel switches on their own line under it */
+.hud-ctl { display: flex; flex-direction: column; gap: 5px; align-self: center; }
+.hud-ctl .btn.settings { justify-content: center; gap: 7px; padding: 6px 14px; font-size: 13px; background: var(--ink); color: var(--bg); border-color: var(--ink); letter-spacing: .01em; }
+.hud-ctl .btn.settings:hover { opacity: .88; background: var(--ink); }
+.hud-ctl .btn.settings .gear { font-size: 15px; line-height: 1; }
+.hud-ctl-row { display: flex; gap: 5px; }
+.hud-ctl-row .icon-btn { flex: 1; font-size: 11px; padding: 3px 6px; white-space: nowrap; }
 .hud-issues { display: flex; gap: 6px; }
 .hud-issues span { font-size: 11.5px; padding: 2px 9px; border: 1px solid var(--line2); border-radius: var(--radius); color: var(--ink2); white-space: nowrap; }
 .hud-issues span i { font-style: normal; }
@@ -158,20 +165,77 @@ input:focus, select:focus { outline: none; border-color: var(--out); box-shadow:
 .btn.mini { padding: 2px 8px; font-size: 11px; }
 .btn.danger { color: var(--error); }
 .btn[disabled] { opacity: .5; cursor: progress; }
-.foot { margin-top: 30px; font-size: 11px; color: var(--ink3); }
+.foot { margin-top: 30px; font-size: 11.5px; color: var(--ink3); line-height: 1.6; border-top: 1px solid var(--line); padding-top: 12px; }
+.foot b { font-family: var(--serif); font-weight: 400; font-style: italic; font-size: 13.5px; color: var(--ink2); }
 .empty { color: var(--ink3); font-size: 12.5px; padding: 14px 0; font-style: italic; font-family: var(--serif); }
 .find { width: 230px; padding: 4px 9px; font-size: 12px; }
 
-/* issues strip */
-.issues { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 18px; }
+/* open items: problems first, then warnings, each a row that opens the inspector */
+.issues-block { margin-top: -8px; }
+.issues { display: flex; flex-direction: column; gap: 4px; margin: 0 0 6px; }
 .issues:empty { display: none; }
-.issue { display: inline-flex; align-items: center; gap: 8px; padding: 5px 10px 5px 9px; border: 1px solid var(--line2); background: var(--panel); font-size: 12.5px; cursor: pointer; border-left-width: 3px; border-radius: var(--radius); }
+.issues h4 { margin: 8px 0 2px; font-family: var(--serif); font-weight: 400; font-size: 13.5px; color: var(--ink2); }
+.issues h4.error { color: var(--error); }
+.issues h4.warn { color: var(--warn); }
+.issue { display: grid; grid-template-columns: 10px auto 1fr auto auto; align-items: center; gap: 12px; padding: 7px 12px 7px 10px; border: 1px solid var(--line2); background: var(--panel); font-size: 12.5px; cursor: pointer; border-left-width: 3px; border-radius: var(--radius); }
 .issue:hover, .issue.sel { background: var(--panel2); }
 .issue.error { border-left-color: var(--error); }
 .issue.warn { border-left-color: var(--warn); }
 .issue.info { border-left-color: var(--ink3); }
-.issue .k { font-size: 10.5px; color: var(--ink3); }
+.issue .mark { width: 8px; height: 8px; border-radius: 50%; background: var(--line2); }
+.issue.error .mark { background: var(--error); }
+.issue.warn .mark { background: var(--warn); }
+.issue .k { font-size: 10.5px; color: var(--ink3); text-transform: lowercase; }
 .issue .since { font-size: 10.5px; color: var(--ink3); }
+.issue .go { font-size: 11px; color: var(--out); white-space: nowrap; }
+.issue:hover .go { text-decoration: underline; }
+.insp-body .issue { display: flex; }
+/* the AI diagnosis buttons stand apart from the quiet ones */
+.btn.diagnose { background: var(--out); color: #fff; border-color: var(--out); font-weight: 500; }
+.btn.diagnose:hover { opacity: .9; background: var(--out); }
+.btn.diagnose.local { background: var(--panel); color: var(--out); }
+.btn.diagnose.local:hover { background: var(--out-soft); }
+/* errors and drops, one row per counter */
+table.errtab { margin-top: 4px; font-size: 12px; }
+table.errtab td, table.errtab th { padding: 4px 6px; }
+table.errtab tr.hot td:nth-child(2) { color: var(--error); font-weight: 600; }
+/* the signal map's own zoom buttons */
+.map-tools { position: absolute; top: 10px; right: 10px; z-index: 2; display: flex; flex-direction: column; gap: 4px; }
+.map-tools button { width: 30px; height: 30px; font-size: 17px; line-height: 1; color: var(--ink2); background: var(--panel); border: 1px solid var(--line2); border-radius: var(--radius); box-shadow: 0 1px 2px rgba(0, 0, 0, .06); }
+.map-tools button:hover { color: var(--ink); background: var(--panel2); }
+.map-tools button.fit { font-size: 9.5px; letter-spacing: .05em; }
+.lblform.one { grid-template-columns: 1fr auto; }
+.lblform.one input { grid-column: auto; }
+/* the roster editor: whole switches */
+.editor h3.rh { margin: 10px 0 4px; font-family: var(--serif); font-weight: 400; font-size: 15px; color: var(--ink); display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.editor h3.rh small { font-size: 11.5px; color: var(--ink3); font-family: var(--sans); }
+.roster-sw { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px 18px; margin: 6px 0 10px; }
+.roster-sw label { display: flex; gap: 8px; align-items: center; font-size: 12.5px; cursor: pointer; min-width: 0; }
+.roster-sw label input { width: auto; margin: 0; accent-color: var(--out); }
+.roster-sw label span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.roster-sw label small { color: var(--ink3); font-size: 11px; white-space: nowrap; }
+.roster-auto { font-size: 12px; color: var(--ink2); margin: 2px 0 12px; line-height: 1.5; }
+/* the local AI guide */
+.editor.wiz { width: min(780px, 100%); }
+.wiz .body { padding: 10px 24px 20px; }
+.wiz .steps-nav { display: flex; gap: 6px; margin: 4px 0 14px; flex-wrap: wrap; }
+.wiz .steps-nav span { font-size: 11.5px; color: var(--ink3); padding: 3px 9px; border: 1px solid var(--line); border-radius: var(--radius); }
+.wiz .steps-nav span.on { color: var(--ink); border-color: var(--ink2); background: var(--panel2); }
+.wiz .steps-nav span.done { color: var(--ok); border-color: var(--ok); }
+.wiz p { color: var(--ink2); line-height: 1.55; margin: 6px 0; }
+.wiz ol { margin: 8px 0 0; padding-left: 22px; color: var(--ink2); line-height: 1.6; }
+.wiz ol li { margin: 8px 0; }
+.wiz b { color: var(--ink); font-weight: 600; }
+.wiz code { font-family: var(--mono); font-size: 12px; background: var(--panel2); padding: 1px 5px; border-radius: 2px; }
+.wiz .opt { display: flex; gap: 12px; margin: 8px 0 14px; flex-wrap: wrap; }
+.wiz .opt label { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--line2); border-radius: var(--radius); cursor: pointer; flex: 1; min-width: 240px; }
+.wiz .opt label.on { border-color: var(--ink); background: var(--panel2); }
+.wiz .opt label input { margin-top: 3px; accent-color: var(--out); }
+.wiz .opt label small { display: block; color: var(--ink3); margin-top: 2px; line-height: 1.45; }
+.wiz .field { display: grid; grid-template-columns: 130px 1fr; gap: 6px 14px; align-items: center; margin: 8px 0; font-size: 12.5px; }
+.wiz .field > span { color: var(--ink3); font-size: 11.5px; }
+.wiz .field input { width: 100%; max-width: 480px; }
+.wiz .field small { grid-column: 2; color: var(--ink3); font-size: 11px; }
 
 /* ---------------------------------------------------------------- broadcast health (the glance board) */
 .profile-pick { font-size: 12px; color: var(--ink2); display: inline-flex; gap: 6px; align-items: center; white-space: nowrap; }
@@ -278,6 +342,8 @@ input:focus, select:focus { outline: none; border-color: var(--out); box-shadow:
 #map .node rect.accent { fill: var(--ok); }
 #map .node.hero.stream rect.accent { fill: var(--stream); }
 #map .node.hero.stream rect.box { stroke: var(--stream); }
+#map .node.labelled rect.box { stroke: var(--violet); }
+#map .node.labelled rect.tag { fill: var(--violet); }
 #map .node text { fill: var(--ink); font-size: 11.5px; }
 #map .node text.name { font-size: 12px; }
 #map .node text.rate { font-size: 10.5px; }
