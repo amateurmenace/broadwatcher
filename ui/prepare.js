@@ -11,6 +11,19 @@ window.Prepare = (function () {
 		['dante', 'Dante in use', 'the Dante consoles and interfaces are up'],
 		['ndi', 'NDI in use', 'NDI sources are on the NDI VLAN'],
 	]
+	// the cards of the health board a show can switch on or off
+	const TILES = [
+		['switcher', 'ATEM switcher'],
+		['encoders', 'Stream out'],
+		['recorders', 'Recorders'],
+		['audio', 'Audio consoles'],
+		['mics', 'Wireless mics'],
+		['dante', 'Dante'],
+		['ndi', 'NDI'],
+		['network', 'Network'],
+		['power', 'Power (PDUs)'],
+		['pc', 'This PC'],
+	]
 	let data = null // {profiles, active, equipment}
 	let cur = null // the profile being edited (working copy)
 
@@ -45,6 +58,8 @@ window.Prepare = (function () {
 			<div class="head"><span>Show profile</span><div><select id="prepProfile">${data.profiles.map((p) => `<option value="${esc(p.id)}" ${p.id === cur.id ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}<option value="__new">New profile…</option></select> <input id="prepName" value="${esc(cur.name)}" placeholder="profile name" style="width:240px;margin-left:8px"></div></div>
 			<h3>Expected during this show</h3>
 			<div class="exp">${EXPECT.map(([k, l, help]) => `<label class="chk" title="${esc(help)}"><input type="checkbox" data-exp="${k}" ${cur.expect?.[k] ? 'checked' : ''}> ${l}</label>`).join('')}</div>
+			<h3>Cards on the health board <small>· untick what this show does not need; the score still weighs everything</small></h3>
+			<div class="exp">${TILES.map(([id, l]) => `<label class="chk"><input type="checkbox" data-tile="${id}" ${!cur.tiles || !cur.tiles.length || cur.tiles.includes(id) ? 'checked' : ''}> ${l}</label>`).join('')}</div>
 			<h3>Devices in this broadcast <small>· ${set.size} of ${data.equipment.length} ticked · unticked devices go on standby (no probes, no alerts)</small></h3>
 			<div class="roster">${[...groups]
 				.map(([g, list]) => `<h4>${esc(g)}</h4>${list.map((e) => `<label><input type="checkbox" data-ip="${esc(e.ip)}" ${set.has(e.ip) ? 'checked' : ''}><span>${esc(e.name)}</span><small>${esc(e.ip)}</small></label>`).join('')}`)
@@ -59,6 +74,7 @@ window.Prepare = (function () {
 		cur.name = $('prepName').value.trim() || cur.name
 		cur.expect = Object.fromEntries(EXPECT.map(([k]) => [k, !!$('prepareEditor').querySelector(`[data-exp="${k}"]`)?.checked]))
 		cur.roster = [...$('prepareEditor').querySelectorAll('[data-ip]')].filter((c) => c.checked).map((c) => c.getAttribute('data-ip'))
+		cur.tiles = [...$('prepareEditor').querySelectorAll('[data-tile]')].filter((c) => c.checked).map((c) => c.getAttribute('data-tile'))
 		return cur
 	}
 	function switchProfile(id) {

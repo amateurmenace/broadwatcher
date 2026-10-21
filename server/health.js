@@ -198,6 +198,9 @@ function sameSubnet(ip, cidr) {
 }
 
 // the eight tiles of the home view (and the phone page): lamp, one number, one line, a 10-minute series
+// every card the health board can show (a show profile picks a subset)
+export const TILE_IDS = ['switcher', 'encoders', 'recorders', 'audio', 'mics', 'dante', 'ndi', 'network', 'power', 'pc']
+const esc1 = (s) => String(s ?? '')
 export function tiles(state, health) {
 	const f = Object.fromEntries((health?.factors || []).map((x) => [x.id, x]))
 	const eq = (state.equipment || []).filter((e) => e.active)
@@ -250,5 +253,18 @@ export function tiles(state, health) {
 		{ id: 'dante', label: 'Dante', level: lvl('dante'), value: dante.length ? `${dante.reduce((n, v) => n + num(v.clients), 0)}` : '–', line: f.dante?.reason || '', series: sum(dante.map((n) => n.history?.down || [])), target: { type: 'dante' }, unit: 'devices' },
 		{ id: 'ndi', label: 'NDI', level: lvl('ndi'), value: ndi.length ? rate(ndi.reduce((n, v) => n + num(v.down) + num(v.up), 0)) : '–', line: f.ndi?.reason || '', series: sum(ndi.map((n) => n.history?.down || [])), target: { type: 'ndi' } },
 		{ id: 'network', label: 'Network', level: worst(['wan', 'switches', 'errors', 'links', 'util', 'gateway']), value: gw ? `${sw.filter((s) => s.online).length}/${sw.length}` : '–', line: [f.wan, f.switches, f.errors, f.links, f.util].filter((x) => x && x.value !== null && x.value < 1).map((x) => x.reason)[0] || `${f.wan?.reason || ''}`, series: gw ? gw.wan.history?.down || [] : [], target: { type: 'network' }, unit: 'switches' },
+		...(() => {
+			// two more a show may want on the board: the PDUs' draw and this computer's load
+			const pdus = (state.others || []).filter((o) => o.kind === 'pdu')
+			const on = pdus.filter((p) => p.online)
+			const draw = on.reduce((n, p) => n + num(p.acPower || p.powerW), 0)
+			const budget = on.reduce((n, p) => n + num(p.acBudget), 0)
+			const host = eq.find((e) => e.telemetry?.kind === 'host' && !e.telemetry.error)
+			const h = host?.telemetry
+			return [
+				{ id: 'power', label: 'Power', level: !pdus.length ? 'na' : on.length < pdus.length ? 'warn' : budget && draw / budget > 0.8 ? 'warn' : 'ok', value: on.length ? `${Math.round(draw)}` : '–', unit: on.length ? 'W drawn' : '', line: pdus.length ? `${on.length}/${pdus.length} PDUs online · ${on.reduce((n, p) => n + num(p.outletsOn), 0)}/${on.reduce((n, p) => n + num(p.outlets), 0)} outlets on${budget ? ` · ${Math.round((draw / budget) * 100)} % of the ${Math.round(budget)} W budget` : ''}` : 'no PDU in UniFi', series: [], target: { type: 'section', id: 'patchBlock' } },
+				{ id: 'pc', label: 'This PC', level: !h ? 'na' : h.cpu > 90 || h.mem?.pct > 95 ? 'bad' : h.cpu > 75 || h.mem?.pct > 90 || (h.gpu && h.gpu.util > 95) ? 'warn' : 'ok', value: h ? `${h.cpu ?? '–'}%` : '–', unit: h ? 'cpu' : '', line: h ? `${esc1(h.hostname)} · ram ${h.mem?.pct ?? '–'} %${h.gpu ? ` · gpu ${h.gpu.util} % at ${h.gpu.temp} °C` : ''} · up ${Math.round((h.uptime || 0) / 3600)} h` : 'this computer is not in the roster (its address as a roster row gives it CPU, RAM, GPU and disks)', series: host ? host.history?.down || [] : [], target: host ? { type: 'equipment', id: host.ip } : null },
+			]
+		})(),
 	]
 }

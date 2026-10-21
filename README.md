@@ -45,11 +45,20 @@ broadcast readiness and explain problems.
   domains heard on this computer: leader, sync rate, followers; the Dante devices; the VLANs), NDI (the
   sources announced over mDNS, the devices on the NDI VLAN, the traffic) and Network (internet, gateway,
   every switch, VLANs, the biggest flows, ports with new errors, the open network items).
-- **Equipment widgets**: under each roster row a line of what the device itself reports: a HyperDeck's
-  transport, timecode, format and codec, its disk with time left; a Web Presenter's stream status, bitrate,
-  cache and format; the switcher's program, preview, stream and ISO record; a Videohub's model, size and
-  route count (the full routing table in the inspector); this computer's CPU, RAM, GPU and disks; the PDUs
-  with what they draw, their budget and every outlet.
+- **Equipment cards**: the roster is a grid of cards, one design per kind of device, each with labelled
+  readouts, a gauge or meter and a ten-minute traffic graph: the switcher (program and preview, stream out,
+  ISO record, sessions held, cache, intake), a HyperDeck (transport, timecode, format, codec, the disk used
+  and time left), a Web Presenter (stream status, bitrate against the setting, cache, format, uplink), a
+  Videohub (model, size, the first routes, outputs fed), this computer (CPU, RAM, GPU, disks), an X32 (the
+  main meters live), an EW-DX receiver (battery, RF and audio per channel live), encoders and playback
+  servers (status, output rate, a link to their web page), anything else (status, vendor, traffic), and the
+  PDUs (draw against budget, every outlet). Standby devices stay in a compact list.
+- **Health cards, your choice**: *Prepare a broadcast* ticks which cards a show wants on the board (the
+  switcher, stream out, recorders, audio, mics, Dante, NDI, network, power, this PC). Every card ends with
+  a labelled gauge, meter or graph: intake with stream out, ISO record and sessions under it; the encoder's
+  bitrate and cache gauges; each recorder's format, disk and time left; the console strips; the mics'
+  batteries; the Dante clock (locked, leader, followers, sync rate) with the VLAN graph; NDI sources with
+  the VLAN graph; latency, switches and port errors with the WAN graph; PDU load; this PC's gauges.
 - **Top bar modules**: Settings › Top bar lists the cells between the lamp and the clock, in order: intake,
   wan, console, vlans, encoder, switcher, record, deck, pc, mics, x32, ndi, dante, power.
 - **Forensics, the whole session**: the mirror-port capture keeps every control socket, flow and event for

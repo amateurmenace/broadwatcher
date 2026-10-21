@@ -15,7 +15,7 @@ import { SnmpSwitch } from './snmp.js'
 import { Companion } from './companion.js'
 import { X32Meters } from './x32.js'
 import { SscMonitor } from './ssc.js'
-import { computeHealth, tiles, PROFILE_DEFAULTS, isMic } from './health.js'
+import { computeHealth, tiles, PROFILE_DEFAULTS, isMic, TILE_IDS } from './health.js'
 import { Discover } from './discover.js'
 import { HostStats } from './host.js'
 import { readVideohub } from './videohub.js'
@@ -118,7 +118,7 @@ export class Collector extends EventEmitter {
 		this.activeProfile = config.active_profile || this.profiles[this.profiles.length - 1].id
 		this.state.health = null
 		this.state.tiles = []
-		this.state.profiles = { list: this.profiles.map((p) => ({ id: p.id, name: p.name, expect: p.expect, roster: p.roster || null })), active: this.activeProfile }
+		this.state.profiles = { list: this.profiles.map((p) => ({ id: p.id, name: p.name, expect: p.expect, roster: p.roster || null, tiles: p.tiles || null })), active: this.activeProfile }
 		this.companion = new Companion(config.companion || {}, log)
 		this.companionState = new Map() // atem ip -> {lastOk, okSince} for the companion/auto hysteresis
 		this.discover = new Discover({ log, nameFor: (ip) => this.nameFor(ip), subnetName: (subnet) => this.netconf.find((n) => n.ip_subnet && n.ip_subnet.split('.').slice(0, 3).join('.') === subnet.split('.').slice(0, 3).join('.'))?.name || null }) // NDI sources, Dante devices and clocks, passively
@@ -1069,7 +1069,7 @@ export class Collector extends EventEmitter {
 		const prevVerdict = this.state.health?.verdict
 		this.state.health = computeHealth(this.state, profile, this.th)
 		this.state.tiles = tiles(this.state, this.state.health)
-		this.state.profiles = { list: this.profiles.map((p) => ({ id: p.id, name: p.name, expect: p.expect, roster: p.roster || null })), active: this.activeProfile }
+		this.state.profiles = { list: this.profiles.map((p) => ({ id: p.id, name: p.name, expect: p.expect, roster: p.roster || null, tiles: p.tiles || null })), active: this.activeProfile }
 		if (prevVerdict && prevVerdict !== this.state.health.verdict) this.event('health', `Broadcast health ${this.state.health.verdict} (${this.state.health.score}): ${this.state.health.headline}`, { level: this.state.health.verdict === 'READY' ? 'info' : this.state.health.verdict === 'DEGRADED' ? 'warn' : 'error' })
 		this.state.ts = now
 		this.state.ok = Object.keys(this.state.errors).length === 0
@@ -1130,6 +1130,7 @@ export class Collector extends EventEmitter {
 			const e = raw.expect || {}
 			const p = { id, name, expect: { stream_out: !!e.stream_out, stream_in: !!e.stream_in, recording: !!e.recording, mics: !!e.mics, dante: !!e.dante, ndi: !!e.ndi } }
 			if (Array.isArray(raw.roster)) p.roster = raw.roster.filter((ip) => /^\d{1,3}(\.\d{1,3}){3}$/.test(String(ip))).slice(0, 200)
+			if (Array.isArray(raw.tiles)) p.tiles = raw.tiles.map(String).filter((id) => TILE_IDS.includes(id)).slice(0, 20) // the health cards this show wants
 			clean.push(p)
 		}
 		if (!clean.length) clean.push(...PROFILE_DEFAULTS.map((p) => ({ ...p, expect: { ...p.expect } })))

@@ -125,6 +125,13 @@ touching anything. The roadmap for the next phase is in `docs/ROADMAP.md`.
   (ring 5 × 100 MB, `/api/forensics/pcap[/name]`), `ai.explainForensics` + `/api/ai/forensics` (focus peer,
   question, provider). The Fairlight decoder was fixed (see the facts below). PDUs carry `outletList`,
   `acPower`, `acBudget`.
+- 0.13.0: the Equipment section is a card grid (`eqCard` per telemetry kind / audio kind / role, `pduCard`,
+  `.eqgrid` / `.eqc` in styles.css; standby devices keep `pbRow`); the health cards are 196 px tall with the
+  line clamped at three lines and a labelled graphic pinned to the bottom (`tileGraphic` per tile id:
+  sparkline, `gaugeHtml`, the strips, `.trow` rows, `.tmini` readouts). `TILE_IDS` in health.js adds `power`
+  and `pc` tiles; a show profile may carry `tiles[]` (Prepare a broadcast > Cards on the health board,
+  `setProfiles` validates against TILE_IDS, `state.profiles.list[].tiles`); the page shows only those when
+  set. `pbWidget` is unused since the cards.
 - Phone page: `ui/m.html` + `m.js` + `m.css` + `manifest.webmanifest` + `icon-512.png`, served at `/m`;
   non-loopback requests need `server.token` (`?key=` once, then the `bw_key` cookie; manifest and icons are
   public); `/api/phone` lists the LAN links; Electron menu "Open on a phone…" (switches `server.host` to

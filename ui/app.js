@@ -234,9 +234,10 @@ function renderHome(s) {
 		.filter((f) => f.value !== null && f.value < 1)
 		.sort((a, b) => b.weight * (1 - b.value) - a.weight * (1 - a.value))
 		.slice(0, 4)
-	const tileHtml = (s.tiles || [])
-		.map((t) => `<div class="tile ${esc(t.level)}" data-tile="${esc(t.id)}" title="${esc(t.line)}"><div class="th"><span class="lamp sm ${esc(t.level)}"></span>${esc(t.label)}</div><div class="tv">${esc(t.value)}${t.unit ? `<small>${esc(t.unit)}</small>` : ''}</div><div class="tl">${esc(t.line)}</div>${t.series && t.series.length > 1 ? scope('tile:' + t.id, [{ data: t.series, color: t.id === 'stream_out' ? 'out' : 'in' }], 'tspark', { bare: true }) : t.strip ? stripHtml(s, t.strip) : `<div class="nosp" title="${esc(t.note || 'no series yet')}"></div>`}</div>`)
-		.join('')
+	// the cards this show wants (Prepare a broadcast); every card ends with a labelled gauge, meter or graph
+	const wanted = s.profiles?.list?.find((p) => p.id === s.profiles.active)?.tiles
+	const shown = (s.tiles || []).filter((t) => !wanted || !wanted.length || wanted.includes(t.id))
+	const tileHtml = shown.map((t) => `<div class="tile ${esc(t.level)}" data-tile="${esc(t.id)}" title="${esc(t.line)}"><div class="th"><span class="lamp sm ${esc(t.level)}"></span>${esc(t.label)}</div><div class="tv">${esc(t.value)}${t.unit ? `<small>${esc(t.unit)}</small>` : ''}</div><div class="tl">${esc(t.line)}</div><div class="tg">${tileGraphic(t, s)}</div></div>`).join('')
 	$('home').innerHTML = `<div class="verdict-big" data-sel="health:now"><span class="lamp ${verdictClass(h.verdict)}"></span><div><b>${esc(nice(h.verdict))}</b><div class="score">${h.score}<small> / 100 · ${esc(h.profile?.name || '')}</small></div><p>${esc(aiFresh ? aiInfo.headline : h.headline)}</p><ul class="why">${why.map((f) => `<li class="${esc(f.level)}"><b>${esc(f.label)}</b> · ${esc(f.reason)}</li>`).join('') || '<li class="ok"><b>All factors</b> at full marks</li>'}</ul><div class="ai-meta">${aiFresh ? `AI: ${esc(aiInfo.model)} · ${fmtAgo(aiInfo.t)} ago${aiInfo.aiVerdict && aiInfo.aiVerdict !== h.verdict ? ` · the model would have said ${esc(nice(aiInfo.aiVerdict))}` : ''}` : aiStatus?.enabled ? 'AI narrative pending' : 'AI off · score only'} · click for every factor</div></div></div><div class="tiles">${tileHtml}</div>`
 	indexMeters()
 }
@@ -768,6 +769,86 @@ function pbRow(e) {
 		${standby ? '<span class="probe"></span>' : probe}
 	</div>`
 }
+// ------------------------------------------------------------------ equipment: one card per device, designed for what it is
+const gaugeHtml = (label, v, max, txt, cls = '') => `<div class="gauge"><span>${label}</span><div class="bar"><i class="${cls}" style="width:${Math.min(100, ((Number(v) || 0) / Math.max(1e-9, max)) * 100).toFixed(0)}%"></i></div><em class="${cls}">${txt}</em></div>`
+const kvCell = (label, val, cls = '') => `<span><label>${label}</label><b class="${cls}" title="${esc(String(val).replace(/<[^>]+>/g, ''))}">${val}</b></span>`
+const sparkRow = (key, e, label) => `<div class="eqg"><label><span>${label}</span><i><span class="dn">↓${fmtRate(e.down)}</span> <span class="up">↑${fmtRate(e.up)}</span></i></label>${scope(key, [{ data: e.history?.down || [], color: 'in' }, { data: e.history?.up || [], color: 'out' }], 'espark', { bare: true })}</div>`
+const linkTxt = (e) => (e.switch ? `${esc(e.switch.name)} · p${e.switch.port} · ${speedTxt(e.switch.speed)}${e.switch.poeW ? ' · ' + e.switch.poeW + ' W' : ''}` : e.online && e.wired === false ? 'wifi' : e.lastSeen ? 'last seen ' + fmtAgo(e.lastSeen) + ' ago' : 'not seen by UniFi')
+function eqCard(e, s) {
+	const t = e.telemetry && !e.telemetry.error ? e.telemetry : null
+	const standby = !e.active
+	const cls = ['eqc', standby ? 'standby' : e.status, e.hero ? 'hero' : '', selection?.type === 'equipment' && selection.id === e.ip ? 'sel' : ''].join(' ')
+	const probe = e.probe ? (e.probe.ok ? `<span class="ok">${esc(e.probeSpec)} answers · ${e.probe.ms.toFixed(0)} ms</span>` : `<span class="warn">${esc(e.probeSpec)}: ${esc(e.probe.error || 'no answer')}</span>`) : e.probeSpec ? esc(e.probeSpec) + ' · not yet' : 'no probe'
+	const age = e.telemetry?.t ? `read ${fmtAgo(e.telemetry.t)} ago` : e.age !== null && e.age !== undefined ? `counters ${e.age} s old` : ''
+	const head = `<div class="eqh"><span class="tally ${standby ? 'standby' : e.status}"></span><div class="eqn"><b>${esc(e.name)}</b><small>${esc(e.role)}${e.auto ? ' · from ' + esc(e.group) : ''} · ${esc(e.ip)}${e.unifiName && e.unifiName !== e.name ? ' · ' + esc(e.unifiName) : ''}</small></div><span class="eqlink">${linkTxt(e)}</span></div>`
+	const foot = `<div class="eqf"><span>${probe}</span><span>${age}</span></div>`
+	let body = ''
+	const k = t?.kind || e.audio?.kind || null
+	if (e.telemetry?.error) body = `<p class="warn" style="margin:0;font-size:11.5px">${esc(e.telemetry.error)}</p>${sparkRow('eq:' + e.ip, e, 'traffic · 10 min')}`
+	else if (k === 'atem') {
+		const st = s.atem?.ip === e.ip ? s.atem.stream : null
+		const held = s.atem?.ip === e.ip ? (s.forensics?.sessions || []).filter((x) => x.state === 'held').length : null
+		const rec = t.recording
+		body = `<div class="eqkv">${kvCell('program', t.programName ? esc(t.programName) : '–', 'big rec')}${kvCell('preview', esc(t.previewName || '–'), 'big')}${kvCell('control', t.via === 'companion' ? 'via Companion' : 'own session')}</div>
+		<div class="eqkv">${kvCell('stream out', t.streaming ? `${t.streaming.state === 'streaming' ? '<span class="tag stream">live</span> ' : ''}${esc(t.streaming.state)}${t.streaming.bitrate ? ' · ' + (t.streaming.bitrate / 1e6).toFixed(1) + ' Mb/s' : ''}` : '–', t.streaming?.state === 'streaming' ? 'live' : '')}${kvCell('ISO record', rec ? `${rec.active ? '<span class="tag rec">REC</span> ' + esc(rec.duration || '') : 'idle'}${rec.remaining ? ' · ' + esc(rec.remaining) + ' left' : ''}` : '–', rec?.active ? 'rec' : '')}${kvCell('sessions held', held === null ? '–' : String(held))}</div>
+		${t.streaming?.cache !== null && t.streaming?.cache !== undefined ? gaugeHtml('cache', t.streaming.cache, 100, t.streaming.cache + ' %', t.streaming.cache > 50 ? 'warn' : '') : ''}
+		<div class="eqg"><label><span>intake · 10 min${st?.state === 'arriving' ? ' · <b class="cyan">stream arriving</b>' : ''}</span><i><span class="dn">↓${fmtRate(e.down)}</span> <span class="up">↑${fmtRate(e.up)}</span></i></label>${scope('eq:' + e.ip, [{ data: e.history?.down || [], color: st?.state === 'arriving' ? 'stream' : 'in' }, { data: e.history?.up || [], color: 'out' }], 'espark', { bare: true })}</div>`
+	} else if (k === 'hyperdeck') {
+		const d = t.activeDisk
+		const used = d && d.size ? (d.size - d.free) / d.size : 0
+		body = `<div class="eqkv">${kvCell('transport', `${t.recording ? '<span class="tag rec">REC</span> ' : ''}${esc(t.mode)}`, t.recording ? 'rec' : '')}${kvCell('timecode', esc(t.timecode || '–'), 'tc')}</div>
+		<div class="eqkv">${kvCell('format', esc(t.format || '–'))}${kvCell('codec', esc(t.codec || '–'))}${kvCell('disk', d ? esc(d.name) + (d.volume ? ' · ' + esc(d.volume) : '') : 'none')}</div>
+		${d ? gaugeHtml('disk used', used, 1, d.remainingS !== null && d.remainingS !== undefined ? fmtMinutes(Math.round(d.remainingS / 60)) + ' left' : fmtBytes(d.free) + ' free', used > 0.9 ? 'warn' : '') : ''}
+		${sparkRow('eq:' + e.ip, e, 'network · 10 min')}`
+	} else if (k === 'webpresenter') {
+		const set = (t.bitrate || 0) / 1e6
+		body = `<div class="eqkv">${kvCell('stream', `${t.streaming ? '<span class="tag stream">live</span> ' : ''}${esc(t.status)}`, t.streaming ? 'live' : '')}${kvCell('format', esc(t.format || '–'))}${kvCell('input', esc(t.inputFormat || '–'))}</div>
+		${gaugeHtml('bitrate', t.streaming ? e.up : 0, set || 1, t.streaming ? fmtRate(e.up) + ' of ' + set.toFixed(1) : set ? set.toFixed(1) + ' Mb/s set' : '–', t.streaming && set && e.up < set * 0.7 ? 'warn' : '')}
+		${t.cache !== null && t.cache !== undefined ? gaugeHtml('cache', Number(t.cache), 100, t.cache + ' %', Number(t.cache) > 50 ? 'warn' : '') : ''}
+		${sparkRow('eq:' + e.ip, e, 'uplink · 10 min')}`
+	} else if (k === 'videohub') {
+		body = `<div class="eqkv">${kvCell('router', esc(t.model || 'Videohub'))}${kvCell('size', `${t.inputs} in × ${t.outputs} out`)}${kvCell('routes', `${(t.routing || []).length}${t.locks ? ' · ' + t.locks + ' locked' : ''}`)}</div>
+		<div class="routes">${(t.routing || []).slice(0, 4).map((r) => `<div><span>${esc(r.outName)}</span><i>←</i><span>${esc(r.inName)}</span></div>`).join('')}${(t.routing || []).length > 4 ? `<small>+${t.routing.length - 4} more in the inspector</small>` : ''}</div>
+		${gaugeHtml('outputs fed', (t.routing || []).length, t.outputs || 1, `${(t.routing || []).length}/${t.outputs}`)}`
+	} else if (k === 'host') {
+		body = `<div class="eqkv">${kvCell('host', esc(t.hostname))}${kvCell('up', fmtUptime(t.uptime))}${t.gpu ? kvCell('gpu', esc(String(t.gpu.name).replace('NVIDIA GeForce ', ''))) : ''}</div>
+		${gaugeHtml('cpu', t.cpu || 0, 100, (t.cpu ?? '–') + ' %', t.cpu > 85 ? 'error' : t.cpu > 70 ? 'warn' : '')}${gaugeHtml('ram', t.mem.pct, 100, fmtBytes(t.mem.used), t.mem.pct > 90 ? 'error' : '')}${t.gpu ? gaugeHtml('gpu', t.gpu.util, 100, `${t.gpu.util} % · ${t.gpu.temp}°`, t.gpu.util > 95 ? 'warn' : '') : ''}${(t.disks || []).slice(0, 3).map((d) => gaugeHtml(esc(d.name.split(' ')[0]), d.size - d.free, d.size, fmtBytes(d.free) + ' free', d.free / d.size < 0.1 ? 'warn' : '')).join('')}
+		${sparkRow('eq:' + e.ip, e, 'network · 10 min')}`
+	} else if (k === 'x32') {
+		const a = e.audio
+		const c = (s.audio?.consoles || []).find((x) => x.ip === e.ip)
+		body = `<div class="eqkv">${kvCell('console', a.console ? `${esc(a.console.model)} · fw ${esc(a.console.firmware)}` : 'X32')}${kvCell('meters', a.ok ? `live · ${a.rate}/s` : esc(a.error || 'none'), a.ok ? 'live' : '')}${kvCell('with signal', a.ok ? `${a.active} channel${a.active === 1 ? '' : 's'}` : '–')}</div>
+		${c?.ok ? `<div class="eqg"><label><span>main out · dBFS</span></label>${SCALE}${c.main.slice(0, 2).map((m, i) => meterRow(`x32:${e.ip}:main:${i}`, ['L', 'R'][i], m.name || 'Main', m, { hint: 'main ' + ['L', 'R'][i] })).join('')}</div>` : `<p class="warn" style="margin:0;font-size:11.5px">${esc(a.error || 'no meters')}</p>`}
+		${sparkRow('eq:' + e.ip, e, 'network · 10 min')}`
+	} else if (k === 'ewdx') {
+		const a = e.audio
+		body = a.ok
+			? `<table class="compact"><tbody>${a.channels
+					.map((ch) => {
+						const key = `mic:${e.ip}:${ch.id}`
+						const batt = ch.battery
+						return `<tr data-mic="${esc(key)}" class="${ch.link ? '' : 'off'}"><td><b>${esc(ch.name || ch.id.toUpperCase())}</b><small>${ch.frequency ? ch.frequency.toFixed(3) + ' MHz' : ''}${ch.link ? '' : ' · off'}</small></td><td><span class="hbar"><i class="${batt === null ? '' : batt < 10 ? 'hot' : batt < 20 ? 'warm' : ''}" style="width:${batt ?? 0}%"></i></span><em data-f="battTxt">${batt !== null && batt !== undefined ? batt + ' %' : '–'}</em><small>battery</small></td><td><span class="hbar"><i class="${ch.rsqi !== null && ch.rsqi < 30 ? 'warm' : ''}" data-f="rf" style="width:${ch.rsqi ?? 0}%"></i></span><em data-f="rfTxt">${ch.rsqi !== null && ch.rsqi !== undefined ? ch.rsqi + ' %' : '–'}</em><small>RF</small></td><td><span class="hbar af"><i class="${dbClass(ch.af)}" data-f="af" style="width:${dbPct(ch.af).toFixed(1)}%"></i></span><em data-f="afTxt">${fmtDb(ch.af)}</em><small>audio</small></td></tr>`
+					})
+					.join('')}</tbody></table>`
+			: `<p class="warn" style="margin:0;font-size:11.5px">${esc(a.error || 'not answering')}</p>${sparkRow('eq:' + e.ip, e, 'network · 10 min')}`
+	} else if (e.role === 'playback' || e.role === 'encoder') {
+		body = `<div class="eqkv">${kvCell('status', e.online ? (e.reachable === false ? '<span class="warn">on the network, not answering</span>' : 'on the network') : '<span class="error">not on the network</span>')}${kvCell('vendor', esc(e.oui || '–'))}${kvCell('web', e.online ? `<a href="http://${esc(e.ip)}/" target="_blank" rel="noopener">open ↗</a>` : '–')}</div>
+		${gaugeHtml('out', e.up, Math.max(1, e.up * 1.5, (e.history?.up || []).reduce((m, v) => Math.max(m, v), 0)), fmtRate(e.up))}
+		${sparkRow('eq:' + e.ip, e, 'traffic · 10 min')}`
+	} else {
+		body = `<div class="eqkv">${kvCell('status', e.online ? (e.reachable === false ? '<span class="warn">not answering</span>' : 'on the network') : '<span class="error">not on the network</span>')}${kvCell('vendor', esc(e.oui || '–'))}${kvCell('network', esc(e.network || '–'))}${e.uptime ? kvCell('up', fmtUptime(e.uptime)) : ''}</div>
+		${sparkRow('eq:' + e.ip, e, 'traffic · 10 min')}`
+	}
+	return `<div class="${cls}" data-sel="equipment:${esc(e.ip)}">${head}${body}${foot}</div>`
+}
+function pduCard(p) {
+	const draw = p.acPower || p.powerW || 0
+	return `<div class="eqc ${p.online ? 'online' : 'offline'}" data-sel="pdu:${esc(p.mac)}"><div class="eqh"><span class="tally ${p.online ? 'online' : 'offline'}"></span><div class="eqn"><b>${esc(p.name)}</b><small>${esc(p.modelName || 'PDU')} · ${esc(p.ip || '')}</small></div><span class="eqlink">${p.uplink?.device ? `${esc(p.uplink.device)} · p${p.uplink.port}` : ''}</span></div>
+	<div class="eqkv">${kvCell('draw', p.online ? `${Math.round(draw)} W` : '–', 'big')}${kvCell('budget', p.acBudget ? Math.round(p.acBudget) + ' W' : '–')}${kvCell('outlets on', `${p.outletsOn}/${p.outlets}`)}${p.voltage ? kvCell('mains', p.voltage + ' V') : ''}</div>
+	${gaugeHtml('load', draw, p.acBudget || 1, p.acBudget ? Math.round((draw / p.acBudget) * 100) + ' %' : '–', p.acBudget && draw / p.acBudget > 0.8 ? 'warn' : '')}
+	<div class="outlets">${(p.outletList || []).map((o) => `<span title="${esc(o.name)}${o.power ? ' · ' + o.power + ' W' : ''}"><span class="tally ${o.on ? 'online' : ''}"></span>${esc(o.name.replace(/^(USB )?Outlet /i, '$1'))}${o.power ? ` <b>${o.power} W</b>` : ''}</span>`).join('')}</div>
+	<div class="eqf"><span>${p.online ? 'online' : 'offline'}</span><span>${p.age !== null && p.age !== undefined ? `counters ${p.age} s old` : ''}</span></div></div>`
+}
 function renderPatch(s) {
 	const active = s.equipment.filter((e) => e.active)
 	const standby = s.equipment.filter((e) => !e.active)
@@ -777,15 +858,86 @@ function renderPatch(s) {
 		groups.get(e.group).push(e)
 	}
 	const ok = active.filter((e) => e.status === 'online').length
-	$('patchNote').textContent = `${ok} of ${active.length} in this broadcast online · ${standby.length} on standby · click a row for details`
-	const head = `<div class="pb-head"><span></span><span>Device</span><span>IP</span><span>Link</span><span>Device status</span><span>In</span><span>Out</span><span>Probe</span></div>`
+	$('patchNote').textContent = `${ok} of ${active.length} in this broadcast online · ${standby.length} on standby · click a card for details`
 	const html = []
-	for (const [g, list] of groups) html.push(`<div class="pb-group"><h4>${esc(g)} <small>${list.filter((e) => e.status === 'online').length}/${list.length} online</small></h4>${head}${list.map((e) => pbRow(e) + pbWidget(e)).join('')}</div>`)
-	// power: the PDUs UniFi knows, with what they draw and which outlets are on
+	for (const [g, list] of groups) html.push(`<div class="pb-group"><h4>${esc(g)} <small>${list.filter((e) => e.status === 'online').length}/${list.length} online</small></h4><div class="eqgrid">${list.map((e) => eqCard(e, s)).join('')}</div></div>`)
 	const pdus = (s.others || []).filter((o) => o.kind === 'pdu')
-	if (pdus.length) html.push(`<div class="pb-group"><h4>Power <small>${pdus.filter((p) => p.online).length}/${pdus.length} PDUs online · ${Math.round(pdus.reduce((n, p) => n + (p.acPower || p.powerW || 0), 0))} W drawn</small></h4>${pdus.map((p) => `<div class="pb ${p.online ? 'online' : 'offline'}" data-sel="pdu:${esc(p.mac)}"><span class="tally ${p.online ? 'online' : 'offline'}"></span><div class="name">${esc(p.name)}<small>${esc(p.modelName || '')}</small></div><div class="ip">${esc(p.ip || '')}</div><div class="link">${p.uplink?.device ? `${esc(p.uplink.device)} · p${p.uplink.port}` : ''}</div><div class="tele">${p.online ? `${p.acPower ?? p.powerW ?? '?'} W${p.acBudget ? ' of ' + Math.round(p.acBudget) + ' W budget' : ''}${p.voltage ? ' · ' + p.voltage + ' V' : ''}` : 'offline'}</div><div class="m"><div class="r"><span>load</span><em>${p.acBudget && p.acPower ? Math.round((p.acPower / p.acBudget) * 100) + '%' : '–'}</em></div><div class="bar"><i class="${p.acBudget && p.acPower / p.acBudget > 0.8 ? 'warn' : ''}" style="width:${p.acBudget && p.acPower ? Math.min(100, (p.acPower / p.acBudget) * 100) : 0}%"></i></div></div><div class="m"><div class="r"><span>outlets</span><em>${p.outletsOn}/${p.outlets} on</em></div><div class="bar"><i class="up" style="width:${p.outlets ? (p.outletsOn / p.outlets) * 100 : 0}%"></i></div></div><span class="probe"></span></div><div class="pbw">${(p.outletList || []).map((o) => `<span class="w"><span class="tally ${o.on ? 'online' : ''}"></span>${esc(o.name)}${o.power ? ` <b>${o.power} W</b>` : ''}</span>`).join('')}</div>`).join('')}</div>`)
+	if (pdus.length) html.push(`<div class="pb-group"><h4>Power <small>${pdus.filter((p) => p.online).length}/${pdus.length} PDUs online · ${Math.round(pdus.reduce((n, p) => n + (p.acPower || p.powerW || 0), 0))} W drawn</small></h4><div class="eqgrid">${pdus.map(pduCard).join('')}</div></div>`)
 	if (standby.length) html.push(`<details class="standby"><summary>On standby, not part of this broadcast <small>· ${standby.length} device${standby.length === 1 ? '' : 's'} · no alerts, no probes · enable them in Edit roster</small></summary>${standby.map(pbRow).join('')}</details>`)
 	$('patch').innerHTML = html.join('') || '<div class="empty">no equipment in the roster — click Edit roster</div>'
+	indexMeters()
+}
+
+// ------------------------------------------------------------------ the health cards' graphics: one labelled gauge, meter or graph each
+function tileGraphic(t, s) {
+	const glabel = (txt, right = '') => `<div class="glabel"><span>${txt}</span>${right ? `<i>${right}</i>` : ''}</div>`
+	const spark = (key, series, color = 'in') => scope('tile:' + key, [{ data: series || [], color }], 'tspark', { bare: true })
+	const eq = (s.equipment || []).filter((e) => e.active)
+	if (t.id === 'switcher') {
+		const hero = s.atem?.equipment
+		const tl = hero?.telemetry
+		const st = s.atem?.stream
+		const held = (s.forensics?.sessions || []).filter((x) => x.state === 'held').length
+		return `${glabel('intake · 10 min', hero ? `↓${fmtRate(hero.down)}` : '')}${spark('switcher', hero?.history?.down, st?.state === 'arriving' ? 'stream' : 'in')}<div class="tmini"><span><label>stream out</label><b>${tl?.streaming ? esc(tl.streaming.state) + (tl.streaming.bitrate ? ' ' + (tl.streaming.bitrate / 1e6).toFixed(1) + ' Mb/s' : '') : '–'}</b></span><span><label>ISO record</label><b>${tl?.recording ? (tl.recording.active ? 'REC ' + esc(tl.recording.duration || '') : 'idle') + (tl.recording.remaining ? ' · ' + esc(tl.recording.remaining) + ' left' : '') : '–'}</b></span><span><label>sessions</label><b>${s.forensics ? held : '–'}</b></span></div>`
+	}
+	if (t.id === 'encoders') {
+		const enc = eq.find((e) => e.telemetry?.kind === 'webpresenter' && !e.telemetry.error)
+		const set = enc ? (enc.telemetry.bitrate || 0) / 1e6 : 0
+		return enc ? `${gaugeHtml('bitrate', enc.telemetry.streaming ? enc.up : 0, set || 1, enc.telemetry.streaming ? fmtRate(enc.up) : set ? set.toFixed(1) + ' set' : '–', enc.telemetry.streaming && set && enc.up < set * 0.7 ? 'warn' : '')}${enc.telemetry.cache !== null && enc.telemetry.cache !== undefined ? gaugeHtml('cache', Number(enc.telemetry.cache), 100, enc.telemetry.cache + ' %', Number(enc.telemetry.cache) > 50 ? 'warn' : '') : ''}${glabel(esc(enc.name) + ' uplink · 10 min')}${spark('encoders', enc.history?.up, 'out')}` : `${glabel('no Web Presenter with telemetry')}<div class="nosp"></div>`
+	}
+	if (t.id === 'recorders') {
+		const decks = eq.filter((e) => e.telemetry?.kind === 'hyperdeck' && !e.telemetry.error)
+		const tl = s.atem?.equipment?.telemetry
+		const rows = decks.map((e) => {
+			const h = e.telemetry
+			const d = h.activeDisk
+			const used = d && d.size ? (d.size - d.free) / d.size : 0
+			return `<div class="trow"><span class="n">${h.recording ? '<span class="tag rec">REC</span> ' : ''}${esc(e.name)}<small>${esc([h.format, h.codec].filter(Boolean).join(' · ') || h.mode)}</small></span><span class="bar"><i class="${used > 0.9 ? 'warn' : ''}" style="width:${(used * 100).toFixed(0)}%"></i></span><span class="v">${h.remainingS !== null && h.remainingS !== undefined ? fmtMinutes(Math.round(h.remainingS / 60)) : d ? fmtBytes(d.free) : '–'}</span></div>`
+		})
+		if (tl?.recording) rows.push(`<div class="trow"><span class="n">${tl.recording.active ? '<span class="tag rec">REC</span> ' : ''}${esc(s.atem.name.replace(/^ATEM Television Studio\s*/i, 'ATEM '))}<small>ISO record${tl.recording.disk ? ' · ' + esc(tl.recording.disk) : ''}</small></span><span class="bar"><i style="width:${tl.recording.active ? 100 : 0}%"></i></span><span class="v">${esc(tl.recording.remaining || (tl.recording.active ? tl.recording.duration : 'idle'))}</span></div>`)
+		return `${glabel('format · disk used · time left')}${rows.join('') || '<div class="nosp"></div>'}`
+	}
+	if (t.id === 'audio') {
+		const c = (s.audio?.consoles || []).find((x) => x.ok)
+		return `${glabel('channels 1–32 · main L/R', c ? (c.mainLevel !== null && c.mainLevel > -60 ? 'main ' + c.mainLevel.toFixed(1) + ' dBFS' : 'main quiet') : '')}${stripHtml(s, 'x32')}`
+	}
+	if (t.id === 'mics') {
+		const ch = (s.audio?.mics || []).filter((m) => m.ok).flatMap((m) => m.channels)
+		const low = ch.filter((c) => c.link && c.battery !== null).sort((a, b) => a.battery - b.battery)[0]
+		return `${glabel('battery per channel', low ? `lowest ${esc(low.name || low.id)} ${low.battery} %` : '')}${stripHtml(s, 'mics')}`
+	}
+	if (t.id === 'dante') {
+		const clocks = s.discovery?.clocks || []
+		const d = clocks.find((c) => /mobile/i.test(c.network || '')) || clocks[0]
+		const nets = (s.networks || []).filter((n) => /dante/i.test(n.name))
+		const series = nets.length ? nets[0].history?.down : []
+		return `<div class="tmini"><span><label>clock</label><b class="${d ? (d.status === 'ok' ? 'ok' : 'warn') : ''}">${d ? (d.status === 'ok' ? 'locked' : esc(d.status)) : 'not heard'}</b></span><span><label>leader</label><b>${d?.leaders[0] ? esc(d.leaders[0].name || d.leaders[0].ip) : '–'}</b></span><span><label>followers</label><b>${d ? d.followers.length + (d.leaders[0] ? ' · ' + d.leaders[0].syncPerS + ' sync/s' : '') : '–'}</b></span></div>${glabel((nets[0] ? esc(vlanLabel(nets[0].name)) : 'Dante VLAN') + ' · 10 min', nets[0] ? `↓${fmtRate(nets[0].down)}` : '')}${spark('dante', series)}`
+	}
+	if (t.id === 'ndi') {
+		const nets = (s.networks || []).filter((n) => /ndi/i.test(n.name))
+		const src = s.discovery?.ndi || []
+		return `<div class="tmini"><span><label>sources on air</label><b>${src.length}</b></span><span><label>on the VLAN</label><b>${nets[0] ? nets[0].clients + ' devices' : '–'}</b></span><span><label>busiest</label><b>${esc(src[0]?.name || '–')}</b></span></div>${glabel((nets[0] ? esc(vlanLabel(nets[0].name)) : 'NDI VLAN') + ' · 10 min', nets[0] ? `↓${fmtRate(nets[0].down)} ↑${fmtRate(nets[0].up)}` : '')}${spark('ndi', nets[0]?.history?.down)}`
+	}
+	if (t.id === 'network') {
+		const gw = s.gateway
+		const sw = s.switches || []
+		const errs = sw.filter((x) => x.online).reduce((n, x) => n + x.ports.filter((p) => p.errorsRecent).length, 0)
+		return `<div class="tmini"><span><label>latency</label><b>${gw ? (gw.wan.latency ?? '–') + ' ms' : '–'}</b></span><span><label>switches</label><b>${sw.filter((x) => x.online).length}/${sw.length}</b></span><span><label>port errors</label><b class="${errs ? 'warn' : ''}">${errs}</b></span></div>${glabel('WAN · 10 min', gw ? `↓${fmtRate(gw.wan.down)} ↑${fmtRate(gw.wan.up)}` : '')}${spark('network', gw?.wan?.history?.down)}`
+	}
+	if (t.id === 'power') {
+		const pdus = (s.others || []).filter((o) => o.kind === 'pdu' && o.online)
+		const draw = pdus.reduce((n, p) => n + (p.acPower || p.powerW || 0), 0)
+		const budget = pdus.reduce((n, p) => n + (p.acBudget || 0), 0)
+		return `${gaugeHtml('draw', draw, budget || 1, budget ? Math.round((draw / budget) * 100) + ' %' : '–', budget && draw / budget > 0.8 ? 'warn' : '')}${glabel('per PDU')}${pdus
+			.slice(0, 4)
+			.map((p) => `<div class="trow"><span class="n">${esc(p.name)}</span><span class="bar"><i style="width:${p.acBudget ? Math.min(100, ((p.acPower || p.powerW || 0) / p.acBudget) * 100) : 0}%"></i></span><span class="v">${Math.round(p.acPower || p.powerW || 0)} W</span></div>`)
+			.join('')}`
+	}
+	if (t.id === 'pc') {
+		const h = eq.find((e) => e.telemetry?.kind === 'host' && !e.telemetry.error)?.telemetry
+		return h ? `${gaugeHtml('cpu', h.cpu || 0, 100, (h.cpu ?? '–') + ' %', h.cpu > 85 ? 'error' : h.cpu > 70 ? 'warn' : '')}${gaugeHtml('ram', h.mem.pct, 100, h.mem.pct + ' %', h.mem.pct > 90 ? 'error' : '')}${h.gpu ? gaugeHtml('gpu', h.gpu.util, 100, h.gpu.util + ' %', h.gpu.util > 95 ? 'warn' : '') : ''}${(h.disks || []).slice(0, 1).map((d) => gaugeHtml(esc(d.name.split(' ')[0]), d.size - d.free, d.size, fmtBytes(d.free) + ' free', d.free / d.size < 0.1 ? 'warn' : '')).join('')}` : `${glabel('no host telemetry')}<div class="nosp"></div>`
+	}
+	return t.series && t.series.length > 1 ? `${glabel('10 min')}${spark(t.id, t.series)}` : '<div class="nosp"></div>'
 }
 
 // ------------------------------------------------------------------ roster editor
