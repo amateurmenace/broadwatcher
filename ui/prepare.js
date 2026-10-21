@@ -24,7 +24,7 @@ window.Prepare = (function () {
 		['power', 'Power (PDUs)'],
 		['pc', 'This PC'],
 	]
-	const DEFAULT_TILES = ['switcher', 'encoders', 'recorders', 'audio', 'mics', 'dante', 'ndi'] // the board without Network and This PC
+	const DEFAULT_TILES = ['switcher', 'encoders', 'recorders', 'audio', 'mics', 'dante', 'ndi', 'power'] // the board without Network and This PC
 	let data = null // {profiles, active, equipment}
 	let cur = null // the profile being edited (working copy)
 

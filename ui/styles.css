@@ -75,7 +75,7 @@ input:focus, select:focus { outline: none; border-color: var(--out); box-shadow:
 
 /* ---------------------------------------------------------------- HUD: the strip that is always on screen */
 /* a grid: brand | readiness | the cells (whatever room is left, never more) | the controls (always whole) */
-.hud { position: fixed; top: 0; left: 0; right: 0; height: var(--hud-h); z-index: 30; display: grid; grid-template-columns: auto minmax(200px, 300px) minmax(0, 1fr) auto; align-items: stretch; background: var(--panel); border-bottom: 1px solid var(--line2); box-shadow: 0 1px 0 rgba(255, 255, 255, 0.5) inset; }
+.hud { position: fixed; top: 0; left: 0; right: 0; height: var(--hud-h); z-index: 30; display: grid; grid-template-columns: auto minmax(190px, 250px) minmax(0, 1fr) auto; align-items: stretch; background: var(--panel); border-bottom: 1px solid var(--line2); box-shadow: 0 1px 0 rgba(255, 255, 255, 0.5) inset; }
 .hud-brand { display: flex; align-items: center; gap: 9px; padding: 0 18px 0 16px; font-family: var(--serif); font-size: 21px; letter-spacing: 0.01em; color: var(--ink); border-right: 1px solid var(--line); }
 .hud-brand svg { color: var(--in); }
 .hud-brand b { font-weight: 400; font-style: italic; color: var(--ink2); }
@@ -94,15 +94,20 @@ input:focus, select:focus { outline: none; border-color: var(--out); box-shadow:
 .ready-text small { font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .hud-cells { display: flex; min-width: 0; overflow: hidden; }
 .cell { display: flex; flex-direction: column; justify-content: center; padding: 6px 16px; min-width: 0; border-right: 1px solid var(--line); flex: 0 0 auto; overflow: hidden; }
-.cell.m-wan { min-width: 168px; }
-.cell.m-console { min-width: 150px; }
-.cell.m-encoder, .cell.m-switcher, .cell.m-record, .cell.m-deck, .cell.m-pc, .cell.m-mics, .cell.m-x32, .cell.m-ndi, .cell.m-dante, .cell.m-power { min-width: 150px; max-width: 230px; }
+/* fixed widths: a cell must not grow with its numbers, or the VLAN group behind it would gain and lose a cell
+   from one tick to the next */
+.cell.m-wan { width: 176px; }
+.cell.m-console { width: 168px; }
+.cell.m-encoder, .cell.m-switcher, .cell.m-record, .cell.m-deck, .cell.m-pc, .cell.m-mics, .cell.m-x32, .cell.m-ndi, .cell.m-power { width: 164px; }
+.cell.m-dante { width: 138px; }
+.cell.drop { display: none; } /* no room at this window width (fitHud) */
+.cell.m-dante b { font-size: 13.5px; }
 .cell .bar { height: 4px; margin: 3px 0 4px; width: 100%; }
 .cell b .tag { vertical-align: middle; margin-right: 4px; }
 .cell label { display: block; font-size: 10.5px; color: var(--ink3); margin-bottom: 2px; letter-spacing: .02em; white-space: nowrap; }
 .cell b { font-size: 15.5px; font-weight: 500; line-height: 1.1; white-space: nowrap; }
 .cell small { font-size: 10.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.cell.intake { min-width: 216px; }
+.cell.intake { width: 200px; }
 .meter { position: relative; height: 4px; background: var(--panel3); margin: 3px 0 4px; border-radius: 2px; overflow: visible; }
 .meter i { display: block; height: 100%; width: 0; background: var(--ok); transition: width .5s; border-radius: 2px; }
 .meter i.stream { background: var(--stream); }
@@ -110,7 +115,7 @@ input:focus, select:focus { outline: none; border-color: var(--out); box-shadow:
 /* the VLAN group takes what is left; the cells that do not fit wrap onto a second row that lies below the
    bar and out of sight, so a VLAN is either shown whole or not at all, never cut off mid-word */
 .cell.vlans { flex: 1 1 auto; flex-direction: row; flex-wrap: wrap; align-content: flex-start; gap: 0; padding: 0; min-width: 0; height: var(--hud-h); border-right: 0; }
-.vl { display: flex; flex-direction: column; justify-content: center; padding: 5px 12px 4px; flex: 1 1 0; min-width: 142px; max-width: 176px; height: var(--hud-h); overflow: hidden; }
+.vl { display: flex; flex-direction: column; justify-content: center; padding: 5px 11px 4px; flex: 0 0 140px; width: 140px; height: var(--hud-h); overflow: hidden; }
 .vl + .vl { border-left: 1px solid var(--line); }
 .vl label { margin-bottom: 1px; overflow: hidden; text-overflow: ellipsis; }
 .vl label i { font-style: normal; color: var(--ink3); opacity: .85; margin-left: 5px; font-size: 10px; }
@@ -125,7 +130,7 @@ input:focus, select:focus { outline: none; border-color: var(--out); box-shadow:
 .hud-ctl .btn.settings .gear { font-size: 15px; line-height: 1; }
 .hud-ctl-row { display: flex; gap: 5px; }
 .hud-ctl-row .icon-btn { flex: 1; font-size: 11px; padding: 3px 6px; white-space: nowrap; }
-.hud-issues { display: flex; gap: 6px; }
+.hud-issues { display: flex; gap: 6px; min-width: 104px; justify-content: flex-end; } /* a fixed slot, so the alert count never pushes a module out of the row */
 .hud-issues span { font-size: 11.5px; padding: 2px 9px; border: 1px solid var(--line2); border-radius: var(--radius); color: var(--ink2); white-space: nowrap; }
 .hud-issues span i { font-style: normal; }
 .hud-issues span.error { color: var(--error); border-color: var(--error); }
@@ -295,6 +300,30 @@ table.errtab tr.hot td:nth-child(2) { color: var(--error); font-weight: 600; }
 .tile .tl { display: block; padding: 0; border: 0; font-size: 11.5px; color: var(--ink2); line-height: 1.35; margin: 0; } /* never cut: the card grows instead (display: block undoes the tape row's grid, which shares the class name) */
 .tile .tspark { width: 100%; height: 24px; display: block; margin-top: 6px; }
 .tile .nosp { height: 24px; margin-top: 6px; border-top: 1px dashed var(--line); }
+/* the switcher card's tally row: inputs 1-8, program filled red, preview outlined green */
+.tallyrow { display: flex; gap: 3px; margin: 1px 0 5px; }
+.tallyrow .tb { flex: 1 1 0; min-width: 0; text-align: center; font-size: 9.5px; line-height: 1.15; padding: 3px 2px 2px; border: 1px solid var(--line2); border-radius: 2px; color: var(--ink2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; background: var(--panel2); }
+.tallyrow .tb i { display: block; font-style: normal; font-size: 8.5px; color: var(--ink3); letter-spacing: .04em; }
+.tallyrow .tb.pgm { background: var(--error); border-color: var(--error); color: #fff; }
+.tallyrow .tb.pgm i { color: rgba(255, 255, 255, 0.75); }
+.tallyrow .tb.pvw { border-color: var(--ok); color: var(--ok); box-shadow: inset 0 0 0 1px var(--ok); }
+/* metered rows on a card (the Audio card's mains, the switcher's Fairlight master): the Audio section's row, smaller */
+.tile .mrow { grid-template-columns: 14px 62px 1fr 34px; gap: 0 6px; height: 15px; font-size: 10.5px; }
+.tile .mrow .mn { font-size: 9.5px; }
+.tile .mrow .mdb { font-size: 10px; }
+.tile .mrow .mbar { height: 6px; }
+.tile .mrow .mpeak { top: -1px; bottom: -1px; }
+/* the Mics card's rows: name · RF quality · audio level · RSQI */
+.microw { display: grid; grid-template-columns: minmax(0, 1fr) 44px 44px 34px; gap: 6px; align-items: center; font-size: 10.5px; margin: 2px 0; }
+.microw .n { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--ink2); }
+.microw .n small { color: var(--ink3); margin-left: 4px; font-variant-numeric: tabular-nums; }
+.microw .hb { display: block; height: 5px; background: var(--panel3); border-radius: 1px; overflow: hidden; position: relative; }
+.microw .hb i { position: absolute; left: 0; top: 0; bottom: 0; background: var(--ok); transition: width .1s linear; }
+.microw .hb i.warm { background: var(--warn); }
+.microw .hb i.hot { background: var(--error); }
+.microw .v { text-align: right; color: var(--ink2); font-variant-numeric: tabular-nums; }
+.microw.off { opacity: .45; }
+.trow .bar i.live { background: var(--stream); }
 .factors { margin: 6px 0; padding: 0; list-style: none; font-size: 12px; }
 .factors li { display: grid; grid-template-columns: 90px 44px 1fr; gap: 8px; padding: 4px 0; border-bottom: 1px solid var(--line); color: var(--ink2); }
 .factors li b { font-weight: 500; color: var(--ink); }
@@ -686,7 +715,7 @@ details.standby summary small { font-size: 11px; }
 /* ---------------------------------------------------------------- responsive: the HUD sheds cells, never clips words */
 @media (max-width: 1640px) { .gw { grid-template-columns: 1fr 1fr; } }
 @media (max-width: 1700px) { .cell.m-console { display: none; } }
-@media (max-width: 1500px) { .cell.intake small { display: none; } .cell.intake { min-width: 170px; } .vl small { display: none; } .vl { min-width: 136px; padding: 5px 9px 4px; } }
+@media (max-width: 1680px) { .cell.intake small { display: none; } .cell.intake { width: 170px; } .vl small { display: none; } .vl { flex-basis: 130px; width: 130px; padding: 5px 9px 4px; } }
 @media (max-width: 1380px) { :root { --insp-w: 360px; } .hud { grid-template-columns: auto minmax(180px, 260px) minmax(0, 1fr) auto; } }
 @media (max-width: 1250px) {
 	:root { --insp-w: 330px; }
@@ -829,3 +858,83 @@ table.log .mark.clear { background: transparent; border: 1px solid var(--ok); }
 table.log td small { color: var(--ink3); }
 #logEmpty { padding: 18px; }
 @media (max-width: 1250px) { .logbar .find { width: 200px; } table.log th.cat, table.log td.cat { display: none; } }
+
+/* ------------------------------------------------------------------ Visualizations · experimental (0.14.0)
+   identity hues --viz1 … --viz6 in a fixed order (checked for colour-vision separation on both surfaces), a teal
+   ramp for magnitude (--seq1 … --seq5, --viz-seq-lo/hi for the waterfall), status colours only for state */
+:root { --viz1: #1480a6; --viz2: #d2581a; --viz3: #7048c8; --viz4: #b8860b; --viz5: #2f6fd6; --viz6: #c23b7a; --viz-seq-lo: #e2ebee; --viz-seq-hi: #0f5f7c; --seq1: #cfe1e8; --seq2: #a9c9d6; --seq3: #7cadbf; --seq4: #4a8ba3; --seq5: #1a5f78; }
+:root[data-theme="dark"] { --viz1: #2a93b6; --viz2: #d6722a; --viz3: #8f73d8; --viz4: #b48f22; --viz5: #4d7fd4; --viz6: #cc5c90; --viz-seq-lo: #222c31; --viz-seq-hi: #6fc0dc; --seq1: #243d47; --seq2: #2c5565; --seq3: #357086; --seq4: #4590ab; --seq5: #62b3d0; }
+.exp { font-family: var(--sans); font-size: 10px; font-weight: 500; color: var(--violet); border: 1px solid var(--violet); border-radius: 3px; padding: 1px 5px 0; vertical-align: 3px; margin-left: 8px; letter-spacing: .03em; }
+.vizgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 18px; }
+.viz { margin: 0; min-width: 0; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); padding: 10px 12px 8px; display: flex; flex-direction: column; gap: 6px; }
+.viz.wide { grid-column: 1 / -1; }
+.viz figcaption { display: flex; align-items: baseline; gap: 12px; min-width: 0; }
+.viz figcaption b { font-family: var(--serif); font-weight: 400; font-size: 15.5px; white-space: nowrap; }
+.viz figcaption small { color: var(--ink3); font-size: 11px; margin-left: auto; text-align: right; }
+.vizbody { min-height: 120px; position: relative; }
+.vizbody.water { min-height: 0; }
+.viz svg { display: block; width: 100%; height: auto; overflow: visible; font-family: var(--sans); }
+.viz svg text { fill: var(--ink2); font-size: 10.5px; }
+.vizfoot { font-size: 10.5px; color: var(--ink3); display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+.vizfoot .right { margin-left: auto; text-align: right; }
+.vizfoot .sw { display: inline-block; width: 9px; height: 9px; border-radius: 2px; vertical-align: -1px; margin-right: 4px; }
+.vizfoot .sw.web { background: var(--viz1); }
+.vizfoot .sw.stream { background: var(--viz2); }
+.vizfoot .sw.ndi { background: var(--viz3); }
+.vizfoot .sw.dante { background: var(--viz4); }
+.vizfoot .sw.control { background: var(--viz5); }
+.vizfoot .sw.other { background: var(--viz6); }
+.vizfoot .wfgrad { display: inline-block; width: 60px; height: 8px; vertical-align: -1px; margin-right: 5px; border-radius: 1px; background: linear-gradient(to right, var(--viz-seq-lo), var(--viz-seq-hi) 85%, var(--error)); }
+.viztip { position: fixed; z-index: 60; pointer-events: none; background: var(--ink); color: var(--bg); font-size: 11px; line-height: 1.4; padding: 6px 9px; border-radius: var(--radius); box-shadow: var(--shadow-pop); max-width: 300px; white-space: pre-line; font-variant-numeric: tabular-nums; }
+.viztip[hidden] { display: none; }
+.water canvas { width: 100%; height: 150px; display: block; border: 1px solid var(--line); background: var(--panel); }
+.wlabels { display: flex; margin-top: 3px; }
+.wlabels span { flex: 1 1 0; text-align: center; font-size: 9px; color: var(--ink3); font-variant-numeric: tabular-nums; }
+.ribbons path.rib { fill: none; opacity: .55; stroke-linecap: round; transition: opacity .15s; }
+.ribbons path.rib.web { stroke: var(--viz1); }
+.ribbons path.rib.stream { stroke: var(--viz2); }
+.ribbons path.rib.ndi { stroke: var(--viz3); }
+.ribbons path.rib.dante { stroke: var(--viz4); }
+.ribbons path.rib.control { stroke: var(--viz5); }
+.ribbons path.rib.other { stroke: var(--viz6); }
+.ribbons.dim path.rib { opacity: .06; }
+.ribbons.dim path.rib.lit { opacity: .85; }
+.ribbons path.arc { fill: var(--ink3); cursor: default; }
+.ribbons path.arc:hover { fill: var(--ink); }
+.ribbons text { cursor: default; }
+.river path.band { stroke: var(--panel); stroke-width: .8; fill-opacity: .85; }
+.river .lead { stroke: var(--line2); stroke-width: 1; }
+.river text { font-size: 10px; }
+.river text .v { fill: var(--ink3); }
+.river .ax { fill: var(--ink3); font-size: 9.5px; }
+.river .xh { stroke: var(--ink2); stroke-width: 1; stroke-dasharray: 2 2; }
+.orbit .ring { fill: none; stroke: var(--line2); stroke-dasharray: 3 3; }
+.orbit .spoke { stroke: var(--line2); stroke-width: 1; }
+.orbit .fol { fill: var(--viz1); }
+.orbit .lead { fill: var(--viz2); }
+.orbit .lead.missing { fill: none; stroke: var(--error); stroke-dasharray: 2 2; }
+.orbit .pulse { fill: none; stroke: var(--viz2); stroke-width: 1.5; animation: vizpulse 1.6s ease-out infinite; }
+@keyframes vizpulse { from { r: 9; opacity: .8; } to { r: 42; opacity: 0; } }
+.orbit .ln { font-family: var(--serif); font-size: 12px; fill: var(--ink); }
+.orbit .facts .k { fill: var(--ink3); font-size: 10px; letter-spacing: .03em; }
+.orbit .facts .v { fill: var(--ink); font-size: 11.5px; }
+.orbit .facts .v.ok { fill: var(--ok); }
+.orbit .facts .v.warn { fill: var(--warn); }
+.heat { display: grid; grid-template-columns: 170px 1fr; gap: 3px 8px; align-items: center; font-size: 11px; }
+.heat .hn { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--ink2); }
+.heat .hn small { color: var(--ink3); margin-left: 5px; font-variant-numeric: tabular-nums; }
+.heat .hp { display: flex; flex-wrap: wrap; gap: 3px; }
+.hc { display: inline-block; width: 9px; height: 9px; border-radius: 1px; background: var(--seq1); box-sizing: border-box; cursor: pointer; vertical-align: -1px; }
+.hc.u0 { background: var(--panel3); }
+.hc.u1 { background: var(--seq1); }
+.hc.u2 { background: var(--seq2); }
+.hc.u3 { background: var(--seq3); }
+.hc.u4 { background: var(--seq4); }
+.hc.u5 { background: var(--seq5); }
+.hc.down { background: transparent; border: 1px solid var(--line); }
+.hc.off { background: transparent; border: 1px dashed var(--line); }
+.hc.err { box-shadow: 0 0 0 1.5px var(--error); }
+.hc.uplink { border-bottom: 2px solid var(--ink2); }
+.heat .hc:hover { outline: 1px solid var(--ink); outline-offset: 1px; }
+.vizfoot .hc { cursor: default; margin-right: 4px; }
+@media (max-width: 1100px) { .vizgrid { grid-template-columns: 1fr; } }

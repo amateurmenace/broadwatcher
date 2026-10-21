@@ -21,8 +21,52 @@ const FLAG_HELLO = 0x10
 const FLAG_ACK = 0x80
 const HELLO = Buffer.from([0x10, 0x14, 0x53, 0xab, 0, 0, 0, 0, 0, 0x3a, 0, 0, 0x01, 0, 0, 0, 0, 0, 0, 0])
 const STREAM_STATE = { 1: 'idle', 2: 'connecting', 4: 'streaming', 32: 'stopping' }
-// RTMS: best guess from atem-connection's RecordingStatus (Idle, Recording, Stopping as bits); the raw value is kept
-const RECORD_STATE = { 0: 'idle', 1: 'idle', 2: 'recording', 4: 'stopping' }
+// Recording, laid out as atem-connection reads it (protocol 8.1.1+; the HD8 ISO on 2.32 sends the same lengths):
+//  RTMS 8 B: status word u16 @0 (bit 0 = recording, bit 7 = stopping; the HD8 shows 2 while idle), error word u16 @2
+//            (no media 2, media full 4, media error 8, unformatted 16, dropping frames 32, unknown 0x8000; the HD8
+//            puts other values there while idle, so only a word made of those bits is read as an error), seconds of
+//            recording time left on the working set u32 @4;
+//  RTMD 76 B: one per disk: id u32 @0, status u32 @4 (idle 1, unformatted 2, active 4, recording 8, removed 32),
+//            seconds left on that disk u32 @8, volume name @12 (64);
+//  RMSu 140 B: file name @0 (128), working-set disk ids u32 @128 and @132, record in all cameras (ISO) u8 @136;
+//  RTMR 8 B: duration hh:mm:ss:ff + drop-frame flag (RMRD has the same length and is kept raw until its meaning is known).
+// Until 0.14.0 the status word 2 was read as "recording" and the duration stood in for the time left.
+const RECORD_ERRORS = [[2, 'no media'], [4, 'media full'], [8, 'media error'], [16, 'media unformatted'], [32, 'dropping frames'], [0x8000, 'unknown error']]
+const DISK_STATUS = [[1, 'idle'], [2, 'unformatted'], [4, 'active'], [8, 'recording'], [32, 'removed']]
+const bits = (table, word) => table.filter(([bit]) => word & bit).map(([, name]) => name)
+const hms = (s) => (s === null || s === undefined || !Number.isFinite(s) ? null : `${String(Math.floor(s / 3600)).padStart(2, '0')}:${String(Math.floor((s % 3600) / 60)).padStart(2, '0')}:${String(Math.floor(s % 60)).padStart(2, '0')}`)
+const recState = (d) => d.rec || (d.rec = { status: null, disks: new Map(), settings: null, duration: null, rmrd: null })
+// the recording object the rest of the app reads (telemetry.recording): the state, the disk being written and every disk
+export function recordingView(d) {
+	const r = d.rec
+	if (!r || (!r.status && !r.disks.size)) return null
+	const st = r.status || { raw: null, active: false, stopping: false, errorRaw: 0, errors: [], remainingS: null, t: null }
+	const set = r.settings?.workingSet || []
+	const disks = [...r.disks.values()].filter((x) => !x.removed).map((x) => ({ ...x, inWorkingSet: set.length ? set.includes(x.id) : null, remaining: hms(x.remainingS) }))
+	const working = set.length ? disks.filter((x) => x.inWorkingSet) : disks
+	const target = working.find((x) => x.recording) || working.find((x) => x.active) || working[0] || disks.find((x) => x.recording) || null
+	const active = st.active || disks.some((x) => x.recording)
+	const remainingS = target ? target.remainingS : st.remainingS
+	return {
+		state: st.stopping ? 'stopping' : active ? 'recording' : 'idle',
+		active,
+		stopping: st.stopping,
+		raw: st.raw,
+		error: st.errors.length ? st.errors.join(', ') : null,
+		errorRaw: st.errorRaw,
+		remainingS,
+		remaining: hms(remainingS),
+		disk: target?.name || null,
+		disks,
+		filename: r.settings?.filename || null,
+		allCameras: r.settings ? r.settings.recordInAllCameras : null,
+		duration: r.duration?.text || null,
+		dropFrame: r.duration ? r.duration.dropFrame : null,
+		durationRaw: r.duration?.raw || null,
+		rmrd: r.rmrd,
+		t: st.t,
+	}
+}
 const REFUSED_BACKOFF_MS = [120000, 240000, 480000, 900000]
 const LEVELS_RESEND_MS = 10000 // the switcher stops streaming levels after a while unless asked again
 const LEVELS_STALE_MS = 3000
@@ -72,7 +116,7 @@ export function decodeBody(body) {
 	return { len: b.length, hex: b.toString('hex').replace(/(..)/g, '$1 ').trim(), ascii: b.toString('latin1').replace(/[^\x20-\x7e]/g, '.'), u16, u32, strings, ipv4 }
 }
 
-function decodeKnown(name, body, d) {
+export function decodeKnown(name, body, d) {
 	switch (name) {
 		case '_pin':
 			d.product = cstr(body, 0, 44)
@@ -107,13 +151,34 @@ function decodeKnown(name, body, d) {
 			break
 		}
 		case 'RTMS': {
-			// record status: state bits, error bits, seconds of recording time left on the active disk (best effort)
+			if (body.length < 4) return false
 			const raw = body.readUInt16BE(0)
-			d.recording = { ...(d.recording || {}), state: RECORD_STATE[raw] || `state ${raw}`, raw, error: body.readUInt16BE(2), remainingS: body.length >= 8 ? body.readUInt32BE(4) : null, active: raw === 2 }
+			const errorRaw = body.readUInt16BE(2)
+			recState(d).status = { raw, active: !!(raw & 1), stopping: !!(raw & 0x80), errorRaw, errors: (errorRaw & ~0x803e) === 0 ? bits(RECORD_ERRORS, errorRaw) : [], remainingS: body.length >= 8 ? body.readUInt32BE(4) : null, t: Date.now() }
+			d.recording = recordingView(d)
 			break
 		}
-		case 'RMRD': // record duration
-			d.recording = { ...(d.recording || {}), duration: tc(body.readUInt16BE(0), body[2], body[3], body[4]), durationRaw: body.subarray(0, 8).toString('hex') }
+		case 'RTMD': {
+			if (body.length < 12) return false
+			const id = body.readUInt32BE(0)
+			const status = body.readUInt32BE(4)
+			recState(d).disks.set(id, { id, statusRaw: status, status: bits(DISK_STATUS, status).join(' ') || `status ${status}`, active: !!(status & 4), recording: !!(status & 8), unformatted: !!(status & 2), removed: !!(status & 32), remainingS: body.readUInt32BE(8), name: cstr(body, 12, 64) || `disk ${id}` })
+			d.recording = recordingView(d)
+			break
+		}
+		case 'RMSu':
+			if (body.length < 136) return false
+			recState(d).settings = { filename: cstr(body, 0, 128), workingSet: [body.readUInt32BE(128), body.readUInt32BE(132)].filter((x) => x !== 0 && x !== 0xffffffff), recordInAllCameras: body.length > 136 ? body[136] !== 0 : null }
+			d.recording = recordingView(d)
+			break
+		case 'RTMR': // record duration hh:mm:ss:ff (+ drop-frame flag)
+			if (body.length < 5) return false
+			recState(d).duration = { text: tc(body[0], body[1], body[2], body[3]), dropFrame: !!body[4], raw: body.subarray(0, 8).toString('hex') }
+			d.recording = recordingView(d)
+			break
+		case 'RMRD': // same length as RTMR; kept raw until a live recording shows what it carries
+			recState(d).rmrd = body.subarray(0, 8).toString('hex')
+			d.recording = recordingView(d)
 			break
 		case 'InPr': {
 			const id = body.readUInt16BE(0)

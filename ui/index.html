@@ -62,6 +62,16 @@
 			<div class="bb"><div class="audio" id="audioPanel"></div></div>
 		</section>
 
+		<section class="block" id="vizBlock">
+			<header class="bh"><h2>Visualizations<span class="exp">experimental</span></h2><span class="bh-note">richer pictures of the data the page already has · hover anything for the numbers · click a port to open it</span><button class="fold" data-fold="vizBlock" title="collapse / expand"></button></header>
+			<div class="bb vizgrid" id="viz">
+				<figure class="viz wide"><figcaption><b>Audio waterfall</b><small id="vizWaterNote">the main console's 32 channels and its main pair, five readings a second, the last half minute scrolling down</small></figcaption><div class="vizbody water"><canvas id="vizWater" height="150"></canvas><div class="wlabels" id="vizWaterLabels"></div></div><footer class="vizfoot" id="vizWaterFoot"></footer></figure>
+				<figure class="viz"><figcaption><b>Who talks to whom</b><small id="vizRibNote">the gateway's busiest flows, bytes as ribbon width</small></figcaption><div class="vizbody" id="vizRib"></div><footer class="vizfoot" id="vizRibFoot"></footer></figure>
+				<figure class="viz"><figcaption><b>VLAN river</b><small id="vizRiverNote">traffic into each VLAN through the gateway, the last ten minutes, stacked around the middle</small></figcaption><div class="vizbody" id="vizRiver"></div><footer class="vizfoot" id="vizRiverFoot"></footer></figure>
+				<figure class="viz"><figcaption><b>Dante clock</b><small id="vizOrbitNote">the PTP leader on the mobile Dante VLAN and the devices that follow it</small></figcaption><div class="vizbody" id="vizOrbit"></div><footer class="vizfoot" id="vizOrbitFoot"></footer></figure>
+				<figure class="viz"><figcaption><b>Every port at once</b><small id="vizHeatNote">one cell per switch port, darker = busier, red ring = errors in the last ten minutes</small></figcaption><div class="vizbody" id="vizHeat"></div><footer class="vizfoot" id="vizHeatFoot"></footer></figure>
+			</div>
+		</section>
 		<section class="block" id="atemBlock">
 			<header class="bh"><h2>Streams into the switcher</h2><span class="bh-note" id="atemNote"></span><button class="fold" data-fold="atemBlock" title="collapse / expand"></button></header>
 			<div class="bb"><div id="atemPanel"></div></div>
@@ -146,6 +156,7 @@
 <script src="settings.js"></script>
 <script src="prepare.js"></script>
 <script src="localai.js"></script>
+<script src="viz.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

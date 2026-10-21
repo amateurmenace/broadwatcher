@@ -1008,6 +1008,16 @@ export class Collector extends EventEmitter {
 					else if (tl.kind === 'atem') this.event('stream', `${e.name}: stream ${tl.streaming?.state || 'unknown'}${tl.streaming?.url ? ' → ' + tl.streaming.url : ''}`, { entity: { type: 'equipment', id: e.ip } })
 				}
 				this.prev.eq.set(pk, sig)
+				// the switcher's ISO record: every state change goes to the tape with the raw status word, so a test
+				// recording leaves a trail even when the decode is wrong
+				if (tl.kind === 'atem' && tl.recording) {
+					const r = tl.recording
+					const rk = `rec:${e.ip}`
+					const rsig = `${r.state}:${r.raw ?? '-'}:${r.error || ''}`
+					const prs = this.prev.eq.get(rk)
+					if (prs !== undefined && prs !== rsig) this.event('record', `${e.name}: ISO record ${r.active ? 'RECORDING' : r.state}${r.disk ? ' on ' + r.disk : ''}${r.remaining ? ' · ' + r.remaining + ' left' : ''}${!r.active && r.duration && r.duration !== '00:00:00:00' ? ' · last take ' + r.duration : ''}${r.error ? ' · ' + r.error : ''}${r.raw !== null && r.raw !== undefined ? ' (status word ' + r.raw + ')' : ''}`, { entity: { type: 'equipment', id: e.ip }, level: r.error ? 'warn' : 'info' })
+					this.prev.eq.set(rk, rsig)
+				}
 			}
 			equipment.push({
 				...e,

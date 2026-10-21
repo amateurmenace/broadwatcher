@@ -12,9 +12,9 @@ broadcast readiness and explain problems.
   broadcast VLAN (name, VLAN number, in/out and a 10-minute sparkline, client count; which VLANs and in what
   order is a Settings field), the open-alert count ("2 warnings", "1 error" or "all clear"), the clock,
   a **Settings** button and, under it, the Theme and Panel switches (the `R` key also toggles the side
-  panel). The clock and the controls
-  always fit; the cells drop off whole on narrow windows instead of being cut (console under 1700 px, then
-  the VLANs one by one).
+  panel), and by default a **Dante clock** cell and the switcher's **ISO record** cell. Every cell has a
+  fixed width, so a number that grows never pushes a neighbour out; when the window is too narrow for all
+  of them the cells at the right end give way (the console cell first), never the VLAN cells.
 - **Section bar**: Health · Gateway · Signal map · Streams · Stream paths · Audio · Forensics · Switches ·
   Equipment · Events, each a jump link; every section has a ▾ to collapse it (remembered), so the map can
   take the room.
@@ -37,6 +37,14 @@ broadcast readiness and explain problems.
   yours every time; a local model that is not set up yet opens a four-step guide (LM Studio or Ollama).
 - **Names on the map**: double-click any node of the signal map, or open it in the inspector, and write a
   name of your own; it replaces the UniFi name on the map (violet corner), and it stays after a restart.
+- **Visualizations (experimental)**, under Audio: richer pictures of the same data. An **audio waterfall**
+  (the main console's 32 channels and main pair, five readings a second, the last half minute scrolling
+  down), **who talks to whom** (the gateway's busiest flows as ribbons between the devices, width = bytes,
+  colour = kind of traffic; hover a device to light its ribbons), the **VLAN river** (traffic into each
+  watched VLAN over ten minutes, stacked around the middle, crosshair on hover), the **Dante clock** (the
+  PTP leader of the mobile Dante VLAN with its followers on a ring, a follower fading when its requests
+  stop), and **every port at once** (one cell per switch port, darker = busier, red ring = errors in the
+  last ten minutes; click a cell to open the port). They draw only while the section is open and on screen.
 - **The tiles open live panels**: the ATEM tile (stream in, the switcher's own stream out, ISO record,
   program and preview, who holds its control connections, the Fairlight master), Stream out (the Web
   Presenters and the paths in), Recorders (every HyperDeck's transport, timecode, format, codec, the active

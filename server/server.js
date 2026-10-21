@@ -36,7 +36,7 @@ const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; cha
 const DEEP_KEYS = ['gateway', 'poll', 'thresholds', 'ai', 'snmp', 'server', 'atem', 'companion', 'capture']
 // what the user made in the app and a newer bundle must never take away: port labels, show profiles, the
 // VLAN list once it was edited in Settings (networks_edited), the roster (handled below)
-const USER_KEYS = ['port_labels', 'profiles', 'active_profile', 'networks_edited', 'equipment_edited', 'map_labels', 'roster_switches_edited', 'hud_modules']
+const USER_KEYS = ['port_labels', 'profiles', 'active_profile', 'networks_edited', 'equipment_edited', 'map_labels', 'roster_switches_edited', 'hud_modules_edited']
 const BUNDLED_SECRETS = { ai: ['anthropic_api_key', 'anthropic_workspace_id', 'api_key'], gateway: ['api_key'], snmp: ['community'] }
 
 // The bundled config is the source of truth for the equipment list, the ATEM, SNMP and AI defaults; the user's
@@ -55,6 +55,9 @@ export function loadConfig(bundledPath, userPath) {
 		const kept = Object.fromEntries(USER_KEYS.filter((k) => user[k] !== undefined).map((k) => [k, user[k]]))
 		if (user.networks_edited && Array.isArray(user.networks)) kept.networks = user.networks
 		if (user.roster_switches_edited && Array.isArray(user.roster_switches)) kept.roster_switches = user.roster_switches
+		// the top bar follows the bundled default until it was edited in Settings (0.14.0: before, a copy of an old
+		// default was kept as if the user had chosen it)
+		if (user.hud_modules_edited && Array.isArray(user.hud_modules)) kept.hud_modules = user.hud_modules
 		const merged = outdated ? { ...base, ...kept, ...deepKeys } : { ...base, ...user, ...deepKeys }
 		// a secret the bundle carries (the Anthropic key embedded at build time, the UniFi key, the SNMP community)
 		// fills a field the user's copy has empty: an empty field is "never set", not a choice
@@ -282,8 +285,10 @@ export function startServer({ config, configPath = null, host = '127.0.0.1', por
 			const list = body.hud_modules.map((n) => String(n).trim()).filter((n) => /^[a-z0-9_]{1,24}$/.test(n)).slice(0, 12)
 			if (JSON.stringify(list) !== JSON.stringify(config.hud_modules || [])) {
 				config.hud_modules = list
+				config.hud_modules_edited = true
 				collector.cfg.hud_modules = list
 				saved.hud_modules = list
+				saved.hud_modules_edited = true
 				applied.push('top bar')
 				if (collector.rawDevices.length) {
 					collector.rebuild()

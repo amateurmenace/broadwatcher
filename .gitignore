@@ -6,3 +6,4 @@ Thumbs.db
 config.local.json
 journal/
 captures/
+.claude/

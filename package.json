@@ -1,7 +1,7 @@
 {
   "name": "broadwatch",
   "productName": "Broadwatch",
-  "version": "0.13.1",
+  "version": "0.14.0",
   "description": "Broadwatch: real-time broadcast-network monitor for Brookline Interactive Group (UniFi + Blackmagic + local AI)",
   "author": "Brookline Interactive Group",
   "license": "UNLICENSED",

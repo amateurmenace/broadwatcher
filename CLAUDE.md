@@ -132,6 +132,31 @@ touching anything. The roadmap for the next phase is in `docs/ROADMAP.md`.
   and `pc` tiles; a show profile may carry `tiles[]` (Prepare a broadcast > Cards on the health board,
   `setProfiles` validates against TILE_IDS, `state.profiles.list[].tiles`); the page shows only those when
   set. `pbWidget` is unused since the cards.
+- 0.14.0: the switcher's ISO record is decoded as atem-connection lays it out (`server/atem.js`, `recordingView`):
+  RTMS status word bit 0 = recording, bit 7 = stopping (the HD8 shows **2 while idle**; until 0.14.0 that was
+  read as "recording" and the duration stood in for the time left), error word only when made of the known
+  bits, RTMD per disk (id, status flags idle 1 / unformatted 2 / active 4 / recording 8 / removed 32, seconds
+  left, volume name), RMSu (file name, working-set disk ids, record in all cameras), RTMR = duration
+  hh:mm:ss:ff at bytes 0-3 (bytes 4-7 carry a running clock copy, not the duration); RMRD stays raw.
+  `telemetry.recording` = `{state, active, raw, error, errorRaw, remainingS, remaining, disk, disks[], filename,
+  allCameras, duration}`; every state change goes to the tape with the status word (`record` events), so the
+  next test recording leaves the proof. Passive capture recipe: `tshark -i "Port 15 MIRROR" -f "udp src port
+  9910 and src host 192.168.20.79" -Y 'data.data contains "RTMS" …' -T fields -e data.data`, then parse the
+  commands from byte 12. Companion also hands over `long_N`/`short_N` (inputs 1-8) → `inputs` for the tally
+  row. Only the 192.168.5.x Dante VLAN is watched (`DANTE_NET` in app.js; the Town Hall devices on
+  10.56.19.x are in `retired_equipment`, config_version 10). Top bar: every cell has a fixed width, the
+  VLAN cells 140 px (130 px under 1680 px), and `fitHud` drops modules when the window is too narrow (the
+  gateway cell first, then from the right end; the VLAN cells and the first module never); `hud_modules`
+  follows the bundled default until Settings sets `hud_modules_edited` (USER_KEYS); defaults gained `dante`
+  and `record`. Health cards: the switcher's tally row (inputs 1-8, program red, preview green) and the
+  Fairlight master row, every path out on Stream out, main L/R rows on Audio, RF/audio rows per mic on
+  air; card copies of a meter carry a `tile:` key prefix (`applyMeters` moves both). `ui/viz.js` =
+  "Visualizations · experimental" (`vizBlock`, after Audio): audio waterfall (canvas, fed by the meters
+  event), who-talks-to-whom ribbons (`flows.top`, names from the roster and the switch ports, forwarded
+  flows named after the port forward), VLAN river (watched VLANs, stacked around the middle), Dante clock
+  orbit (the 192.168.5.x PTP domain), the port heatmap (`util` ramp, red ring = errors, click opens the
+  port); draws only while the block is open and on screen; `--viz1…6` identity hues and the `--seq1…5` ramp
+  pass the colour-vision checks on both themes; tooltips use `data-vtip` (app.js owns `data-tip`).
 - Phone page: `ui/m.html` + `m.js` + `m.css` + `manifest.webmanifest` + `icon-512.png`, served at `/m`;
   non-loopback requests need `server.token` (`?key=` once, then the `bw_key` cookie; manifest and icons are
   public); `/api/phone` lists the LAN links; Electron menu "Open on a phone…" (switches `server.host` to

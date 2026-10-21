@@ -190,6 +190,30 @@ function verdictClass(v) {
 	return v === 'READY' ? 'ready' : v === 'DEGRADED' ? 'degraded' : v === 'AT RISK' ? 'risk' : v === 'DOWN' ? 'down' : ''
 }
 const nice = (v) => String(v || '').charAt(0).toUpperCase() + String(v || '').slice(1).toLowerCase()
+// every cell has a fixed width, so the row never gains or loses a cell from one tick to the next; when the window
+// is too narrow for all of them, the modules at the right end give way, never the VLAN cells and never the first one
+function fitHud() {
+	const box = $('hudCells')
+	if (!box) return
+	const cells = [...box.children]
+	cells.forEach((c) => c.classList.remove('drop'))
+	const vl = box.querySelector('.vl')
+	const vlW = vl ? vl.getBoundingClientRect().width : 0
+	const need = () => cells.filter((c) => !c.classList.contains('drop')).reduce((n, c) => n + (c.classList.contains('vlans') ? c.querySelectorAll('.vl').length * vlW : c.getBoundingClientRect().width), 0)
+	let guard = cells.length
+	while (need() > box.clientWidth + 1 && guard-- > 0) {
+		const vis = cells.filter((c) => !c.classList.contains('drop'))
+		// the gateway cell goes first (the least urgent of the defaults), then the rightmost module
+		const victim =
+			vis.slice(1).find((c) => c.classList.contains('m-console')) ||
+			vis
+				.slice(1)
+				.reverse()
+				.find((c) => !c.classList.contains('vlans'))
+		if (!victim) break
+		victim.classList.add('drop')
+	}
+}
 function renderHud(s) {
 	const gw = s.gateway
 	const st = s.atem?.stream
@@ -212,6 +236,7 @@ function renderHud(s) {
 	// the cells between the lamp and the clock: the modules the config lists (Settings > Top bar), in order
 	const mods = Array.isArray(s.hudModules) && s.hudModules.length ? s.hudModules : HUD_DEFAULT
 	$('hudCells').innerHTML = mods.map((m) => hudCell(m, s)).join('')
+	fitHud()
 	$('hudIssues').innerHTML = (errors ? `<span class="error" title="open problems (error-level alerts)">${errors} <i>error${errors === 1 ? '' : 's'}</i></span>` : '') + (warns ? `<span class="warn" title="open warnings">${warns} <i>warning${warns === 1 ? '' : 's'}</i></span>` : '') + (!errors && !warns ? '<span class="ok" title="no open alerts">all clear</span>' : '')
 	document.title = (errors ? '✕ ' : warns ? '! ' : '') + 'Broadwatch'
 	drawScopes()
@@ -356,9 +381,11 @@ function setMeter(m, level, peak, flags = 0) {
 }
 // the "meters" event, up to five times a second: move the bars that exist, never re-render
 function applyMeters(m) {
+	if (window.Viz) Viz.meters(m)
 	if (!m || !meterEls.size) return
 	for (const [ip, c] of Object.entries(m.x32 || {})) {
-		for (const [g, list] of Object.entries({ ch: c.ch, bus: c.bus, mtx: c.mtx, main: c.main })) list.forEach((v, i) => setMeter(meterEls.get(`x32:${ip}:${g}:${i}`), v[0], v[1], v[2]))
+		// the same meter can stand in the Audio section and on a health card: the card's copy carries a "tile:" prefix
+		for (const [g, list] of Object.entries({ ch: c.ch, bus: c.bus, mtx: c.mtx, main: c.main })) list.forEach((v, i) => (setMeter(meterEls.get(`x32:${ip}:${g}:${i}`), v[0], v[1], v[2]), setMeter(meterEls.get(`tile:x32:${ip}:${g}:${i}`), v[0], v[1], v[2])))
 		const st = stripEls.get(`x32:${ip}`)
 		if (st) {
 			c.ch.forEach((v, i) => st.ch[i] && ((st.ch[i].style.height = dbPct(v[0]).toFixed(0) + '%'), (st.ch[i].className = dbClass(v[0]))))
@@ -367,24 +394,28 @@ function applyMeters(m) {
 	}
 	for (const [ip, rx] of Object.entries(m.mic || {})) {
 		for (const [id, v] of Object.entries(rx)) {
-			const r = meterEls.get(`mic:${ip}:${id}`)
-			if (!r || !r.af) continue
 			const [af, rsqi, rssi, link] = v
-			r.af.style.width = dbPct(af).toFixed(1) + '%'
-			r.af.className = dbClass(af)
-			if (r.afTxt) r.afTxt.textContent = fmtDb(af)
-			if (r.rf) {
-				r.rf.style.width = (rsqi ?? 0) + '%'
-				r.rf.className = rsqi === null ? '' : rsqi < 30 ? 'warm' : ''
+			for (const r of [meterEls.get(`mic:${ip}:${id}`), meterEls.get(`tile:mic:${ip}:${id}`)]) {
+				if (!r || !r.af) continue
+				r.af.style.width = dbPct(af).toFixed(1) + '%'
+				r.af.className = dbClass(af)
+				if (r.afTxt) r.afTxt.textContent = fmtDb(af)
+				if (r.rf) {
+					r.rf.style.width = (rsqi ?? 0) + '%'
+					r.rf.className = rsqi === null ? '' : rsqi < 30 ? 'warm' : ''
+				}
+				if (r.rfTxt) r.rfTxt.textContent = rsqi !== null ? rsqi + ' %' : '–'
+				if (r.rssi && rssi !== null) r.rssi.textContent = rssi + ' dBm'
+				r.el.classList.toggle('off', !link)
 			}
-			if (r.rfTxt) r.rfTxt.textContent = rsqi !== null ? rsqi + ' %' : '–'
-			if (r.rssi && rssi !== null) r.rssi.textContent = rssi + ' dBm'
-			r.el.classList.toggle('off', !link)
 		}
 	}
 	if (m.atem) {
 		for (const x of m.atem.sources || []) setMeter(meterEls.get(`atem:${x.id}`), x.level, x.peak)
-		if (m.atem.master) setMeter(meterEls.get('atem:master'), m.atem.master.level, m.atem.master.peak)
+		if (m.atem.master) {
+			setMeter(meterEls.get('atem:master'), m.atem.master.level, m.atem.master.peak)
+			setMeter(meterEls.get('tile:atem:master'), m.atem.master.level, m.atem.master.peak)
+		}
 	}
 }
 // the inspector's audio lines for an X32 or a receiver
@@ -897,10 +928,10 @@ function tileLine(t, s) {
 		return `${rx.filter((m) => m.ok).length}/${rx.length} receivers answering · ${on.length}/${ch.length} mics on air${weak.length ? ` · ${weak.map((c) => c.name || c.id).join(', ')} weak` : on.length ? ' · batteries and RF fine' : ''}`
 	}
 	if (t.id === 'dante') {
-		const nets = (s.networks || []).filter((n) => /dante/i.test(n.name))
-		const clocks = s.discovery?.clocks || []
-		const d = clocks.find((c) => /mobile/i.test(c.network || '')) || clocks[0]
-		const devs = eq.filter((e) => /dante/i.test(e.network || '') || /^192\.168\.5\.|^10\.56\.19\./.test(e.ip || ''))
+		const nets = (s.networks || []).filter((n) => /mobile_dante/i.test(n.name) || (n.subnet && DANTE_NET.test(n.subnet)))
+		const clocks = (s.discovery?.clocks || []).filter((c) => DANTE_NET.test(c.subnet))
+		const d = clocks[0]
+		const devs = eq.filter((e) => DANTE_NET.test(e.ip || ''))
 		return `${nets.map((n) => `${n.clients} on ${vlanLabel(n.name)}`).join(' · ') || 'no Dante VLAN'}${devs.length ? ` · ${devs.filter((e) => e.online).length}/${devs.length} roster devices up` : ''} · clock ${d ? (d.status === 'ok' ? 'locked' : d.status) : 'not heard'}`
 	}
 	if (t.id === 'ndi') {
@@ -928,12 +959,40 @@ function tileGraphic(t, s) {
 		const tl = hero?.telemetry
 		const st = s.atem?.stream
 		const held = (s.forensics?.sessions || []).filter((x) => x.state === 'held').length
-		return `${glabel('intake · 10 min', hero ? `↓${fmtRate(hero.down)}` : '')}${spark('switcher', hero?.history?.down, st?.state === 'arriving' ? 'stream' : 'in')}<div class="tmini"><span><label>stream out</label><b>${tl?.streaming ? esc(tl.streaming.state) + (tl.streaming.bitrate ? ' ' + (tl.streaming.bitrate / 1e6).toFixed(1) + ' Mb/s' : '') : '–'}</b></span><span><label>ISO record</label><b>${tl?.recording ? (tl.recording.active ? 'REC ' + esc(tl.recording.duration || '') : 'idle') + (tl.recording.remaining ? ' · ' + esc(tl.recording.remaining) + ' left' : '') : '–'}</b></span><span><label>sessions</label><b>${s.forensics ? held : '–'}</b></span></div>`
+		// the tally row: inputs 1-8 by name (Companion's long_N/short_N, or the own session's InPr), program in red,
+		// preview in green; then the intake graph, the Fairlight master when an own session streams levels, and the
+		// three states
+		const inputs = tl?.inputs || {}
+		const ids = Object.keys(inputs)
+			.map(Number)
+			.filter((n) => n >= 1 && n <= 20)
+			.sort((a, b) => a - b)
+			.slice(0, 8)
+		const tally = ids.length
+			? `<div class="tallyrow" title="program in red, preview in green">${ids.map((n) => `<span class="tb${tl.program === n ? ' pgm' : tl.preview === n ? ' pvw' : ''}" title="${esc(inputs[n].long || '')}"><i>${n}</i>${esc(inputs[n].short || inputs[n].long || n)}</span>`).join('')}</div>`
+			: tl?.programName
+				? `<div class="tallyrow"><span class="tb pgm"><i>PGM</i>${esc(tl.programName)}</span><span class="tb pvw"><i>PVW</i>${esc(tl.previewName || '–')}</span></div>`
+				: ''
+		const fl = s.audio?.switcher?.levels?.master
+		const master = fl ? `<div class="mrow${fl.level === null || fl.level < -89 ? ' silent' : ''}" data-m="tile:atem:master" title="Fairlight master: what leaves the switcher, with its held peak"><span class="mn">Σ</span><span class="mname">program audio</span><span class="mbar"><i class="mfill ${dbClass(fl.level)}" style="width:${dbPct(fl.level).toFixed(1)}%"></i><b class="mpeak" style="left:${dbPct(fl.peak).toFixed(1)}%"></b></span><span class="mdb">${fmtDb(fl.level)}</span></div>` : ''
+		return `${tally}${glabel('intake · 10 min', hero ? `↓${fmtRate(hero.down)}` : '')}${spark('switcher', hero?.history?.down, st?.state === 'arriving' ? 'stream' : 'in')}${master}<div class="tmini"><span><label>stream out</label><b>${tl?.streaming ? esc(tl.streaming.state) + (tl.streaming.bitrate ? ' ' + (tl.streaming.bitrate / 1e6).toFixed(1) + ' Mb/s' : '') : '–'}</b></span><span><label>ISO record</label><b>${tl?.recording ? (tl.recording.active ? 'REC ' + esc(tl.recording.duration || '') : 'idle') + (tl.recording.remaining ? ' · ' + esc(tl.recording.remaining) + ' left' : '') : '–'}</b></span><span><label>sessions</label><b>${s.forensics ? held : '–'}</b></span></div>`
 	}
 	if (t.id === 'encoders') {
-		const enc = eq.find((e) => e.telemetry?.kind === 'webpresenter' && !e.telemetry.error)
+		// every path out: each Web Presenter (status, format, bitrate against what is set) and the switcher's own
+		// stream; the first Web Presenter's gauges and uplink graph
+		const encs = eq.filter((e) => e.telemetry?.kind === 'webpresenter' && !e.telemetry.error)
+		const enc = encs[0]
+		const own = s.atem?.equipment?.telemetry?.streaming
+		if (!enc && !own) return `${glabel('no Web Presenter with telemetry')}<div class="nosp"></div>`
 		const set = enc ? (enc.telemetry.bitrate || 0) / 1e6 : 0
-		return enc ? `${gaugeHtml('bitrate', enc.telemetry.streaming ? enc.up : 0, set || 1, enc.telemetry.streaming ? fmtRate(enc.up) : set ? set.toFixed(1) + ' set' : '–', enc.telemetry.streaming && set && enc.up < set * 0.7 ? 'warn' : '')}${enc.telemetry.cache !== null && enc.telemetry.cache !== undefined ? gaugeHtml('cache', Number(enc.telemetry.cache), 100, enc.telemetry.cache + ' %', Number(enc.telemetry.cache) > 50 ? 'warn' : '') : ''}${glabel(esc(enc.name) + ' uplink · 10 min')}${spark('encoders', enc.history?.up, 'out')}` : `${glabel('no Web Presenter with telemetry')}<div class="nosp"></div>`
+		const gauges = enc ? `${gaugeHtml('bitrate', enc.telemetry.streaming ? enc.up : 0, set || 1, enc.telemetry.streaming ? fmtRate(enc.up) : set ? set.toFixed(1) + ' set' : '–', enc.telemetry.streaming && set && enc.up < set * 0.7 ? 'warn' : '')}${enc.telemetry.cache !== null && enc.telemetry.cache !== undefined ? gaugeHtml('cache', Number(enc.telemetry.cache), 100, enc.telemetry.cache + ' %', Number(enc.telemetry.cache) > 50 ? 'warn' : '') : ''}` : ''
+		const rows = encs.map((e) => {
+			const w = e.telemetry
+			const target = (w.bitrate || 0) / 1e6
+			return `<div class="trow"><span class="n">${w.streaming ? '<span class="tag stream">live</span> ' : ''}${esc(e.name.replace(/^Web Presenter\s*/i, 'WP '))}<small>${esc([w.status, w.format].filter(Boolean).join(' · ') || 'no status')}</small></span><span class="bar"><i class="${w.streaming ? 'live' : ''}" style="width:${w.streaming && target ? Math.min(100, (e.up / target) * 100).toFixed(0) : 0}%"></i></span><span class="v">${w.streaming ? fmtRate(e.up) : target ? target.toFixed(1) + ' set' : 'idle'}</span></div>`
+		})
+		if (own) rows.push(`<div class="trow"><span class="n">${own.state === 'streaming' ? '<span class="tag stream">live</span> ' : ''}switcher<small>${esc(own.service || 'own stream')}${own.state && own.state !== 'idle' && own.state !== 'streaming' ? ' · ' + esc(own.state) : ''}${own.state === 'streaming' && own.duration && own.duration !== '00:00:00:00' ? ' · ' + esc(own.duration) : ''}</small></span><span class="bar"><i class="live" style="width:${own.state === 'streaming' ? 100 : 0}%"></i></span><span class="v">${own.state === 'streaming' ? (own.bitrate ? (own.bitrate / 1e6).toFixed(1) + ' Mb/s' : 'live') : 'idle'}</span></div>`)
+		return `${gauges}${glabel('every path out · bitrate against what is set', `${rows.length} path${rows.length === 1 ? '' : 's'}`)}${rows.join('')}${enc ? `${glabel(esc(enc.name) + ' uplink · 10 min', `↑${fmtRate(enc.up)}`)}${spark('encoders', enc.history?.up, 'out')}` : ''}`
 	}
 	if (t.id === 'recorders') {
 		const decks = eq.filter((e) => e.telemetry?.kind === 'hyperdeck' && !e.telemetry.error)
@@ -944,24 +1003,44 @@ function tileGraphic(t, s) {
 			const used = d && d.size ? (d.size - d.free) / d.size : 0
 			return `<div class="trow"><span class="n">${h.recording ? '<span class="tag rec">REC</span> ' : ''}${esc(e.name)}<small>${esc([h.format, h.codec].filter(Boolean).join(' · ') || h.mode)}</small></span><span class="bar"><i class="${used > 0.9 ? 'warn' : ''}" style="width:${(used * 100).toFixed(0)}%"></i></span><span class="v">${h.remainingS !== null && h.remainingS !== undefined ? fmtMinutes(Math.round(h.remainingS / 60)) : d ? fmtBytes(d.free) : '–'}</span></div>`
 		})
-		if (tl?.recording) rows.push(`<div class="trow"><span class="n">${tl.recording.active ? '<span class="tag rec">REC</span> ' : ''}${esc(s.atem.name.replace(/^ATEM Television Studio\s*/i, 'ATEM '))}<small>ISO record${tl.recording.disk ? ' · ' + esc(tl.recording.disk) : ''}</small></span><span class="bar"><i style="width:${tl.recording.active ? 100 : 0}%"></i></span><span class="v">${esc(tl.recording.remaining || (tl.recording.active ? tl.recording.duration : 'idle'))}</span></div>`)
+		if (tl?.recording) {
+			// one row per disk of the switcher's working set (own session) or the one disk Companion names; the bar is
+			// the time left on a 10-hour scale, amber under half an hour
+			const r = tl.recording
+			const short = s.atem.name.replace(/^ATEM Television Studio\s*/i, 'ATEM ')
+			const list = r.disks?.length ? r.disks.filter((x) => x.inWorkingSet !== false) : [{ name: r.disk, recording: r.active, remaining: r.remaining, remainingS: r.remainingS }]
+			for (const x of list) {
+				const left = x.remainingS !== null && x.remainingS !== undefined ? x.remainingS : null
+				rows.push(`<div class="trow"><span class="n">${x.recording || (list.length === 1 && r.active) ? '<span class="tag rec">REC</span> ' : ''}${esc(short)}<small>ISO record${x.name ? ' · ' + esc(x.name) : ''}${r.active && r.duration ? ' · ' + esc(r.duration) : ''}</small></span><span class="bar"><i class="${left !== null && left < 1800 ? 'warn' : ''}" style="width:${left !== null ? Math.min(100, Math.round((left / 36000) * 100)) : 0}%"></i></span><span class="v">${x.remaining ? esc(x.remaining) + ' left' : r.active ? esc(r.duration || 'recording') : 'idle'}</span></div>`)
+			}
+		}
 		return `${glabel('format · disk used · time left')}${rows.join('') || '<div class="nosp"></div>'}`
 	}
 	if (t.id === 'audio') {
-		const c = (s.audio?.consoles || []).find((x) => x.ok)
-		return `${glabel('channels 1–32 · main L/R', c ? (c.mainLevel !== null && c.mainLevel > -60 ? 'main ' + c.mainLevel.toFixed(1) + ' dBFS' : 'main quiet') : '')}${stripHtml(s, 'x32')}`
+		// the counts, each live console's main L/R as a metered row (moved live by the meters event), then the strip
+		const cs = s.audio?.consoles || []
+		const live = cs.filter((x) => x.ok)
+		const c = live[0]
+		const sig = live.reduce((n, x) => n + (x.active || 0), 0)
+		const mains = live.slice(0, 2).flatMap((x) => (x.main || []).slice(0, 2).map((m, i) => `<div class="mrow${m.level === null || m.level < -89 ? ' silent' : ''}" data-m="tile:x32:${esc(x.ip)}:main:${i}" title="${esc(x.console?.name || x.name)} · main ${['L', 'R'][i]}"><span class="mn">${['L', 'R'][i]}</span><span class="mname">${esc((x.console?.name || x.name).replace(/^BIG_/, ''))}</span><span class="mbar"><i class="mfill ${dbClass(m.level)}" style="width:${dbPct(m.level).toFixed(1)}%"></i><b class="mpeak" style="left:${dbPct(m.peak).toFixed(1)}%"></b></span><span class="mdb">${fmtDb(m.level)}</span></div>`))
+		return `<div class="tmini"><span><label>consoles live</label><b>${live.length}/${cs.length}</b></span><span><label>with signal</label><b>${live.length ? sig + ' ch' : '–'}</b></span><span><label>mains</label><b>${live.length ? live.map((x) => (x.mainLevel !== null && x.mainLevel > -60 ? x.mainLevel.toFixed(0) + ' dB' : 'quiet')).join(' · ') : '–'}</b></span></div>${mains.length ? `${glabel('main L/R · dBFS · peak held 1.5 s')}${mains.join('')}` : ''}${glabel('channels 1–32 · main L/R', c ? (c.mainLevel !== null && c.mainLevel > -60 ? 'main ' + c.mainLevel.toFixed(1) + ' dBFS' : 'main quiet') : '')}${stripHtml(s, 'x32')}`
 	}
 	if (t.id === 'mics') {
-		const ch = (s.audio?.mics || []).filter((m) => m.ok).flatMap((m) => m.channels)
-		const low = ch.filter((c) => c.link && c.battery !== null).sort((a, b) => a.battery - b.battery)[0]
-		return `${glabel('battery per channel', low ? `lowest ${esc(low.name || low.id)} ${low.battery} %` : '')}${stripHtml(s, 'mics')}`
+		// the counts, one metered row per mic on air (RF quality and audio, moved live), then the battery strip
+		const rx = (s.audio?.mics || []).filter((m) => m.ok)
+		const all = rx.flatMap((m) => m.channels.map((c) => ({ ...c, ip: m.ip, rxName: m.name })))
+		const on = all.filter((c) => c.link)
+		const low = on.filter((c) => c.battery !== null).sort((a, b) => a.battery - b.battery)[0]
+		const weak = on.filter((c) => c.rsqi !== null).sort((a, b) => a.rsqi - b.rsqi)[0]
+		const rows = on.slice(0, 6).map((c) => `<div class="microw" data-mic="tile:mic:${esc(c.ip)}:${esc(c.id)}" title="${esc(c.name || c.id)} · ${esc(c.rxName)}${c.frequency ? ' · ' + c.frequency.toFixed(3) + ' MHz' : ''}${c.battery !== null ? ' · battery ' + c.battery + ' %' : ''}"><span class="n">${esc(c.name || c.id.toUpperCase())}<small>${c.frequency ? c.frequency.toFixed(1) : ''}</small></span><span class="hb" title="RF quality (RSQI)"><i data-f="rf" class="${c.rsqi !== null && c.rsqi < 30 ? 'warm' : ''}" style="width:${c.rsqi ?? 0}%"></i></span><span class="hb" title="audio level"><i data-f="af" class="${dbClass(c.af)}" style="width:${dbPct(c.af).toFixed(1)}%"></i></span><span class="v" data-f="rfTxt">${c.rsqi !== null ? c.rsqi + ' %' : '–'}</span></div>`)
+		return `<div class="tmini"><span><label>on air</label><b>${rx.length ? `${on.length}/${all.length}` : '–'}</b></span><span><label>lowest battery</label><b class="${low && low.battery < 20 ? 'warn' : ''}">${low ? esc(low.name || low.id) + ' ' + low.battery + ' %' : '–'}</b></span><span><label>weakest RF</label><b class="${weak && weak.rsqi < 30 ? 'warn' : ''}">${weak ? esc(weak.name || weak.id) + ' ' + weak.rsqi + ' %' : '–'}</b></span></div>${rows.length ? `${glabel('on air · RF quality · audio', 'RSQI')}${rows.join('')}` : ''}${glabel('battery per channel', low ? `lowest ${esc(low.name || low.id)} ${low.battery} %` : '')}${stripHtml(s, 'mics')}`
 	}
 	if (t.id === 'dante') {
-		const clocks = s.discovery?.clocks || []
-		const d = clocks.find((c) => /mobile/i.test(c.network || '')) || clocks[0]
-		const nets = (s.networks || []).filter((n) => /dante/i.test(n.name))
+		const d = (s.discovery?.clocks || []).filter((c) => DANTE_NET.test(c.subnet))[0]
+		const nets = (s.networks || []).filter((n) => /mobile_dante/i.test(n.name) || (n.subnet && DANTE_NET.test(n.subnet)))
 		const series = nets.length ? nets[0].history?.down : []
-		return `<div class="tmini"><span><label>clock</label><b class="${d ? (d.status === 'ok' ? 'ok' : 'warn') : ''}">${d ? (d.status === 'ok' ? 'locked' : esc(d.status)) : 'not heard'}</b></span><span><label>leader</label><b>${d?.leaders[0] ? esc(d.leaders[0].name || d.leaders[0].ip) : '–'}</b></span><span><label>followers</label><b>${d ? d.followers.length + (d.leaders[0] ? ' · ' + d.leaders[0].syncPerS + ' sync/s' : '') : '–'}</b></span></div>${glabel((nets[0] ? esc(vlanLabel(nets[0].name)) : 'Dante VLAN') + ' · 10 min', nets[0] ? `↓${fmtRate(nets[0].down)}` : '')}${spark('dante', series)}`
+		const devs = eq.filter((e) => DANTE_NET.test(e.ip || ''))
+		return `<div class="tmini"><span><label>clock</label><b class="${d ? (d.status === 'ok' ? 'ok' : 'warn') : ''}">${d ? (d.status === 'ok' ? 'locked' : esc(d.status)) : 'not heard'}</b></span><span><label>leader</label><b>${d?.leaders[0] ? esc(d.leaders[0].name || d.leaders[0].ip) : '–'}</b></span><span><label>followers</label><b>${d ? d.followers.length + (d.leaders[0] ? ' · ' + d.leaders[0].syncPerS + ' sync/s' : '') : '–'}</b></span></div><div class="tmini"><span><label>devices up</label><b>${devs.filter((e) => e.online).length}/${devs.length}</b></span><span><label>consoles</label><b>${(s.audio?.consoles || []).filter((c) => c.ok).length}/${(s.audio?.consoles || []).length} live</b></span><span><label>receivers</label><b>${(s.audio?.mics || []).filter((m) => m.ok).length}/${(s.audio?.mics || []).length}</b></span></div>${glabel((nets[0] ? esc(vlanLabel(nets[0].name)) : 'Dante VLAN') + ' · 10 min', nets[0] ? `↓${fmtRate(nets[0].down)}` : '')}${spark('dante', series)}`
 	}
 	if (t.id === 'ndi') {
 		const nets = (s.networks || []).filter((n) => /ndi/i.test(n.name))
@@ -1448,6 +1527,7 @@ function render(s) {
 	if (!folded('atemBlock')) renderAtem(s)
 	if (!folded('pathBlock')) renderPaths(s)
 	if (!folded('audioBlock')) renderAudio(s)
+	if (!folded('vizBlock') && window.Viz) Viz.render(s)
 	if (!folded('forBlock')) renderForensics(s)
 	if (!folded('rackBlock') && !labelEdit) renderRack(s)
 	if (!folded('patchBlock')) renderPatch(s)
@@ -1949,9 +2029,8 @@ function hudCell(id, s) {
 			return cell('NDI', `${src.length} <small>source${src.length === 1 ? '' : 's'}</small>`, src.length ? src.slice(0, 3).map((x) => esc(x.name)).join(' · ') + (src.length > 3 ? ' +' + (src.length - 3) : '') : ndiNet.length ? `${ndiNet[0].clients} on ${esc(vlanLabel(ndiNet[0].name))}` : 'none announced')
 		}
 		case 'dante': {
-			const clocks = s.discovery?.clocks || []
-			const d = clocks.find((c) => /mobile/i.test(c.network || '')) || clocks[0]
-			return cell('Dante clock', d ? (d.status === 'ok' ? '<span class="ok">locked</span>' : `<span class="warn">${esc(d.status)}</span>`) : '–', d ? `${d.leaders[0] ? 'leader ' + esc(d.leaders[0].name || d.leaders[0].ip) + ' · ' + d.leaders[0].syncPerS + ' sync/s' : 'no leader'} · ${d.followers.length} follower${d.followers.length === 1 ? '' : 's'}${clocks.length > 1 ? ' · ' + clocks.length + ' domains' : ''}` : 'no PTP seen on this computer')
+			const d = (s.discovery?.clocks || []).filter((c) => DANTE_NET.test(c.subnet))[0]
+			return cell('Dante clock', d ? (d.status === 'ok' ? '<span class="ok">locked</span>' : `<span class="warn">${esc(d.status)}</span>`) : '–', d ? `${d.leaders[0] ? esc(String(d.leaders[0].name || d.leaders[0].ip).replace(/ Dante card$/i, '')) + ' · ' : ''}${d.followers.length} follower${d.followers.length === 1 ? '' : 's'}` : 'no PTP heard')
 		}
 		case 'power': {
 			const pdus = (s.others || []).filter((o) => o.kind === 'pdu' && o.online)
@@ -1965,7 +2044,8 @@ function hudCell(id, s) {
 
 // ------------------------------------------------------------------ the health tiles' side panels (drawn from the live state)
 const LOCAL_TYPES = new Set(['switcher', 'encoders', 'recorders', 'audio', 'mics', 'dante', 'ndi', 'network'])
-const DEFAULT_TILES = ['switcher', 'encoders', 'recorders', 'audio', 'mics', 'dante', 'ndi'] // Network and This PC are opt-in per show
+const DEFAULT_TILES = ['switcher', 'encoders', 'recorders', 'audio', 'mics', 'dante', 'ndi', 'power'] // Network and This PC are opt-in per show
+const DANTE_NET = /^192\.168\.5\./ // the Dante VLAN that is watched (BIG_MOBILE_DANTE); the Town Hall domain on 10.56.19.x is only noted
 const PANEL_KIND = { switcher: 'switcher', encoders: 'streams out', recorders: 'recorders', audio: 'audio', mics: 'wireless mics', dante: 'Dante', ndi: 'NDI', network: 'network' }
 const PANEL_TITLE = {
 	switcher: (s) => s?.atem?.name || 'Switcher',
@@ -2007,7 +2087,7 @@ function panelSwitcher(s) {
 		['Program', t?.programName ? `<span class="error">${esc(t.programName)}</span>` : t?.error ? `<span class="warn">${esc(t.error)}</span>` : 'unknown'],
 		['Preview', esc(t?.previewName || '')],
 		['Stream out', t?.streaming ? `${t.streaming.state === 'streaming' ? '<span class="tag stream">live</span> ' : ''}${esc(t.streaming.state)}${t.streaming.bitrate ? ' · ' + (t.streaming.bitrate / 1e6).toFixed(1) + ' Mb/s' : ''}${t.streaming.cache !== null && t.streaming.cache !== undefined ? ' · cache ' + t.streaming.cache + ' %' : ''}${t.streaming.duration && t.streaming.duration !== '00:00:00' ? ' · ' + esc(t.streaming.duration) : ''}${t.streaming.service ? ' · ' + esc(t.streaming.service) : ''}` : ''],
-		['ISO record', t?.recording ? `${t.recording.active ? '<span class="tag rec">REC</span> ' + esc(t.recording.duration || '') : 'idle'}${t.recording.remaining ? ' · ' + esc(t.recording.remaining) + ' left' : ''}${t.recording.disk ? ' · ' + esc(t.recording.disk) : ''}${t.recording.filename ? ' · ' + esc(t.recording.filename) : ''}` : ''],
+		['ISO record', t?.recording ? `${t.recording.active ? '<span class="tag rec">REC</span> ' + esc(t.recording.duration || '') : 'idle'}${t.recording.remaining ? ' · ' + esc(t.recording.remaining) + ' left' : ''}${t.recording.disk ? ' · ' + esc(t.recording.disk) : ''}${t.recording.filename ? ' · ' + esc(t.recording.filename) : ''}${t.recording.error ? ' · <span class="error">' + esc(t.recording.error) + '</span>' : ''}${t.recording.disks?.length ? '<br>' + t.recording.disks.map((x) => `${esc(x.name)}: ${x.recording ? '<b class="error">recording</b>' : esc(x.status)}${x.remaining ? ', ' + esc(x.remaining) + ' left' : ''}${x.inWorkingSet === false ? ' (not in the working set)' : ''}`).join('<br>') : ''}` : ''],
 	])}`)
 	parts.push(`<h3>Stream in</h3>${kvRows([
 		['Intake', `${eq ? fmtRate(eq.down) : '–'} · ${esc(st.state || 'idle')}${st.state === 'arriving' ? ` · ${fmtRate(st.rate)} above the usual ${fmtRate(st.baseline || 0)} since ${fmtTime(st.since)}` : st.baseline ? ` · usual level ${fmtRate(st.baseline)}` : ''}`],
@@ -2056,7 +2136,10 @@ function panelRecorders(s) {
 			['Network', `${e.switch ? `${esc(e.switch.name)} port ${e.switch.port} · ${speedTxt(e.switch.speed)} · ` : ''}in ${fmtRate(e.down)} · out ${fmtRate(e.up)}`],
 		])}<div class="insp-actions"><button class="btn quiet" data-sel="equipment:${esc(e.ip)}">Device details</button></div>`)
 	}
-	if (t?.recording) parts.push(`<h3>${esc(s.atem.name)} · ISO record</h3>${kvRows([['State', t.recording.active ? `<span class="tag rec">REC</span> ${esc(t.recording.duration || '')}` : 'idle', t.recording.active ? 'ok' : ''], ['Remaining', esc(t.recording.remaining || '')], ['Disk', esc(t.recording.disk || '')], ['File', esc(t.recording.filename || '')]])}`)
+	if (t?.recording) {
+		const r = t.recording
+		parts.push(`<h3>${esc(s.atem.name)} · ISO record</h3>${kvRows([['State', r.active ? `<span class="tag rec">REC</span> ${esc(r.duration || '')}` : esc(r.state || 'idle'), r.active ? 'ok' : ''], ['Remaining', r.remaining ? `${esc(r.remaining)} on ${esc(r.disk || 'the working set')}` : ''], ...(r.disks?.length ? r.disks.map((x) => [x.name, `${x.recording ? '<span class="tag rec">REC</span> ' : ''}${esc(x.status)}${x.remaining ? ' · ' + esc(x.remaining) + ' of recording left' : ''}${x.inWorkingSet === false ? ' · not in the working set' : x.inWorkingSet ? ' · working set' : ''}`, x.recording ? 'ok' : '']) : r.disk ? [['Disk', esc(r.disk)]] : []), ['File', esc(r.filename || '')], ...(r.allCameras !== null && r.allCameras !== undefined ? [['ISO files', r.allCameras ? 'every camera (ISO)' : 'program only']] : []), ...(r.error ? [['Error', esc(r.error), 'bad']] : []), ...(r.raw !== null && r.raw !== undefined ? [['Status word', `${r.raw}${r.errorRaw ? ' · error word ' + r.errorRaw : ''} <small>(own session; bit 0 = recording)</small>`]] : [])])}`)
+	}
 	if (!parts.length) return '<div class="empty">no recorder with telemetry in the roster: give a HyperDeck the telemetry "hyperdeck" in Edit roster</div>'
 	return parts.join('')
 }
@@ -2096,13 +2179,14 @@ function panelDante(s) {
 	const disc = s.discovery || {}
 	const clocks = disc.clocks || []
 	const nets = (s.networks || []).filter((n) => /dante/i.test(n.name))
-	const danteIp = (ip) => /^192\.168\.5\.|^10\.56\.19\./.test(ip || '')
-	const devices = (s.equipment || []).filter((e) => /dante/i.test(e.network || '') || danteIp(e.ip) || (e.role === 'audio' && /dante|x32|prism|audinate/i.test(e.name + ' ' + (e.oui || ''))))
+	const devices = (s.equipment || []).filter((e) => DANTE_NET.test(e.ip || ''))
 	const parts = []
 	const netName = (d) => d.network || (s.networks || []).find((n) => n.subnet && n.subnet.split('.').slice(0, 3).join('.') === String(d.subnet).split('.').slice(0, 3).join('.'))?.name || null
-	parts.push(`<h3>Clock domains <small>PTP v1, heard on this computer's interfaces</small></h3>${clocks.length ? clocks.map((d) => `<div class="kv"><span>Domain</span><b>${esc(netName(d) ? vlanLabel(netName(d)) : d.subnet)}${netName(d) ? ' <small>' + esc(d.subnet) + '</small>' : ''}</b><span>Status</span><b class="${d.status === 'ok' ? 'ok' : 'bad'}">${esc(d.status)}</b>${d.leaders.map((l) => `<span>Leader</span><b>${esc(l.name || l.ip)}${l.name ? ' · ' + esc(l.ip) : ''} · ${l.syncPerS} sync/s${l.uuid ? ' · clock ' + esc(l.uuid) : ''}${l.stratum !== null && l.stratum !== undefined ? ' · stratum ' + l.stratum : ''}</b>`).join('')}<span>Followers</span><b>${d.followers.length ? d.followers.map((f) => `${esc(f.name || f.ip)}${f.name ? ' <small>' + esc(f.ip) + '</small>' : ''}`).join('<br>') : 'none heard'}</b></div>`).join('') : `<p>No PTP traffic reaches this computer${disc.error ? ' (' + esc(disc.error) + ')' : ''}. A network interface on the Dante VLAN hears the clock without joining anything.</p>`}`)
-	parts.push(`<h3>Dante devices</h3><div class="rowlist">${devices.map((e) => dev(e, `${esc(e.ip)}${e.network ? ' · ' + esc(vlanLabel(e.network)) : ''}${e.switch ? ' · ' + esc(e.switch.name) + ' p' + e.switch.port : ''} · in ${fmtRate(e.down)} out ${fmtRate(e.up)}`)).join('') || '<div class="empty">none in the roster</div>'}</div>${disc.dante?.length ? `<p>Announced on the network: ${disc.dante.map((d) => esc(d.name) + (d.ip ? ' (' + esc(d.ip) + ')' : '')).join(', ')}</p>` : ''}`)
-	if (nets.length) parts.push(`<h3>Dante VLANs</h3>${kvRows(nets.map((n) => [vlanLabel(n.name), `${n.clients} clients · ↓ ${fmtRate(n.down)} ↑ ${fmtRate(n.up)} through the gateway`]))}`)
+	const others = clocks.filter((d) => !DANTE_NET.test(d.subnet))
+	parts.push(`<h3>Clock domain <small>PTP v1, heard on this computer's Dante interface</small></h3>${clocks.filter((d) => DANTE_NET.test(d.subnet)).length ? clocks.filter((d) => DANTE_NET.test(d.subnet)).map((d) => `<div class="kv"><span>Domain</span><b>${esc(netName(d) ? vlanLabel(netName(d)) : d.subnet)}${netName(d) ? ' <small>' + esc(d.subnet) + '</small>' : ''}</b><span>Status</span><b class="${d.status === 'ok' ? 'ok' : 'bad'}">${esc(d.status)}</b>${d.leaders.map((l) => `<span>Leader</span><b>${esc(l.name || l.ip)}${l.name ? ' · ' + esc(l.ip) : ''} · ${l.syncPerS} sync/s${l.uuid ? ' · clock ' + esc(l.uuid) : ''}${l.stratum !== null && l.stratum !== undefined ? ' · stratum ' + l.stratum : ''}</b>`).join('')}<span>Followers</span><b>${d.followers.length ? d.followers.map((f) => `${esc(f.name || f.ip)}${f.name ? ' <small>' + esc(f.ip) + '</small>' : ''}`).join('<br>') : 'none heard'}</b></div>`).join('') : `<p>No PTP traffic reaches this computer${disc.error ? ' (' + esc(disc.error) + ')' : ''}. A network interface on the Dante VLAN hears the clock without joining anything.</p>`}`)
+	parts.push(`<h3>Dante devices <small>on 192.168.5.x</small></h3><div class="rowlist">${devices.map((e) => dev(e, `${esc(e.ip)}${e.network ? ' · ' + esc(vlanLabel(e.network)) : ''}${e.switch ? ' · ' + esc(e.switch.name) + ' p' + e.switch.port : ''} · in ${fmtRate(e.down)} out ${fmtRate(e.up)}`)).join('') || '<div class="empty">none in the roster</div>'}</div>${disc.dante?.length ? `<p>Announced on the network: ${disc.dante.map((d) => esc(d.name) + (d.ip ? ' (' + esc(d.ip) + ')' : '')).join(', ')}</p>` : ''}${others.length ? `<p><small>Also heard, not watched: ${others.map((d) => `${esc(netName(d) ? vlanLabel(netName(d)) : d.subnet)} (${d.leaders[0] ? 'leader ' + esc(d.leaders[0].name || d.leaders[0].ip) + ', ' : ''}${d.followers.length} followers)`).join('; ')}</small></p>` : ''}`)
+	const danteNets = nets.filter((n) => /mobile_dante/i.test(n.name) || (n.subnet && DANTE_NET.test(n.subnet)))
+	if (danteNets.length) parts.push(`<h3>Dante VLAN</h3>${kvRows(danteNets.map((n) => [vlanLabel(n.name), `${n.clients} clients · ↓ ${fmtRate(n.down)} ↑ ${fmtRate(n.up)} through the gateway`]))}`)
 	parts.push(`<p>Dante routing and subscriptions are not announced on the network; Dante Controller or Dante Director show them. What Broadwatch sees is the clock (every device must follow one leader), who is on the VLANs, and the traffic.</p>`)
 	return parts.join('')
 }
@@ -2144,7 +2228,7 @@ function pbWidget(e) {
 	let items = []
 	if (t.kind === 'hyperdeck') items = [w('transport', `${t.recording ? '<span class="tag rec">REC</span>' : ''}${esc(t.mode)}`), w('timecode', esc(t.timecode || '–')), w('format', esc([t.format, t.codec].filter(Boolean).join(' · ') || '–')), t.activeDisk ? w('disk', `${esc(t.activeDisk.name)} · ${t.remainingS !== null && t.remainingS !== undefined ? fmtMinutes(Math.round(t.remainingS / 60)) + ' left ' : ''}${bar(t.activeDisk.size - t.activeDisk.free, t.activeDisk.size, t.activeDisk.free / t.activeDisk.size < 0.1 ? 'warn' : '')} ${fmtBytes(t.activeDisk.free)} free`) : w('disk', 'none'), t.disks?.length > 1 ? w('slots', t.disks.map((d) => `${esc(d.name)}${d.active ? '*' : ''}`).join(', ')) : '', w('network', `in ${fmtRate(e.down)} · out ${fmtRate(e.up)}${e.switch ? ' · ' + speedTxt(e.switch.speed) : ''}`)]
 	else if (t.kind === 'webpresenter') items = [w('stream', `${t.streaming ? '<span class="tag stream">live</span>' : ''}${esc(t.status)}`), w('bitrate', `${t.bitrate ? (t.bitrate / 1e6).toFixed(1) + ' Mb/s set' : '–'}${t.streaming ? ' · ' + fmtRate(e.up) + ' out ' + bar(e.up, (t.bitrate || 0) / 1e6 || 1, 'up') : ''}`), w('cache', t.cache !== null && t.cache !== undefined ? `${t.cache} ${bar(Number(t.cache), 100, Number(t.cache) > 50 ? 'warn' : '')}` : '–'), w('format', esc(t.format || '–')), w('network', `${fmtRate(e.up)} up${e.switch ? ' · ' + speedTxt(e.switch.speed) : ''}`)]
-	else if (t.kind === 'atem') items = [w('program', esc(t.programName || '–')), w('preview', esc(t.previewName || '–')), w('stream', `${t.streaming?.state === 'streaming' ? '<span class="tag stream">live</span>' : ''}${esc(t.streaming?.state || '–')}${t.streaming?.bitrate ? ' · ' + (t.streaming.bitrate / 1e6).toFixed(1) + ' Mb/s' : ''}${t.streaming?.cache ? ' · cache ' + t.streaming.cache + ' %' : ''}${t.streaming?.duration && t.streaming.duration !== '00:00:00' ? ' · ' + esc(t.streaming.duration) : ''}`), t.recording ? w('ISO record', `${t.recording.active ? '<span class="tag rec">REC</span>' + esc(t.recording.duration || '') : 'idle'}${t.recording.remaining ? ' · ' + esc(t.recording.remaining) + ' left' : ''}${t.recording.disk ? ' · ' + esc(t.recording.disk) : ''}`) : '', w('control', t.via === 'companion' ? 'via Companion' : 'own session'), w('intake', fmtRate(e.down))]
+	else if (t.kind === 'atem') items = [w('program', esc(t.programName || '–')), w('preview', esc(t.previewName || '–')), w('stream', `${t.streaming?.state === 'streaming' ? '<span class="tag stream">live</span>' : ''}${esc(t.streaming?.state || '–')}${t.streaming?.bitrate ? ' · ' + (t.streaming.bitrate / 1e6).toFixed(1) + ' Mb/s' : ''}${t.streaming?.cache ? ' · cache ' + t.streaming.cache + ' %' : ''}${t.streaming?.duration && t.streaming.duration !== '00:00:00' ? ' · ' + esc(t.streaming.duration) : ''}`), t.recording ? w('ISO record', `${t.recording.active ? '<span class="tag rec">REC</span>' + esc(t.recording.duration || '') : 'idle'}${t.recording.remaining ? ' · ' + esc(t.recording.remaining) + ' left' : ''}${t.recording.disk ? ' · ' + esc(t.recording.disk) : ''}${t.recording.error ? ' · <span class="error">' + esc(t.recording.error) + '</span>' : ''}`) : '', t.recording?.disks?.length > 1 ? w('disks', t.recording.disks.map((x) => `${esc(x.name)} ${x.recording ? '<span class="tag rec">REC</span>' : ''}${x.remaining ? esc(x.remaining) : esc(x.status)}`).join(' · ')) : '', w('control', t.via === 'companion' ? 'via Companion' : 'own session'), w('intake', fmtRate(e.down))]
 	else if (t.kind === 'videohub') items = [w('router', `${esc(t.model || 'Videohub')}${t.name ? ' "' + esc(t.name) + '"' : ''}`), w('size', `${t.inputs} in × ${t.outputs} out`), w('routes', `${(t.routing || []).length}${t.locks ? ' · ' + t.locks + ' locked' : ''}`), w('', `<button class="btn mini quiet" data-sel="equipment:${esc(e.ip)}">routing table ▸</button>`)]
 	else if (t.kind === 'host') items = [w('cpu', `${t.cpu ?? '–'}% ${bar(t.cpu || 0, 100, t.cpu > 85 ? 'error' : t.cpu > 70 ? 'warn' : '')}`), w('ram', `${t.mem.pct}% ${bar(t.mem.pct, 100, t.mem.pct > 90 ? 'error' : '')} ${fmtBytes(t.mem.used)} of ${fmtBytes(t.mem.total)}`), t.gpu ? w('gpu', `${t.gpu.util}% ${bar(t.gpu.util, 100)} ${esc(String(t.gpu.name).replace('NVIDIA GeForce ', ''))} · ${fmtBytes(t.gpu.memUsed * 1048576)} of ${fmtBytes(t.gpu.memTotal * 1048576)} · ${t.gpu.temp}°${t.gpu.power ? ' · ' + Math.round(t.gpu.power) + ' W' : ''}`) : '', ...(t.disks || []).slice(0, 4).map((d) => w(esc(d.name.split(' ')[0]), `${fmtBytes(d.free)} free ${bar(d.size - d.free, d.size, d.free / d.size < 0.1 ? 'warn' : '')}`)), w('network', `in ${fmtRate(e.down)} · out ${fmtRate(e.up)}`)]
 	items = items.filter(Boolean)

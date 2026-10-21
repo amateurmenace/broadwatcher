@@ -1,6 +1,6 @@
 {
   "_comment": "Broadwatch configuration. The app copies this file to its user-data folder on first run (menu: Broadwatch > Open config file) and reads that copy from then on. The equipment roster is edited in the app (Broadcast equipment > Edit roster); 'active: false' = on standby: shown greyed, not probed, never an alert.",
-  "config_version": 9,
+  "config_version": 10,
   "gateway": {
     "name": "BIG WAN (UDM Pro Max)",
     "url": "https://192.168.20.1",
@@ -199,29 +199,8 @@
     },
     {
       "active": false,
-      "name": "SB-SC BPix (Dante)",
-      "ip": "10.56.19.144",
-      "group": "Town Hall",
-      "role": "computer"
-    },
-    {
-      "active": false,
       "name": "SB-SC BPix (NDI)",
       "ip": "10.56.21.8",
-      "group": "Town Hall",
-      "role": "computer"
-    },
-    {
-      "active": false,
-      "name": "PRISM 12x12 Dante",
-      "ip": "10.56.19.213",
-      "group": "Town Hall",
-      "role": "audio"
-    },
-    {
-      "active": false,
-      "name": "SB Zoom Desk",
-      "ip": "10.56.19.130",
       "group": "Town Hall",
       "role": "computer"
     },
@@ -288,8 +267,8 @@
       "role": "audio"
     }
   ],
-  "retired_equipment": ["192.168.5.78", "10.56.19.29"],
-  "_retired_comment": "Devices that left the default roster (the audio-rack Blackmagic box, the School Committee Zoom desk): a config upgrade removes them even from a roster edited in the app.",
+  "retired_equipment": ["192.168.5.78", "10.56.19.29", "10.56.19.144", "10.56.19.213", "10.56.19.130"],
+  "_retired_comment": "Devices that left the default roster (the audio-rack Blackmagic box, the School Committee Zoom desk, the Town Hall Dante devices on 10.56.19.x: only the 192.168.5.x Dante VLAN is watched): a config upgrade removes them even from a roster edited in the app.",
   "roster_switches": ["LIGHTHOUSE", "AUDIO RACK", "BHS Auditorium - 48-PoE"],
   "_roster_switches_comment": "Every wired client on these switches (UniFi names or MACs) is part of the broadcast without a roster row: shown under the switch's name, alerts once it has been seen online. Edit roster > Whole switches.",
   "map_labels": {},
@@ -323,7 +302,7 @@
     "community": "netwatch",
     "every_s": 3
   },
-  "hud_modules": ["intake", "wan", "console", "vlans"],
+  "hud_modules": ["intake", "wan", "console", "vlans", "dante", "record"],
   "_hud_modules_comment": "The cells of the top bar, in order (Settings > Top bar): intake, wan, console, vlans, encoder, switcher, record, deck, pc, mics, x32, ndi, dante, power.",
   "capture": {
     "_comment": "Stream forensics (roadmap section 1): the capture NIC on the LIGHTHOUSE mirror of the HD8's port, read with tshark. Set up 2026-10-19: port 13 mirrors port 15. Not used by the app yet.",
