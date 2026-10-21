@@ -22,14 +22,16 @@ const FLAG_ACK = 0x80
 const HELLO = Buffer.from([0x10, 0x14, 0x53, 0xab, 0, 0, 0, 0, 0, 0x3a, 0, 0, 0x01, 0, 0, 0, 0, 0, 0, 0])
 const STREAM_STATE = { 1: 'idle', 2: 'connecting', 4: 'streaming', 32: 'stopping' }
 // Recording, laid out as atem-connection reads it (protocol 8.1.1+; the HD8 ISO on 2.32 sends the same lengths):
-//  RTMS 8 B: status word u16 @0 (bit 0 = recording, bit 7 = stopping; the HD8 shows 2 while idle), error word u16 @2
-//            (no media 2, media full 4, media error 8, unformatted 16, dropping frames 32, unknown 0x8000; the HD8
-//            puts other values there while idle, so only a word made of those bits is read as an error), seconds of
+//  RTMS 8 B: status word u16 @0 (bit 0 = recording, bit 7 = stopping; the HD8 shows 2 idle and 3 recording, verified
+//            on a test recording 2026-10-21 00:34), error word u16 @2 (no media 2, media full 4, media error 8,
+//            unformatted 16, dropping frames 32, unknown 0x8000; on the HD8 the word carries the low 16 bits of the
+//            previous "seconds left" instead, so it is read only when made of those bits and not stale), seconds of
 //            recording time left on the working set u32 @4;
-//  RTMD 76 B: one per disk: id u32 @0, status u32 @4 (idle 1, unformatted 2, active 4, recording 8, removed 32),
-//            seconds left on that disk u32 @8, volume name @12 (64);
+//  RTMD 76 B: one per disk: id u32 @0, seconds left on that disk u32 @4, status u16 @8 (idle 1, unformatted 2,
+//            active 4, recording 8, removed 32), volume name @12 (64);
 //  RMSu 140 B: file name @0 (128), working-set disk ids u32 @128 and @132, record in all cameras (ISO) u8 @136;
-//  RTMR 8 B: duration hh:mm:ss:ff + drop-frame flag (RMRD has the same length and is kept raw until its meaning is known).
+//  RTMR 8 B: duration hh:mm:ss:ff at 0-3 (bytes 4-7 carry other counters on the HD8: not the drop-frame flag);
+//            RMRD has the same length and is kept raw.
 // Until 0.14.0 the status word 2 was read as "recording" and the duration stood in for the time left.
 const RECORD_ERRORS = [[2, 'no media'], [4, 'media full'], [8, 'media error'], [16, 'media unformatted'], [32, 'dropping frames'], [0x8000, 'unknown error']]
 const DISK_STATUS = [[1, 'idle'], [2, 'unformatted'], [4, 'active'], [8, 'recording'], [32, 'removed']]
@@ -61,7 +63,6 @@ export function recordingView(d) {
 		filename: r.settings?.filename || null,
 		allCameras: r.settings ? r.settings.recordInAllCameras : null,
 		duration: r.duration?.text || null,
-		dropFrame: r.duration ? r.duration.dropFrame : null,
 		durationRaw: r.duration?.raw || null,
 		rmrd: r.rmrd,
 		t: st.t,
@@ -154,15 +155,18 @@ export function decodeKnown(name, body, d) {
 			if (body.length < 4) return false
 			const raw = body.readUInt16BE(0)
 			const errorRaw = body.readUInt16BE(2)
-			recState(d).status = { raw, active: !!(raw & 1), stopping: !!(raw & 0x80), errorRaw, errors: (errorRaw & ~0x803e) === 0 ? bits(RECORD_ERRORS, errorRaw) : [], remainingS: body.length >= 8 ? body.readUInt32BE(4) : null, t: Date.now() }
+			const r = recState(d)
+			const remainingS = body.length >= 8 ? body.readUInt32BE(4) : null
+			const stale = r.status && r.status.remainingS !== null && (r.status.remainingS & 0xffff) === errorRaw // the HD8 leaves the previous seconds-left there
+			r.status = { raw, active: !!(raw & 1), stopping: !!(raw & 0x80), errorRaw, errors: !stale && (errorRaw & ~0x803e) === 0 ? bits(RECORD_ERRORS, errorRaw) : [], remainingS, t: Date.now() }
 			d.recording = recordingView(d)
 			break
 		}
 		case 'RTMD': {
 			if (body.length < 12) return false
 			const id = body.readUInt32BE(0)
-			const status = body.readUInt32BE(4)
-			recState(d).disks.set(id, { id, statusRaw: status, status: bits(DISK_STATUS, status).join(' ') || `status ${status}`, active: !!(status & 4), recording: !!(status & 8), unformatted: !!(status & 2), removed: !!(status & 32), remainingS: body.readUInt32BE(8), name: cstr(body, 12, 64) || `disk ${id}` })
+			const status = body.readUInt16BE(8)
+			recState(d).disks.set(id, { id, statusRaw: status, status: bits(DISK_STATUS, status).join(' ') || `status ${status}`, active: !!(status & 4), recording: !!(status & 8), unformatted: !!(status & 2), removed: !!(status & 32), remainingS: body.readUInt32BE(4), name: cstr(body, 12, 64) || `disk ${id}` })
 			d.recording = recordingView(d)
 			break
 		}
@@ -262,7 +266,7 @@ export function readAtem(ip, { port = 9910, timeoutMs = 6000, capture = [] } = {
 }
 
 export class AtemClient extends EventEmitter {
-	constructor(ip, { port = 9910, log = () => {}, capture = /^RS/ } = {}) {
+	constructor(ip, { port = 9910, log = () => {}, capture = /^(RS|RTMS|RTMD|RMSu)/ } = {}) {
 		super()
 		this.ip = ip
 		this.port = port

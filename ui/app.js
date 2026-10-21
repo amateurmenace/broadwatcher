@@ -265,7 +265,25 @@ function renderHome(s) {
 	const set = wanted && wanted.length ? wanted : DEFAULT_TILES
 	const shown = (s.tiles || []).filter((t) => set.includes(t.id))
 	const TALLY = { ok: 'online', warn: 'unresponsive', bad: 'offline', na: 'standby' }
-	const tileHtml = shown.map((t) => `<div class="tile ${esc(t.level)}" data-tile="${esc(t.id)}" title="${esc(t.line)}"><div class="eqh"><span class="tally ${TALLY[t.level] || ''}"></span><div class="eqn"><b>${esc(t.label)}</b></div><span class="eqlink"><b title="${esc(t.value)}">${esc(t.value)}</b>${t.unit ? `<small>${esc(t.unit)}</small>` : ''}</span></div><div class="tl">${esc(tileLine(t, s))}</div><div class="tg">${tileGraphic(t, s)}</div></div>`).join('')
+	// recording and live: the card turns red (or teal) with a pulsing lamp and a badge while the switcher's ISO
+	// record or a HyperDeck rolls, or a stream is out
+	const eqOn = (s.equipment || []).filter((e) => e.active)
+	const tlh = s.atem?.equipment?.telemetry
+	const isoRec = !!tlh?.recording?.active
+	const decksRec = eqOn.filter((e) => e.telemetry?.kind === 'hyperdeck' && !e.telemetry.error && e.telemetry.recording)
+	const wpLive = eqOn.some((e) => e.telemetry?.kind === 'webpresenter' && !e.telemetry.error && e.telemetry.streaming)
+	const ownLive = tlh?.streaming?.state === 'streaming'
+	const flags = (t) => ({
+		rec: (t.id === 'switcher' && isoRec) || (t.id === 'recorders' && (isoRec || decksRec.length > 0)),
+		live: (t.id === 'encoders' && (wpLive || ownLive)) || (t.id === 'switcher' && ownLive),
+	})
+	const badges = (t, f) => `${f.rec ? `<span class="recbadge">REC${t.id === 'switcher' && tlh?.recording?.duration ? ' ' + esc(tlh.recording.duration.slice(0, 8)) : t.id === 'recorders' ? ' ' + esc([isoRec ? 'switcher ISO' : '', ...decksRec.map((e) => e.name)].filter(Boolean).join(' · ')) : ''}</span>` : ''}${f.live ? '<span class="livebadge">LIVE</span>' : ''}`
+	const tileHtml = shown
+		.map((t) => {
+			const f = flags(t)
+			return `<div class="tile ${esc(t.level)}${f.rec ? ' rec' : ''}${f.live ? ' live' : ''}" data-tile="${esc(t.id)}" title="${esc(t.line)}"><div class="eqh"><span class="tally ${TALLY[t.level] || ''}"></span><div class="eqn"><b>${esc(t.label)}</b></div><span class="eqlink"><b title="${esc(t.value)}">${esc(t.value)}</b>${t.unit ? `<small>${esc(t.unit)}</small>` : ''}</span></div><div class="tl">${badges(t, f)}${esc(tileLine(t, s))}</div><div class="tg">${tileGraphic(t, s)}</div></div>`
+		})
+		.join('')
 	$('home').innerHTML = `<div class="verdict-big" data-sel="health:now"><span class="lamp ${verdictClass(h.verdict)}"></span><div><b>${esc(nice(h.verdict))}</b><div class="score">${h.score}<small> / 100 · ${esc(h.profile?.name || '')}</small></div><p>${esc(aiFresh ? aiInfo.headline : h.headline)}</p><ul class="why">${why.map((f) => `<li class="${esc(f.level)}"><b>${esc(f.label)}</b> · ${esc(f.reason)}</li>`).join('') || '<li class="ok"><b>All factors</b> at full marks</li>'}</ul><div class="ai-meta">${aiFresh ? `AI: ${esc(aiInfo.model)} · ${fmtAgo(aiInfo.t)} ago${aiInfo.aiVerdict && aiInfo.aiVerdict !== h.verdict ? ` · the model would have said ${esc(nice(aiInfo.aiVerdict))}` : ''}` : aiStatus?.enabled ? 'AI narrative pending' : 'AI off · score only'} · click for every factor</div></div></div>${tileHtml}`
 	indexMeters()
 }
@@ -811,10 +829,12 @@ const linkTxt = (e) => (e.switch ? `${esc(e.switch.name)} · p${e.switch.port} �
 function eqCard(e, s) {
 	const t = e.telemetry && !e.telemetry.error ? e.telemetry : null
 	const standby = !e.active
-	const cls = ['eqc', standby ? 'standby' : e.status, e.hero ? 'hero' : '', selection?.type === 'equipment' && selection.id === e.ip ? 'sel' : ''].join(' ')
+	const recNow = !!(t && ((t.kind === 'atem' && t.recording?.active) || (t.kind === 'hyperdeck' && t.recording)))
+	const liveNow = !!(t && ((t.kind === 'webpresenter' && t.streaming) || (t.kind === 'atem' && t.streaming?.state === 'streaming')))
+	const cls = ['eqc', standby ? 'standby' : e.status, e.hero ? 'hero' : '', recNow ? 'rec' : '', liveNow ? 'live' : '', selection?.type === 'equipment' && selection.id === e.ip ? 'sel' : ''].join(' ')
 	const probe = e.probe ? (e.probe.ok ? `<span class="ok">${esc(e.probeSpec)} answers · ${e.probe.ms.toFixed(0)} ms</span>` : `<span class="warn">${esc(e.probeSpec)}: ${esc(e.probe.error || 'no answer')}</span>`) : e.probeSpec ? esc(e.probeSpec) + ' · not yet' : 'no probe'
 	const age = e.telemetry?.t ? `read ${fmtAgo(e.telemetry.t)} ago` : e.age !== null && e.age !== undefined ? `counters ${e.age} s old` : ''
-	const head = `<div class="eqh"><span class="tally ${standby ? 'standby' : e.status}"></span><div class="eqn"><b>${esc(e.name)}</b><small>${esc(e.role)}${e.auto ? ' · from ' + esc(e.group) : ''} · ${esc(e.ip)}${e.unifiName && e.unifiName !== e.name ? ' · ' + esc(e.unifiName) : ''}</small></div><span class="eqlink">${linkTxt(e)}</span></div>`
+	const head = `<div class="eqh"><span class="tally ${standby ? 'standby' : e.status}"></span><div class="eqn"><b>${esc(e.name)}</b><small>${recNow ? '<span class="recbadge">REC</span>' : ''}${liveNow ? '<span class="livebadge">LIVE</span>' : ''}${esc(e.role)}${e.auto ? ' · from ' + esc(e.group) : ''} · ${esc(e.ip)}${e.unifiName && e.unifiName !== e.name ? ' · ' + esc(e.unifiName) : ''}</small></div><span class="eqlink">${linkTxt(e)}</span></div>`
 	const foot = `<div class="eqf"><span>${probe}</span><span>${age}</span></div>`
 	let body = ''
 	const k = t?.kind || e.audio?.kind || null
@@ -1975,7 +1995,7 @@ function hudCell(id, s) {
 	const at = s.atem
 	const eq = at?.equipment
 	const st = at?.stream
-	const cell = (label, big, small, extra = '') => `<div class="cell m-${esc(id)}" title="${esc(HUD_TITLES[id] || '')}"><label>${label}</label>${extra}<b>${big}</b><small>${small}</small></div>`
+	const cell = (label, big, small, extra = '', cls = '') => `<div class="cell m-${esc(id)}${cls ? ' ' + cls : ''}" title="${esc(HUD_TITLES[id] || '')}"><label>${label}</label>${extra}<b>${big}</b><small>${small}</small></div>`
 	const bar = (v, max, cls = '') => `<div class="bar"><i class="${cls}" style="width:${Math.min(100, ((Number(v) || 0) / Math.max(1e-9, max)) * 100).toFixed(0)}%"></i></div>`
 	switch (id) {
 		case 'intake': {
@@ -2001,7 +2021,7 @@ function hudCell(id, s) {
 		}
 		case 'record': {
 			const r = eq?.telemetry?.recording
-			return cell('ISO record', r ? (r.active ? `<span class="tag rec">REC</span>${esc(r.duration || '')}` : 'idle') : '–', r ? `${r.remaining ? esc(r.remaining) + ' left' : ''}${r.disk ? ' · ' + esc(r.disk) : ''}${r.filename ? ' · ' + esc(r.filename) : ''}` || 'ready' : 'no record state from the switcher')
+			return cell('ISO record', r ? (r.active ? `<span class="tag rec">REC</span>${esc((r.duration || '').slice(0, 8))}` : 'idle') : '–', r ? `${r.remaining ? esc(r.remaining) + ' left' : ''}${r.disk ? ' · ' + esc(r.disk) : ''}${r.filename ? ' · ' + esc(r.filename) : ''}` || 'ready' : 'no record state from the switcher', '', r?.active ? 'rec' : '')
 		}
 		case 'deck': {
 			const d = (s.equipment || []).find((x) => x.active && x.telemetry?.kind === 'hyperdeck' && !x.telemetry.error)

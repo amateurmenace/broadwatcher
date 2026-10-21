@@ -27,7 +27,10 @@ broadcast readiness and explain problems.
   stream) pulls the verdict to at least At risk. Then eight tiles: Stream out · Stream in · Audio · Dante ·
   NDI · Mics · Network · Recorders, each with a lamp, one number, one line and a 10-minute sparkline (the
   Audio tile carries a live meter strip instead, one thin bar per X32 channel plus the main pair; the Mics
-  tile one battery bar per receiver channel); clicking one opens the thing behind it. The AI narrates on top of the score (its headline, reasons and
+  tile one battery bar per receiver channel); clicking one opens the thing behind it. While the switcher's
+  ISO record or a HyperDeck rolls, the switcher and Recorders cards turn red with a pulsing lamp and a REC
+  badge; while a stream goes out, the Stream out card turns teal with a LIVE badge (the equipment cards do
+  the same). The AI narrates on top of the score (its headline, reasons and
   actions) but never changes the verdict; the HUD lamp is the score. **Prepare a broadcast…** picks or
   creates a profile, sets its expectations, ticks the roster (unticked devices go on standby), runs *Test
   every probe* and saves; the profile menu in the header switches profiles without touching the roster.

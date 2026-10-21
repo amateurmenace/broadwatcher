@@ -324,6 +324,24 @@ table.errtab tr.hot td:nth-child(2) { color: var(--error); font-weight: 600; }
 .microw .v { text-align: right; color: var(--ink2); font-variant-numeric: tabular-nums; }
 .microw.off { opacity: .45; }
 .trow .bar i.live { background: var(--stream); }
+/* recording and live states (0.14.1): the card's top border takes the colour, the lamp pulses, a badge with a
+   blinking dot says so; REC tags everywhere carry the blinking dot */
+:root { --rec-tint: #fbf1ee; --rec-ring: rgba(180, 35, 24, 0.22); --live-tint: #edf4f7; }
+:root[data-theme="dark"] { --rec-tint: #261c1b; --rec-ring: rgba(230, 90, 75, 0.28); --live-tint: #1a2328; }
+.tile.rec, .eqc.rec { border-top-color: var(--error); background: var(--rec-tint); }
+.tile.live:not(.rec), .eqc.live:not(.rec) { border-top-color: var(--stream); background: var(--live-tint); }
+.tile.rec .eqh .tally, .eqc.rec .eqh .tally { background: var(--error); animation: recpulse 1.4s ease-in-out infinite; }
+.tile.live:not(.rec) .eqh .tally, .eqc.live:not(.rec) .eqh .tally { background: var(--stream); animation: blink 1.2s infinite; }
+.recbadge, .livebadge { display: inline-flex; align-items: center; gap: 5px; margin-right: 7px; padding: 1px 7px 1px 6px; border-radius: 3px; background: var(--error); color: #fff; font-family: var(--sans); font-size: 10px; font-weight: 600; letter-spacing: .08em; line-height: 1.5; vertical-align: 1px; white-space: nowrap; }
+.livebadge { background: var(--stream); }
+.recbadge::before, .livebadge::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: #fff; flex: none; animation: recblink 1.2s steps(1, end) infinite; }
+.livebadge::before { animation: none; }
+.eqn b .recbadge, .eqn b .livebadge { margin: 0 0 0 8px; font-weight: 600; letter-spacing: .08em; }
+.tag.rec::before { content: ''; display: inline-block; width: 5px; height: 5px; border-radius: 50%; background: #fff; margin-right: 4px; vertical-align: 1px; animation: recblink 1.2s steps(1, end) infinite; }
+.cell.rec { background: var(--rec-tint); }
+@keyframes recpulse { 0%, 100% { box-shadow: 0 0 0 2px var(--rec-ring); } 50% { box-shadow: 0 0 0 6px transparent; } }
+@keyframes recblink { 50% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .recbadge::before, .tag.rec::before, .tile.rec .eqh .tally, .eqc.rec .eqh .tally, .tile.live .eqh .tally, .eqc.live .eqh .tally { animation: none; } }
 .factors { margin: 6px 0; padding: 0; list-style: none; font-size: 12px; }
 .factors li { display: grid; grid-template-columns: 90px 44px 1fr; gap: 8px; padding: 4px 0; border-bottom: 1px solid var(--line); color: var(--ink2); }
 .factors li b { font-weight: 500; color: var(--ink); }

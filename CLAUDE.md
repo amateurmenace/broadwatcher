@@ -133,11 +133,15 @@ touching anything. The roadmap for the next phase is in `docs/ROADMAP.md`.
   `setProfiles` validates against TILE_IDS, `state.profiles.list[].tiles`); the page shows only those when
   set. `pbWidget` is unused since the cards.
 - 0.14.0: the switcher's ISO record is decoded as atem-connection lays it out (`server/atem.js`, `recordingView`):
-  RTMS status word bit 0 = recording, bit 7 = stopping (the HD8 shows **2 while idle**; until 0.14.0 that was
-  read as "recording" and the duration stood in for the time left), error word only when made of the known
-  bits, RTMD per disk (id, status flags idle 1 / unformatted 2 / active 4 / recording 8 / removed 32, seconds
-  left, volume name), RMSu (file name, working-set disk ids, record in all cameras), RTMR = duration
-  hh:mm:ss:ff at bytes 0-3 (bytes 4-7 carry a running clock copy, not the duration); RMRD stays raw.
+  RTMS status word bit 0 = recording, bit 7 = stopping (the HD8 shows **2 idle and 3 recording**, verified on
+  Steve's test recording 2026-10-21 00:34-00:36 through the tape; until 0.14.0 the 2 was read as "recording"
+  and the duration stood in for the time left), the error word at bytes 2-3 carries the previous
+  seconds-left on the HD8 (stale buffer), so it is read only when made of the known bits and not stale; RTMD
+  per disk = id u32 @0, **seconds left u32 @4, status u16 @8** (idle 1 / unformatted 2 / active 4 /
+  recording 8 / removed 32; 0.14.0 had the two swapped and dropped every disk as "removed"), volume name @12;
+  RMSu (file name, working-set disk ids, record in all cameras); RTMR = duration hh:mm:ss:ff at bytes 0-3
+  (bytes 4-7 carry other counters, not the drop-frame flag); RMRD stays raw. The capture report keeps the
+  last bodies of RTMS/RTMD/RMSu beside the RS* commands.
   `telemetry.recording` = `{state, active, raw, error, errorRaw, remainingS, remaining, disk, disks[], filename,
   allCameras, duration}`; every state change goes to the tape with the status word (`record` events), so the
   next test recording leaves the proof. Passive capture recipe: `tshark -i "Port 15 MIRROR" -f "udp src port
@@ -157,6 +161,11 @@ touching anything. The roadmap for the next phase is in `docs/ROADMAP.md`.
   orbit (the 192.168.5.x PTP domain), the port heatmap (`util` ramp, red ring = errors, click opens the
   port); draws only while the block is open and on screen; `--viz1…6` identity hues and the `--seq1…5` ramp
   pass the colour-vision checks on both themes; tooltips use `data-vtip` (app.js owns `data-tip`).
+- 0.14.1: recording and live states on the cards: `.tile.rec` / `.eqc.rec` (red top border, `--rec-tint`,
+  pulsing lamp `recpulse`, a `.recbadge` with a blinking dot in the status line or after the name) while the
+  switcher's ISO record or a HyperDeck rolls; `.tile.live` / `.eqc.live` (teal, `.livebadge`) while a Web
+  Presenter or the switcher streams; every `.tag.rec` carries the blinking dot; the ISO record top-bar cell
+  gets `.cell.rec`. `prefers-reduced-motion` stops the animation.
 - Phone page: `ui/m.html` + `m.js` + `m.css` + `manifest.webmanifest` + `icon-512.png`, served at `/m`;
   non-loopback requests need `server.token` (`?key=` once, then the `bw_key` cookie; manifest and icons are
   public); `/api/phone` lists the LAN links; Electron menu "Open on a phone…" (switches `server.host` to
