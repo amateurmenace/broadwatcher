@@ -190,20 +190,37 @@ function verdictClass(v) {
 	return v === 'READY' ? 'ready' : v === 'DEGRADED' ? 'degraded' : v === 'AT RISK' ? 'risk' : v === 'DOWN' ? 'down' : ''
 }
 const nice = (v) => String(v || '').charAt(0).toUpperCase() + String(v || '').slice(1).toLowerCase()
-// every cell has a fixed width, so the row never gains or loses a cell from one tick to the next; when the window
-// is too narrow for all of them, the modules at the right end give way, never the VLAN cells and never the first one
+// The cells never grow with their numbers (a fixed flex basis), so the row never gains or loses a cell from one
+// tick to the next; they may shrink to a minimum. When the window is too narrow even for the minimums, the bar
+// goes compact first (the brand to its mark, the readiness to its word, the cells' third lines hidden, narrower
+// minimums) and only then do modules give way: the gateway cell first, then from the right end, never a VLAN
+// cell and never the first module.
 function fitHud() {
+	const hud = document.querySelector('.hud')
 	const box = $('hudCells')
-	if (!box) return
+	if (!hud || !box) return
 	const cells = [...box.children]
+	hud.classList.remove('compact')
 	cells.forEach((c) => c.classList.remove('drop'))
-	const vl = box.querySelector('.vl')
-	const vlW = vl ? vl.getBoundingClientRect().width : 0
-	const need = () => cells.filter((c) => !c.classList.contains('drop')).reduce((n, c) => n + (c.classList.contains('vlans') ? c.querySelectorAll('.vl').length * vlW : c.getBoundingClientRect().width), 0)
+	const px = (el, prop) => parseFloat(getComputedStyle(el)[prop]) || 0
+	const minOf = (el) => {
+		const cs = getComputedStyle(el)
+		const inner = parseFloat(cs.minWidth) || 0
+		return (cs.boxSizing === 'border-box' ? inner : inner + (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0)) + (parseFloat(cs.borderLeftWidth) || 0) + (parseFloat(cs.borderRightWidth) || 0)
+	}
+	const need = () =>
+		cells
+			.filter((c) => !c.classList.contains('drop'))
+			.reduce((n, c) => {
+				if (!c.classList.contains('vlans')) return n + minOf(c)
+				const vls = [...c.querySelectorAll('.vl')]
+				return n + vls.reduce((m, v) => m + minOf(v), 0)
+			}, 0)
+	const fits = () => need() <= box.clientWidth + 1
+	if (!fits()) hud.classList.add('compact')
 	let guard = cells.length
-	while (need() > box.clientWidth + 1 && guard-- > 0) {
+	while (!fits() && guard-- > 0) {
 		const vis = cells.filter((c) => !c.classList.contains('drop'))
-		// the gateway cell goes first (the least urgent of the defaults), then the rightmost module
 		const victim =
 			vis.slice(1).find((c) => c.classList.contains('m-console')) ||
 			vis
@@ -213,6 +230,7 @@ function fitHud() {
 		if (!victim) break
 		victim.classList.add('drop')
 	}
+	void px
 }
 function renderHud(s) {
 	const gw = s.gateway

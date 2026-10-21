@@ -12,9 +12,11 @@ broadcast readiness and explain problems.
   broadcast VLAN (name, VLAN number, in/out and a 10-minute sparkline, client count; which VLANs and in what
   order is a Settings field), the open-alert count ("2 warnings", "1 error" or "all clear"), the clock,
   a **Settings** button and, under it, the Theme and Panel switches (the `R` key also toggles the side
-  panel), and by default a **Dante clock** cell and the switcher's **ISO record** cell. Every cell has a
-  fixed width, so a number that grows never pushes a neighbour out; when the window is too narrow for all
-  of them the cells at the right end give way (the console cell first), never the VLAN cells.
+  panel), and by default a **Dante clock** cell and the switcher's **ISO record** cell. A cell never grows
+  with its numbers, so a neighbour is never pushed out; when the window is short of room the bar goes
+  compact first (the brand to its mark, the readiness to its word, the cells' third lines hidden) so every
+  module you asked for stays, and only when even that does not fit do the cells at the right end give way
+  (the console cell first), never the VLAN cells.
 - **Section bar**: Health · Gateway · Signal map · Streams · Stream paths · Audio · Forensics · Switches ·
   Equipment · Events, each a jump link; every section has a ▾ to collapse it (remembered), so the map can
   take the room.

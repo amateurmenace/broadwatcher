@@ -93,30 +93,49 @@ input:focus, select:focus { outline: none; border-color: var(--out); box-shadow:
 .ready-text b { font-family: var(--serif); font-size: 17px; font-weight: 400; letter-spacing: .01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ready-text small { font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .hud-cells { display: flex; min-width: 0; overflow: hidden; }
-.cell { display: flex; flex-direction: column; justify-content: center; padding: 6px 16px; min-width: 0; border-right: 1px solid var(--line); flex: 0 0 auto; overflow: hidden; }
-/* fixed widths: a cell must not grow with its numbers, or the VLAN group behind it would gain and lose a cell
-   from one tick to the next */
-.cell.m-wan { width: 176px; }
-.cell.m-console { width: 168px; }
-.cell.m-encoder, .cell.m-switcher, .cell.m-record, .cell.m-deck, .cell.m-pc, .cell.m-mics, .cell.m-x32, .cell.m-ndi, .cell.m-power { width: 164px; }
-.cell.m-dante { width: 138px; }
+.cell { display: flex; flex-direction: column; justify-content: center; padding: 6px 16px; min-width: 0; border-right: 1px solid var(--line); flex: 0 1 auto; overflow: hidden; }
+/* a fixed basis, never growing with the numbers (or the VLAN group behind would gain and lose a cell from one
+   tick to the next), shrinking to a minimum when the window is short of room; fitHud compacts the bar and then
+   drops modules when even the minimums do not fit */
+.cell.m-wan { flex-basis: 176px; min-width: 150px; }
+.cell.m-console { flex-basis: 168px; min-width: 136px; }
+.cell.m-encoder, .cell.m-switcher, .cell.m-record, .cell.m-deck, .cell.m-pc, .cell.m-mics, .cell.m-x32, .cell.m-ndi, .cell.m-power { flex-basis: 164px; min-width: 136px; }
+.cell.m-dante { flex-basis: 138px; min-width: 116px; }
 .cell.drop { display: none; } /* no room at this window width (fitHud) */
 .cell.m-dante b { font-size: 13.5px; }
+.hud.compact { grid-template-columns: auto auto minmax(0, 1fr) auto; }
+.hud.compact .hud-brand { padding: 0 12px 0 14px; }
+.hud.compact .hud-brand > span { display: none; }
+.hud.compact .hud-ready { padding: 0 12px; gap: 9px; }
+.hud.compact .ready-text small { display: none; }
+.hud.compact .cell { padding: 6px 11px; }
+.hud.compact .cell small { display: none; }
+.hud.compact .cell.intake { flex-basis: 160px; min-width: 136px; }
+.hud.compact .cell.m-wan { flex-basis: 150px; min-width: 132px; }
+.hud.compact .cell.m-console { flex-basis: 136px; min-width: 120px; }
+.hud.compact .cell.m-encoder, .hud.compact .cell.m-switcher, .hud.compact .cell.m-record, .hud.compact .cell.m-deck, .hud.compact .cell.m-pc, .hud.compact .cell.m-mics, .hud.compact .cell.m-x32, .hud.compact .cell.m-ndi, .hud.compact .cell.m-power { flex-basis: 140px; min-width: 120px; }
+.hud.compact .cell.m-dante { flex-basis: 118px; min-width: 104px; }
+.hud.compact .vl { flex-basis: 118px; min-width: 100px; padding: 5px 9px 4px; }
+.hud.compact .vl small { display: none; }
+.hud.compact .vl .nums { flex-direction: column; gap: 0; }
+.hud.compact .hud-right { gap: 10px; padding: 0 10px 0 12px; }
 .cell .bar { height: 4px; margin: 3px 0 4px; width: 100%; }
 .cell b .tag { vertical-align: middle; margin-right: 4px; }
 .cell label { display: block; font-size: 10.5px; color: var(--ink3); margin-bottom: 2px; letter-spacing: .02em; white-space: nowrap; }
 .cell b { font-size: 15.5px; font-weight: 500; line-height: 1.1; white-space: nowrap; }
 .cell small { font-size: 10.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.cell.intake { width: 200px; }
+.cell.intake { flex-basis: 200px; min-width: 160px; }
 .meter { position: relative; height: 4px; background: var(--panel3); margin: 3px 0 4px; border-radius: 2px; overflow: visible; }
 .meter i { display: block; height: 100%; width: 0; background: var(--ok); transition: width .5s; border-radius: 2px; }
 .meter i.stream { background: var(--stream); }
 .meter em { position: absolute; top: -3px; width: 1px; height: 10px; background: var(--ink2); left: 0; }
-/* the VLAN group takes what is left; the cells that do not fit wrap onto a second row that lies below the
-   bar and out of sight, so a VLAN is either shown whole or not at all, never cut off mid-word */
-.cell.vlans { flex: 1 1 auto; flex-direction: row; flex-wrap: wrap; align-content: flex-start; gap: 0; padding: 0; min-width: 0; height: var(--hud-h); border-right: 0; }
-.vl { display: flex; flex-direction: column; justify-content: center; padding: 5px 11px 4px; flex: 0 0 140px; width: 140px; height: var(--hud-h); overflow: hidden; }
+/* the VLAN group takes what is left; its cells shrink to a minimum together and fitHud makes sure the minimums
+   fit (compacting the bar, then dropping other modules), so a VLAN is always shown whole */
+.cell.vlans { flex: 1 1 auto; flex-direction: row; flex-wrap: nowrap; gap: 0; padding: 0; min-width: 0; height: var(--hud-h); border-right: 0; }
+.vl { display: flex; flex-direction: column; justify-content: center; padding: 5px 11px 4px; flex: 0 1 140px; min-width: 116px; height: var(--hud-h); overflow: hidden; }
 .vl + .vl { border-left: 1px solid var(--line); }
+.vl { container-type: inline-size; }
+@container (max-width: 132px) { .vl .nums { flex-direction: column; gap: 0; } .vl .vspark { height: 14px; margin: 2px 0 1px; } } /* a squeezed VLAN cell stacks its two numbers instead of cutting one */
 .vl label { margin-bottom: 1px; overflow: hidden; text-overflow: ellipsis; }
 .vl label i { font-style: normal; color: var(--ink3); opacity: .85; margin-left: 5px; font-size: 10px; }
 .vl .nums { display: flex; gap: 8px; font-size: 11.5px; font-weight: 500; line-height: 1.1; white-space: nowrap; overflow: hidden; }
@@ -732,8 +751,6 @@ details.standby summary small { font-size: 11px; }
 
 /* ---------------------------------------------------------------- responsive: the HUD sheds cells, never clips words */
 @media (max-width: 1640px) { .gw { grid-template-columns: 1fr 1fr; } }
-@media (max-width: 1700px) { .cell.m-console { display: none; } }
-@media (max-width: 1680px) { .cell.intake small { display: none; } .cell.intake { width: 170px; } .vl small { display: none; } .vl { flex-basis: 130px; width: 130px; padding: 5px 9px 4px; } }
 @media (max-width: 1380px) { :root { --insp-w: 360px; } .hud { grid-template-columns: auto minmax(180px, 260px) minmax(0, 1fr) auto; } }
 @media (max-width: 1250px) {
 	:root { --insp-w: 330px; }

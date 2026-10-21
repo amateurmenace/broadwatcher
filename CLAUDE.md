@@ -166,6 +166,13 @@ touching anything. The roadmap for the next phase is in `docs/ROADMAP.md`.
   switcher's ISO record or a HyperDeck rolls; `.tile.live` / `.eqc.live` (teal, `.livebadge`) while a Web
   Presenter or the switcher streams; every `.tag.rec` carries the blinking dot; the ISO record top-bar cell
   gets `.cell.rec`. `prefers-reduced-motion` stops the animation.
+- 0.14.2: the top bar keeps every configured module as long as it can: the cells have a fixed flex basis and
+  a minimum (`flex: 0 1 <basis>`, `min-width`), the VLAN group no longer wraps; `fitHud` sums the minimums
+  (border-box) against the cells column, switches the bar to `.hud.compact` when they do not fit (the brand
+  to its mark, the readiness to its word, the cells' third lines hidden, smaller minimums, the VLAN numbers
+  stacked) and only then drops modules (the gateway cell first, then from the right; never a VLAN cell or
+  the first module). At the default 1680 px window all six default modules show, compact. The old
+  `max-width` media queries for the bar are gone.
 - Phone page: `ui/m.html` + `m.js` + `m.css` + `manifest.webmanifest` + `icon-512.png`, served at `/m`;
   non-loopback requests need `server.token` (`?key=` once, then the `bw_key` cookie; manifest and icons are
   public); `/api/phone` lists the LAN links; Electron menu "Open on a phone…" (switches `server.host` to
