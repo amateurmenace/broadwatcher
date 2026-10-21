@@ -24,6 +24,7 @@ window.Prepare = (function () {
 		['power', 'Power (PDUs)'],
 		['pc', 'This PC'],
 	]
+	const DEFAULT_TILES = ['switcher', 'encoders', 'recorders', 'audio', 'mics', 'dante', 'ndi'] // the board without Network and This PC
 	let data = null // {profiles, active, equipment}
 	let cur = null // the profile being edited (working copy)
 
@@ -59,7 +60,7 @@ window.Prepare = (function () {
 			<h3>Expected during this show</h3>
 			<div class="exp">${EXPECT.map(([k, l, help]) => `<label class="chk" title="${esc(help)}"><input type="checkbox" data-exp="${k}" ${cur.expect?.[k] ? 'checked' : ''}> ${l}</label>`).join('')}</div>
 			<h3>Cards on the health board <small>· untick what this show does not need; the score still weighs everything</small></h3>
-			<div class="exp">${TILES.map(([id, l]) => `<label class="chk"><input type="checkbox" data-tile="${id}" ${!cur.tiles || !cur.tiles.length || cur.tiles.includes(id) ? 'checked' : ''}> ${l}</label>`).join('')}</div>
+			<div class="exp">${TILES.map(([id, l]) => `<label class="chk"><input type="checkbox" data-tile="${id}" ${(cur.tiles && cur.tiles.length ? cur.tiles : DEFAULT_TILES).includes(id) ? 'checked' : ''}> ${l}</label>`).join('')}</div>
 			<h3>Devices in this broadcast <small>· ${set.size} of ${data.equipment.length} ticked · unticked devices go on standby (no probes, no alerts)</small></h3>
 			<div class="roster">${[...groups]
 				.map(([g, list]) => `<h4>${esc(g)}</h4>${list.map((e) => `<label><input type="checkbox" data-ip="${esc(e.ip)}" ${set.has(e.ip) ? 'checked' : ''}><span>${esc(e.name)}</span><small>${esc(e.ip)}</small></label>`).join('')}`)

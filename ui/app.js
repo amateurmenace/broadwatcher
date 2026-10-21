@@ -234,11 +234,14 @@ function renderHome(s) {
 		.filter((f) => f.value !== null && f.value < 1)
 		.sort((a, b) => b.weight * (1 - b.value) - a.weight * (1 - a.value))
 		.slice(0, 4)
-	// the cards this show wants (Prepare a broadcast); every card ends with a labelled gauge, meter or graph
+	// the cards this show wants (Prepare a broadcast), the default set without Network and This PC; every card
+	// is laid out like an equipment card and ends with a labelled gauge, meter or graph
 	const wanted = s.profiles?.list?.find((p) => p.id === s.profiles.active)?.tiles
-	const shown = (s.tiles || []).filter((t) => !wanted || !wanted.length || wanted.includes(t.id))
-	const tileHtml = shown.map((t) => `<div class="tile ${esc(t.level)}" data-tile="${esc(t.id)}" title="${esc(t.line)}"><div class="th"><span class="lamp sm ${esc(t.level)}"></span>${esc(t.label)}</div><div class="tv">${esc(t.value)}${t.unit ? `<small>${esc(t.unit)}</small>` : ''}</div><div class="tl">${esc(t.line)}</div><div class="tg">${tileGraphic(t, s)}</div></div>`).join('')
-	$('home').innerHTML = `<div class="verdict-big" data-sel="health:now"><span class="lamp ${verdictClass(h.verdict)}"></span><div><b>${esc(nice(h.verdict))}</b><div class="score">${h.score}<small> / 100 · ${esc(h.profile?.name || '')}</small></div><p>${esc(aiFresh ? aiInfo.headline : h.headline)}</p><ul class="why">${why.map((f) => `<li class="${esc(f.level)}"><b>${esc(f.label)}</b> · ${esc(f.reason)}</li>`).join('') || '<li class="ok"><b>All factors</b> at full marks</li>'}</ul><div class="ai-meta">${aiFresh ? `AI: ${esc(aiInfo.model)} · ${fmtAgo(aiInfo.t)} ago${aiInfo.aiVerdict && aiInfo.aiVerdict !== h.verdict ? ` · the model would have said ${esc(nice(aiInfo.aiVerdict))}` : ''}` : aiStatus?.enabled ? 'AI narrative pending' : 'AI off · score only'} · click for every factor</div></div></div><div class="tiles">${tileHtml}</div>`
+	const set = wanted && wanted.length ? wanted : DEFAULT_TILES
+	const shown = (s.tiles || []).filter((t) => set.includes(t.id))
+	const TALLY = { ok: 'online', warn: 'unresponsive', bad: 'offline', na: 'standby' }
+	const tileHtml = shown.map((t) => `<div class="tile ${esc(t.level)}" data-tile="${esc(t.id)}" title="${esc(t.line)}"><div class="eqh"><span class="tally ${TALLY[t.level] || ''}"></span><div class="eqn"><b>${esc(t.label)}</b></div><span class="eqlink"><b title="${esc(t.value)}">${esc(t.value)}</b>${t.unit ? `<small>${esc(t.unit)}</small>` : ''}</span></div><div class="tl">${esc(tileLine(t, s))}</div><div class="tg">${tileGraphic(t, s)}</div></div>`).join('')
+	$('home').innerHTML = `<div class="verdict-big" data-sel="health:now"><span class="lamp ${verdictClass(h.verdict)}"></span><div><b>${esc(nice(h.verdict))}</b><div class="score">${h.score}<small> / 100 · ${esc(h.profile?.name || '')}</small></div><p>${esc(aiFresh ? aiInfo.headline : h.headline)}</p><ul class="why">${why.map((f) => `<li class="${esc(f.level)}"><b>${esc(f.label)}</b> · ${esc(f.reason)}</li>`).join('') || '<li class="ok"><b>All factors</b> at full marks</li>'}</ul><div class="ai-meta">${aiFresh ? `AI: ${esc(aiInfo.model)} · ${fmtAgo(aiInfo.t)} ago${aiInfo.aiVerdict && aiInfo.aiVerdict !== h.verdict ? ` · the model would have said ${esc(nice(aiInfo.aiVerdict))}` : ''}` : aiStatus?.enabled ? 'AI narrative pending' : 'AI off · score only'} · click for every factor</div></div></div>${tileHtml}`
 	indexMeters()
 }
 
@@ -866,6 +869,53 @@ function renderPatch(s) {
 	if (standby.length) html.push(`<details class="standby"><summary>On standby, not part of this broadcast <small>· ${standby.length} device${standby.length === 1 ? '' : 's'} · no alerts, no probes · enable them in Edit roster</small></summary>${standby.map(pbRow).join('')}</details>`)
 	$('patch').innerHTML = html.join('') || '<div class="empty">no equipment in the roster — click Edit roster</div>'
 	indexMeters()
+}
+
+// ------------------------------------------------------------------ the health cards' one-line status: short, the full reason stays in the tooltip and the panel
+function tileLine(t, s) {
+	const eq = (s.equipment || []).filter((e) => e.active)
+	if (t.id === 'switcher') {
+		const st = s.atem?.stream
+		const tl = s.atem?.equipment?.telemetry
+		if (!s.atem?.equipment) return t.line
+		if (s.atem.equipment.status !== 'online') return `${s.atem.equipment.status === 'offline' ? 'not on the network' : 'not answering'}`
+		return `${st?.state === 'arriving' ? `stream arriving at ${fmtRate(st.rate)}` : 'no stream in'}${tl?.programName ? ` · program ${tl.programName}` : ''}`
+	}
+	if (t.id === 'audio') {
+		const cs = s.audio?.consoles || []
+		const live = cs.filter((c) => c.ok)
+		if (!cs.length) return t.line
+		const hot = live.filter((c) => c.mainLevel !== null && c.mainLevel > -60)
+		return `${live.length}/${cs.length} console${cs.length === 1 ? '' : 's'} sending meters${live.length ? ` · ${live.reduce((n, c) => n + (c.active || 0), 0)} channels with signal · ${hot.length ? 'main ' + hot.map((c) => c.mainLevel.toFixed(0) + ' dBFS').join(', ') : 'mains quiet'}` : ''}${cs.length > live.length ? ' · ' + cs.filter((c) => !c.ok).map((c) => c.name).join(', ') + ' silent' : ''}`
+	}
+	if (t.id === 'mics') {
+		const rx = s.audio?.mics || []
+		if (!rx.length) return t.line
+		const ch = rx.filter((m) => m.ok).flatMap((m) => m.channels)
+		const on = ch.filter((c) => c.link)
+		const weak = on.filter((c) => (c.battery !== null && c.battery < 20) || (c.rsqi !== null && c.rsqi < 30))
+		return `${rx.filter((m) => m.ok).length}/${rx.length} receivers answering · ${on.length}/${ch.length} mics on air${weak.length ? ` · ${weak.map((c) => c.name || c.id).join(', ')} weak` : on.length ? ' · batteries and RF fine' : ''}`
+	}
+	if (t.id === 'dante') {
+		const nets = (s.networks || []).filter((n) => /dante/i.test(n.name))
+		const clocks = s.discovery?.clocks || []
+		const d = clocks.find((c) => /mobile/i.test(c.network || '')) || clocks[0]
+		const devs = eq.filter((e) => /dante/i.test(e.network || '') || /^192\.168\.5\.|^10\.56\.19\./.test(e.ip || ''))
+		return `${nets.map((n) => `${n.clients} on ${vlanLabel(n.name)}`).join(' · ') || 'no Dante VLAN'}${devs.length ? ` · ${devs.filter((e) => e.online).length}/${devs.length} roster devices up` : ''} · clock ${d ? (d.status === 'ok' ? 'locked' : d.status) : 'not heard'}`
+	}
+	if (t.id === 'ndi') {
+		const nets = (s.networks || []).filter((n) => /ndi/i.test(n.name))
+		const src = s.discovery?.ndi || []
+		return `${src.length} source${src.length === 1 ? '' : 's'} on air${nets[0] ? ` · ${nets[0].clients} devices on ${vlanLabel(nets[0].name)} · ↓${fmtRate(nets[0].down)} ↑${fmtRate(nets[0].up)}` : ''}`
+	}
+	if (t.id === 'recorders') {
+		const decks = eq.filter((e) => e.telemetry?.kind === 'hyperdeck' && !e.telemetry.error)
+		const rolling = decks.filter((e) => e.telemetry.recording)
+		const rec = s.atem?.equipment?.telemetry?.recording
+		if (!decks.length && !rec) return t.line
+		return `${rolling.length ? rolling.map((e) => e.name).join(', ') + ' recording' : 'no deck recording'}${rec ? ` · switcher ISO ${rec.active ? 'recording' : 'idle'}` : ''}${decks.length ? ` · ${decks.map((e) => e.telemetry.format || e.telemetry.mode).filter(Boolean)[0] || ''}` : ''}`
+	}
+	return t.line
 }
 
 // ------------------------------------------------------------------ the health cards' graphics: one labelled gauge, meter or graph each
@@ -1915,6 +1965,7 @@ function hudCell(id, s) {
 
 // ------------------------------------------------------------------ the health tiles' side panels (drawn from the live state)
 const LOCAL_TYPES = new Set(['switcher', 'encoders', 'recorders', 'audio', 'mics', 'dante', 'ndi', 'network'])
+const DEFAULT_TILES = ['switcher', 'encoders', 'recorders', 'audio', 'mics', 'dante', 'ndi'] // Network and This PC are opt-in per show
 const PANEL_KIND = { switcher: 'switcher', encoders: 'streams out', recorders: 'recorders', audio: 'audio', mics: 'wireless mics', dante: 'Dante', ndi: 'NDI', network: 'network' }
 const PANEL_TITLE = {
 	switcher: (s) => s?.atem?.name || 'Switcher',
