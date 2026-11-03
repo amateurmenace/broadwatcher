@@ -8,7 +8,8 @@
 //    only have a handful of slots that Companion and ATEM Software Control need).
 //
 // Slot rules (measured on the HD8, 2026-10-19): a dead or half-open session is kept for ~2 minutes; the HD8
-// was full with three held sessions (Companion, ATEM Software Control, the NDI Machine bridge). So:
+// was full with three held sessions (Companion, ATEM Software Control, the NDI Machine bridge), plus any
+// half-open ones; five live sessions from one PC filled it on 2026-11-01. So:
 //  * never more than one hello per two minutes per switcher, whatever happens;
 //  * when the switcher answers "too many clients", back off further (2, 4, 8, 15 min) instead of knocking
 //    every two minutes and snatching the slot a human controller is waiting for;
@@ -404,6 +405,10 @@ export class AtemClient extends EventEmitter {
 		this.state = 'connecting'
 		this.error = null
 		this.commands = 0
+		// a new session's command ids start at 1 again. Until 0.14.3 this counter ran on across reconnects: the HD8 then
+		// answered every SFLN with "resend packet 1" and acted on none, and it locked up about 90 minutes (some 500
+		// requests) after each reconnect, four times on 2026-11-01 (BIG Studio Launcher's README, "The HD8's control slots")
+		this.pid = 0
 		const sock = (this.sock = dgram.createSocket('udp4'))
 		sock.on('error', (e) => this.fail(e.code || e.message, AtemClient.SLOT_HOLD_MS))
 		sock.on('message', (msg) => this.onPacket(msg))

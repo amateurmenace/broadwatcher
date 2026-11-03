@@ -201,6 +201,10 @@ touching anything. The roadmap for the next phase is in `docs/ROADMAP.md`.
    away), pooled for the life of the process, one hello per two minutes under any failure, and it backs off
    2/4/8/15 min when refused. The raw remote-source capture needs an own session. Measure nothing by opening
    sessions; `scripts/atem-capture.mjs` is the only one-shot reader and is for quiet hours.
+   A session's command ids must start at 1: until the fix on 2026-11-03 `AtemClient.pid` ran on across reconnects, the
+   HD8 answered each `SFLN` with a resend request for packet 1 and acted on none, and it locked up about 90 minutes
+   (some 500 requests) after each reconnect, four times on 2026-11-01 (BIG Studio Launcher's README, "The HD8's
+   control slots"). Five live sessions, not three, fill the switcher.
 2. **Rates come from SNMP** (`snmp.community` = `netwatch`, enabled in UniFi 2026-10-18); the controller's
    copies refresh only when a switch informs it (30–90 s). UniFi `traffic-flows` never contains same-VLAN
    switch-to-switch traffic; inbound forwarded flows are logged against the WAN IP + WAN port, so the
