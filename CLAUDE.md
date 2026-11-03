@@ -85,9 +85,9 @@ touching anything. The roadmap for the next phase is in `docs/ROADMAP.md`.
   `audio`. UI: Audio section (`renderAudio`, `applyMeters` moves the bars without re-rendering, `meterEls`),
   tile strips (`stripHtml`, `tiles[].strip`), inspector `audioSection`, phone `renderMics`; Settings got a
   Switcher section (name, IP, session mode with the Fairlight note) and the two mic thresholds.
-  `AtemClient.wantLevels(on)` sends `SFLN` after `InCm` (re-sent every 10 s) and decodes `FDLv` / `FMLv`
-  into `levelsSnapshot()`; the collector turns it on only when `atem.session === 'own'`. Untested against
-  a live switcher (needs an own session), decoded as the official SDK lays the commands out.
+  `AtemClient.wantLevels(on)` sends `SFLN` after `InCm` (once per session since 0.14.3, again only if levels
+  stop for 30 s) and decodes `FDLv` / `FMLv` into `levelsSnapshot()`; the collector turns it on only when
+  `atem.session === 'own'`.
 - `server/journal.js` (0.10.0): the log. Every collector event, alerts raised and cleared (paired, with the
   duration), the notable UniFi events (client connect/disconnect/roam filtered out), forensics events, AI
   and app errors (`process.on('unhandledRejection'|'uncaughtException')` → the server carries on), newest
@@ -173,6 +173,9 @@ touching anything. The roadmap for the next phase is in `docs/ROADMAP.md`.
   stacked) and only then drops modules (the gateway cell first, then from the right; never a VLAN cell or
   the first module). At the default 1680 px window all six default modules show, compact. The old
   `max-width` media queries for the bar are gone.
+- 0.14.3: the own switcher session keeps to the protocol (rule 1 below explains why): command ids start at 1 in every
+  session, unacknowledged commands go out again, a session that cannot deliver is dropped, `SFLN` once per session
+  instead of every 10 s. `scripts/atem-session-check.mjs`. The BIG site's copy stays on `atem.session = companion`.
 - Phone page: `ui/m.html` + `m.js` + `m.css` + `manifest.webmanifest` + `icon-512.png`, served at `/m`;
   non-loopback requests need `server.token` (`?key=` once, then the `bw_key` cookie; manifest and icons are
   public); `/api/phone` lists the LAN links; Electron menu "Open on a phone…" (switches `server.host` to
@@ -201,10 +204,14 @@ touching anything. The roadmap for the next phase is in `docs/ROADMAP.md`.
    away), pooled for the life of the process, one hello per two minutes under any failure, and it backs off
    2/4/8/15 min when refused. The raw remote-source capture needs an own session. Measure nothing by opening
    sessions; `scripts/atem-capture.mjs` is the only one-shot reader and is for quiet hours.
-   A session's command ids must start at 1: until the fix on 2026-11-03 `AtemClient.pid` ran on across reconnects, the
-   HD8 answered each `SFLN` with a resend request for packet 1 and acted on none, and it locked up about 90 minutes
-   (some 500 requests) after each reconnect, four times on 2026-11-01 (BIG Studio Launcher's README, "The HD8's
-   control slots"). Five live sessions, not three, fill the switcher.
+   A session's command ids must start at 1, and a command must be delivered: until 0.14.3 `AtemClient.pid` ran on
+   across reconnects and nothing was ever re-sent, so the HD8 answered each `SFLN` with a resend request for packet 1
+   and acted on none, and it locked up about 90 minutes (some 500 requests) after each reconnect, four times on
+   2026-11-01 (BIG Studio Launcher's README, "The HD8's control slots"). Now commands stay in `inFlight` until
+   acknowledged, go out again after 1.5 s or when the switcher asks, at most five times, at most eight waiting, and a
+   session that cannot deliver is dropped. `node scripts/atem-session-check.mjs` checks all of it against a fake
+   switcher on localhost; the fake answers the way the HD8 did on the mirror. Five live sessions, not three, fill the
+   switcher.
 2. **Rates come from SNMP** (`snmp.community` = `netwatch`, enabled in UniFi 2026-10-18); the controller's
    copies refresh only when a switch informs it (30–90 s). UniFi `traffic-flows` never contains same-VLAN
    switch-to-switch traffic; inbound forwarded flows are logged against the WAN IP + WAN port, so the

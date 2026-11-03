@@ -19,6 +19,7 @@ import { EventEmitter } from 'node:events'
 
 const FLAG_ACKREQ = 0x08
 const FLAG_HELLO = 0x10
+const FLAG_RESEND = 0x40 // the switcher is missing one of our commands: bytes 6-7 = its id
 const FLAG_ACK = 0x80
 const HELLO = Buffer.from([0x10, 0x14, 0x53, 0xab, 0, 0, 0, 0, 0, 0x3a, 0, 0, 0x01, 0, 0, 0, 0, 0, 0, 0])
 const STREAM_STATE = { 1: 'idle', 2: 'connecting', 4: 'streaming', 32: 'stopping' }
@@ -70,8 +71,14 @@ export function recordingView(d) {
 	}
 }
 const REFUSED_BACKOFF_MS = [120000, 240000, 480000, 900000]
-const LEVELS_RESEND_MS = 10000 // the switcher stops streaming levels after a while unless asked again
+// Levels keep coming once asked: Companion's session sent no SFLN in the 7 minutes measured on the mirror (2026-11-03)
+// while its levels kept coming. So a session asks once, and again only if they stop.
+const LEVELS_SILENT_MS = 30000
 const LEVELS_STALE_MS = 3000
+// our commands in an open session (see sendCommand)
+const COMMAND_RESEND_MS = 1500
+const COMMAND_TRIES = 5
+const COMMANDS_IN_FLIGHT = 8
 // Fairlight audio input ids that are not video inputs (best effort: the official SDK numbers; the names of the
 // SDI/HDMI inputs come from InPr). Only used when Broadwatch holds its own session (atem.session = "own").
 const AUDIO_INPUT_NAMES = { 1001: 'XLR 1', 1002: 'XLR 2', 1101: 'AES/EBU', 1201: 'RCA', 1301: 'Mic 1', 1302: 'Mic 2', 1401: 'MADI', 1501: 'TRS', 2001: 'Media Player 1', 2002: 'Media Player 2', 2003: 'Media Player 3', 2004: 'Media Player 4', 3001: 'Talkback' }
@@ -293,11 +300,12 @@ export class AtemClient extends EventEmitter {
 		this.wantsLevels = false
 		this.levelsSentAt = 0
 		this.sid = 0 // the session id the switcher assigned (needed to send it a command)
-		this.pid = 0 // our packet counter
+		this.pid = 0 // our command counter: starts over with every session
+		this.inFlight = [] // commands the switcher has not acknowledged yet: {id, packet, sentAt, tries}
 		this.levels = { t: 0, master: null, sources: new Map(), inputs: new Map() }
 	}
 
-	// ask the switcher for Fairlight levels (or stop asking); needs a held session, re-sent every 10 s
+	// ask the switcher for Fairlight levels (or stop asking); needs a held session, asked once per session
 	wantLevels(on) {
 		on = !!on
 		if (on === this.wantsLevels) return
@@ -311,10 +319,13 @@ export class AtemClient extends EventEmitter {
 		this.sendCommand('SFLN', Buffer.from([on ? 1 : 0, 0, 0, 0]))
 	}
 
-	// one command to the switcher in an AckRequest packet (the switcher acknowledges it; we do not retransmit,
-	// the levels request is simply repeated every ten seconds)
+	// one command to the switcher in an AckRequest packet. It takes commands strictly in order from id 1 of each session:
+	// when one is missing it asks for it (FLAG_RESEND) and acts on nothing after it. So a command stays here until
+	// acknowledged and goes out again if it is not, and a session that cannot deliver one is dropped instead of leaving
+	// commands waiting in the switcher: about 500 of those locked up the HD8 on 2026-11-01 (BIG Studio Launcher's
+	// README, "The HD8's control slots"). Measured on the mirror 2026-11-03.
 	sendCommand(name, body) {
-		if (!this.sock || this.state !== 'connected') return false
+		if (!this.sock || this.state !== 'connected' || this.inFlight.length >= COMMANDS_IN_FLIGHT) return false
 		const len = 12 + 8 + body.length
 		const b = Buffer.alloc(len)
 		b.writeUInt16BE((FLAG_ACKREQ << 8) | len, 0)
@@ -324,8 +335,35 @@ export class AtemClient extends EventEmitter {
 		b.writeUInt16BE(8 + body.length, 12)
 		b.write(name, 16, 4, 'latin1')
 		body.copy(b, 20)
+		this.inFlight.push({ id: this.pid, packet: b, sentAt: Date.now(), tries: 1 })
 		this.sock.send(b, this.port, this.ip, () => {})
 		return true
+	}
+
+	// the switcher has everything up to `ack` (ids are 15 bits and wrap)
+	acknowledged(ack) {
+		this.inFlight = this.inFlight.filter((c) => ((ack - c.id) & 0x7fff) >= 0x4000)
+	}
+
+	// send `id` and everything after it again; an id we do not hold can never be delivered, so the session ends here
+	resendFrom(id) {
+		id &= 0x7fff // it asks for 32768 when it means 0
+		const from = this.inFlight.findIndex((c) => c.id === id)
+		if (from < 0) return this.fail(`the switcher is waiting for command ${id}, which we do not hold`, AtemClient.SLOT_HOLD_MS)
+		const now = Date.now()
+		for (const c of this.inFlight.slice(from)) {
+			c.sentAt = now
+			c.tries++
+			this.sock.send(c.packet, this.port, this.ip, () => {})
+		}
+	}
+
+	// every tick: a command with no acknowledgement goes out again, and after a few tries the session gives up
+	checkCommands(now) {
+		const late = this.inFlight.find((c) => now - c.sentAt >= COMMAND_RESEND_MS)
+		if (!late) return
+		if (late.tries >= COMMAND_TRIES) return this.fail(`the switcher did not acknowledge command ${late.id}`, AtemClient.SLOT_HOLD_MS)
+		this.resendFrom(late.id)
 	}
 
 	handleLevels(name, body, now) {
@@ -405,19 +443,22 @@ export class AtemClient extends EventEmitter {
 		this.state = 'connecting'
 		this.error = null
 		this.commands = 0
-		// a new session's command ids start at 1 again. Until 0.14.3 this counter ran on across reconnects: the HD8 then
-		// answered every SFLN with "resend packet 1" and acted on none, and it locked up about 90 minutes (some 500
-		// requests) after each reconnect, four times on 2026-11-01 (BIG Studio Launcher's README, "The HD8's control slots")
+		// a new session's command ids start at 1 again: until 0.14.3 this counter ran on across reconnects (sendCommand)
 		this.pid = 0
+		this.sid = 0
+		this.inFlight = []
+		this.levelsSentAt = 0
 		const sock = (this.sock = dgram.createSocket('udp4'))
 		sock.on('error', (e) => this.fail(e.code || e.message, AtemClient.SLOT_HOLD_MS))
 		sock.on('message', (msg) => this.onPacket(msg))
 		sock.send(HELLO, this.port, this.ip, (e) => e && this.fail(e.code || e.message, AtemClient.SLOT_HOLD_MS))
 		this.lastPacket = Date.now()
 		this.timer = setInterval(() => {
+			const t = Date.now()
 			// the switcher sends a packet about every second; silence means the session is gone
-			if (Date.now() - this.lastPacket > 8000) return this.fail(this.state === 'connecting' ? 'timeout' : 'lost', AtemClient.SLOT_HOLD_MS)
-			if (this.wantsLevels && this.state === 'connected' && Date.now() - this.levelsSentAt > LEVELS_RESEND_MS) this.sendLevelsRequest(true)
+			if (t - this.lastPacket > 8000) return this.fail(this.state === 'connecting' ? 'timeout' : 'lost', AtemClient.SLOT_HOLD_MS)
+			this.checkCommands(t)
+			if (this.wantsLevels && this.state === 'connected' && !this.inFlight.length && t - Math.max(this.levels.t, this.levelsSentAt) > LEVELS_SILENT_MS) this.sendLevelsRequest(true)
 		}, 2000)
 	}
 
@@ -436,6 +477,11 @@ export class AtemClient extends EventEmitter {
 			this.state = 'syncing'
 			this.ack(sid, 0)
 			return
+		}
+		if (flags & FLAG_ACK) this.acknowledged(msg.readUInt16BE(4))
+		if (flags & FLAG_RESEND && this.state === 'connected') {
+			this.resendFrom(msg.readUInt16BE(6))
+			if (!this.sock) return // it could not: the session is over
 		}
 		if (flags & FLAG_ACKREQ) this.ack(sid, pid)
 		let i = 12
@@ -515,6 +561,7 @@ export class AtemClient extends EventEmitter {
 			} catch {}
 		}
 		this.sock = null
+		this.inFlight = []
 	}
 
 	// close our session on purpose; the switcher frees the slot about two minutes later
